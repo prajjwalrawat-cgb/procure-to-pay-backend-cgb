@@ -98,7 +98,7 @@ export class SpendAnalyticsService {
        FROM "PurchaseOrderLine" pol
        JOIN "PurchaseOrder" po ON po.id = pol.po_id
        LEFT JOIN "RequisitionLine" rl ON rl.id = pol.pr_line_id
-       WHERE po."issuedAt" IS NOT NULL AND po."issuedAt" >= $1 AND po."issuedAt" < $2
+       WHERE po."issuedAt" IS NOT NULL AND po."issuedAt" >= $1::timestamptz AND po."issuedAt" < $2::timestamptz
        GROUP BY 1
        ORDER BY 2 DESC`,
       p.start.toISOString(),

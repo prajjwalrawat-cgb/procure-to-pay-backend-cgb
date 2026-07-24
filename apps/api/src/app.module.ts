@@ -13,6 +13,7 @@ import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { PermissionGuard } from './auth/guards/permission.guard';
 import { DomainEventsModule } from './common/events/domain-event.service';
+import { MailModule } from './common/mail/mail.service';
 import { ProblemExceptionFilter } from './common/filters/problem.filter';
 import { ZodValidationPipe } from './common/pipes/zod-validation.pipe';
 import { StorageModule } from './common/storage/storage.service';
@@ -67,6 +68,7 @@ import { ComplianceModule } from './compliance/compliance.module';
     PrismaModule,
     AuditModule,
     DomainEventsModule,
+    MailModule,
     StorageModule,
     CryptoModule,
     IntegrationsModule,

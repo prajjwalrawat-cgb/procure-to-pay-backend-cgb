@@ -105,7 +105,7 @@ export class VendorAnalyticsService {
     const participated = await this.prisma.client.$queryRawUnsafe<{ cnt: number }[]>(
       `SELECT COUNT(DISTINCT q.vendor_id)::int AS cnt
        FROM "Quote" q JOIN "Vendor" v ON v.id = q.vendor_id AND v."isMsme"
-       WHERE q."submittedAt" IS NOT NULL`,
+       WHERE q.submitted_at IS NOT NULL`,
     );
     const inv = invited[0]?.cnt ?? 0;
     const part = participated[0]?.cnt ?? 0;

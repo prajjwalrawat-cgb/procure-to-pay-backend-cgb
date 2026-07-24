@@ -63,7 +63,7 @@ export class AuditQueryService {
              a.hash_previous,
              lag(a.hash_current) OVER w AS prev_link,
              encode(
-               digest(
+               extensions.digest(
                  coalesce(a.hash_previous, '') ||
                  (to_jsonb(a) - 'hash_current' - 'hash_previous')::text,
                  'sha256'

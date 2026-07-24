@@ -7,6 +7,7 @@ import {
   NotFoundException,
   type OnModuleInit,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Prisma, newId } from '@procureflow/db';
 import { hash } from 'argon2';
 import {
@@ -29,6 +30,8 @@ import { ApprovalRoutingService } from '../approvals/approval-routing.service';
 import { NotificationService } from '../approvals/notification.service';
 import { AuditLogService } from '../audit/audit.service';
 import { DomainEventService } from '../common/events/domain-event.service';
+import { MailService } from '../common/mail/mail.service';
+import type { Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
 import { VendorScorecardService } from './vendor-scorecard.service';
 import { VendorVerificationService } from './vendor-verification.service';
@@ -69,6 +72,8 @@ export class VendorOnboardingService implements OnModuleInit {
     private readonly routing: ApprovalRoutingService,
     private readonly verification: VendorVerificationService,
     private readonly scorecard: VendorScorecardService,
+    private readonly mail: MailService,
+    private readonly config: ConfigService<Env, true>,
     @Inject(PENNY_DROP_PROVIDER) private readonly pennyDrop: IPennyDropProvider,
     @Inject(CAPTCHA_PROVIDER) private readonly captcha: ICaptchaProvider,
   ) {}
@@ -98,13 +103,19 @@ export class VendorOnboardingService implements OnModuleInit {
       email: input.email,
       categoryKey: input.categoryKey,
       lifecycleStatus: 'INVITED',
+      // Random, never-disclosed: the emailed set-password link is the only way in.
+      userPassword: randomBytes(24).toString('hex'),
     });
-    const onboardingId = await this.createOnboarding(tenantId, created.vendorId, {
-      source: input.source,
-      invitationRef: input.rfqId ?? null,
-      invitedBy: actorId,
-      slaHours: config.slaHours,
-    });
+    const { id: onboardingId, token: inviteToken } = await this.createOnboarding(
+      tenantId,
+      created.vendorId,
+      {
+        source: input.source,
+        invitationRef: input.rfqId ?? null,
+        invitedBy: actorId,
+        slaHours: config.slaHours,
+      },
+    );
     await this.audit.record({
       action: 'VENDOR_INVITED',
       entityType: 'Vendor',
@@ -118,7 +129,105 @@ export class VendorOnboardingService implements OnModuleInit {
       source: input.source,
       email: input.email,
     });
+    await this.sendInviteEmail(
+      tenantId,
+      input.email,
+      input.name || input.legalEntityName,
+      inviteToken,
+    );
     return { vendorId: created.vendorId, onboardingId };
+  }
+
+  /** Accept a buyer invite from the emailed magic link: validate the token and
+   *  set the vendor user's own password. Public (no JWT) — the link carries the
+   *  tenant so we can open the correct RLS context; the token is the secret gate. */
+  async acceptInvite(
+    tenantId: string,
+    token: string,
+    password: string,
+  ): Promise<{ email: string }> {
+    const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId } });
+    if (!tenant) throw new InvalidTokenError('Invalid invitation link.');
+    return this.prisma.runInTenantContext(tenant.id, async () => {
+      const onboarding = await this.requireOnboardingByToken(token);
+      const contact = await this.prisma.client.vendorContact.findFirst({
+        where: { vendorId: onboarding.vendorId, isPrimary: true },
+        select: { email: true },
+      });
+      if (!contact?.email) throw new InvalidTokenError('Invitation has no contact.');
+      const user = await this.prisma.client.user.findUnique({
+        where: { tenantId_email: { tenantId: tenant.id, email: contact.email } },
+        select: { id: true },
+      });
+      if (!user) throw new InvalidTokenError('No account for this invitation.');
+      const argonHash = await hash(password, { type: 2 });
+      await this.prisma.client.user.update({
+        where: { id: user.id },
+        data: { argonHash, isActive: true },
+      });
+      await this.prisma.client.vendorOnboarding.update({
+        where: { id: onboarding.id },
+        data: { emailVerifiedAt: new Date() },
+      });
+      await this.audit.record({
+        action: 'VENDOR_INVITE_ACCEPTED',
+        entityType: 'Vendor',
+        entityId: onboarding.vendorId,
+        actorId: user.id,
+        after: { email: contact.email },
+        tenantId: tenant.id,
+      });
+      return { email: contact.email };
+    });
+  }
+
+  /** Build the set-password magic link and email it to the invited vendor.
+   *  Never throws into the invite flow — a mail failure must not 500 the invite
+   *  (the onboarding row already exists and the link can be re-sent). */
+  private async sendInviteEmail(
+    tenantId: string,
+    email: string,
+    vendorName: string,
+    token: string,
+  ): Promise<void> {
+    try {
+      const tenant = await this.prisma.client.tenant.findUnique({
+        where: { id: tenantId },
+        select: { name: true },
+      });
+      const buyerName = tenant?.name ?? 'your buyer';
+      const base = this.config.get('APP_BASE_URL', { infer: true });
+      const link = `${base}/vendor/accept-invite?token=${encodeURIComponent(
+        token,
+      )}&tenant=${encodeURIComponent(tenantId)}`;
+      const subject = `You've been invited to onboard as a vendor for ${buyerName}`;
+      const text =
+        `Hello ${vendorName},\n\n` +
+        `${buyerName} has invited you to register as a vendor on ProcureFlow.\n\n` +
+        `Set your password and start onboarding here (link valid for ${TOKEN_TTL_DAYS} days):\n` +
+        `${link}\n\n` +
+        `After setting your password you'll complete a short onboarding wizard.\n\n` +
+        `If you weren't expecting this, you can ignore this email.`;
+      const html =
+        `<p>Hello ${escapeHtml(vendorName)},</p>` +
+        `<p><strong>${escapeHtml(buyerName)}</strong> has invited you to register as a ` +
+        `vendor on ProcureFlow.</p>` +
+        `<p><a href="${link}">Set your password and start onboarding</a> ` +
+        `(link valid for ${TOKEN_TTL_DAYS} days).</p>` +
+        `<p>After setting your password you'll complete a short onboarding wizard.</p>` +
+        `<p style="color:#888;font-size:12px">If you weren't expecting this, you can ignore this email.</p>`;
+      // Fire-and-forget: a real SMTP round-trip takes several seconds and would
+      // otherwise exceed the request's 5s RLS transaction budget ("Transaction
+      // already closed"). The onboarding row exists and the link can be re-sent.
+      void this.mail.send({ to: email, subject, text, html }).catch((e) =>
+        // eslint-disable-next-line no-console
+        console.error('[inviteVendor] failed to send invite email:', e),
+      );
+    } catch (err) {
+      // Swallow — invite already succeeded; surface for ops via logs.
+      // eslint-disable-next-line no-console
+      console.error('[inviteVendor] failed to send invite email:', err);
+    }
   }
 
   /** Public, no JWT — must open its own tenant transaction for the writes. */
@@ -147,12 +256,16 @@ export class VendorOnboardingService implements OnModuleInit {
         lifecycleStatus: 'SELF_REGISTERED',
         phone: input.phone,
       });
-      const onboardingId = await this.createOnboarding(tenant.id, created.vendorId, {
-        source: 'SELF_REGISTRATION',
-        invitationRef: null,
-        invitedBy: null,
-        slaHours: config.slaHours,
-      });
+      const { id: onboardingId } = await this.createOnboarding(
+        tenant.id,
+        created.vendorId,
+        {
+          source: 'SELF_REGISTRATION',
+          invitationRef: null,
+          invitedBy: null,
+          slaHours: config.slaHours,
+        },
+      );
       await this.audit.record({
         action: 'VENDOR_SELF_REGISTERED',
         entityType: 'Vendor',
@@ -180,14 +293,18 @@ export class VendorOnboardingService implements OnModuleInit {
 
   // ── Wizard ─────────────────────────────────────────────────────────────────
 
-  async resumeOnboarding(
-    userId: string,
-  ): Promise<{ vendorId: string; onboardingId: string; wizardState: WizardState }> {
+  async resumeOnboarding(userId: string): Promise<{
+    vendorId: string;
+    onboardingId: string;
+    categoryKey: string;
+    wizardState: WizardState;
+  }> {
     const vendorId = await this.resolveVendorId(userId);
     const onboarding = await this.requireActiveOnboarding(vendorId);
     return {
       vendorId,
       onboardingId: onboarding.id,
+      categoryKey: onboarding.categoryConfigKey,
       wizardState: onboarding.wizardState as unknown as WizardState,
     };
   }
@@ -525,6 +642,10 @@ export class VendorOnboardingService implements OnModuleInit {
       categoryKey: string;
       lifecycleStatus: 'INVITED' | 'SELF_REGISTERED';
       phone?: string;
+      /** Password for the auto-created vendor login. Invited vendors get a
+       *  random, never-disclosed value so the only way in is the emailed
+       *  set-password link; self-registration keeps the shared default. */
+      userPassword?: string;
     },
   ): Promise<{ vendorId: string; token: string }> {
     const vendorId = newId('vendor');
@@ -554,7 +675,12 @@ export class VendorOnboardingService implements OnModuleInit {
         },
       },
     });
-    await this.ensureVendorUser(tenantId, input.email, input.name);
+    await this.ensureVendorUser(
+      tenantId,
+      input.email,
+      input.name,
+      input.userPassword ?? VENDOR_DEFAULT_PASSWORD,
+    );
     return { vendorId, token };
   }
 
@@ -567,7 +693,7 @@ export class VendorOnboardingService implements OnModuleInit {
       invitedBy: string | null;
       slaHours: number;
     },
-  ): Promise<string> {
+  ): Promise<{ id: string; token: string }> {
     const id = newId('vendorOnboarding');
     const token = randomBytes(24).toString('hex');
     await this.prisma.client.vendorOnboarding.create({
@@ -586,13 +712,14 @@ export class VendorOnboardingService implements OnModuleInit {
         slaTargetHours: input.slaHours,
       },
     });
-    return id;
+    return { id, token };
   }
 
   private async ensureVendorUser(
     tenantId: string,
     email: string,
     name: string,
+    password: string,
   ): Promise<void> {
     const existing = await this.prisma.client.user.findUnique({
       where: { tenantId_email: { tenantId, email } },
@@ -601,7 +728,7 @@ export class VendorOnboardingService implements OnModuleInit {
     const role = await this.prisma.client.role.findUniqueOrThrow({
       where: { name: 'VENDOR_USER' },
     });
-    const argonHash = await hash(VENDOR_DEFAULT_PASSWORD, { type: 2 });
+    const argonHash = await hash(password, { type: 2 });
     const user = await this.prisma.client.user.create({
       data: { id: newId('user'), tenantId, email, name, argonHash, isActive: true },
     });
@@ -691,4 +818,14 @@ export class VendorOnboardingService implements OnModuleInit {
     if (!tid) throw new Error('No tenant context');
     return tid;
   }
+}
+
+/** Minimal HTML-escaping for interpolated names in outbound email bodies. */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }

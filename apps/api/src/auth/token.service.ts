@@ -56,6 +56,43 @@ export class TokenService {
     return TokenPayloadSchema.parse(raw);
   }
 
+  /**
+   * Single-use-ish invite token for a newly-created (inactive) user. Carries the
+   * user + tenant so the public accept-invite endpoint can open the right RLS
+   * context and set the password. Uses a dedicated `invite` audience and a
+   * `purpose` claim so it can never satisfy the buyer/vendor access-token guard
+   * (which expects `type: access` and a buyer/vendor audience). 7-day validity.
+   */
+  async issueUserInvite(userId: string, tenantId: string): Promise<string> {
+    return this.jwt.signAsync(
+      { sub: userId, tid: tenantId, purpose: 'user_invite' },
+      {
+        privateKey: this.privateKey,
+        algorithm: 'RS256',
+        issuer: this.config.get('JWT_ISSUER', { infer: true }),
+        audience: 'invite',
+        expiresIn: '7d',
+      },
+    );
+  }
+
+  async verifyUserInvite(token: string): Promise<{ userId: string; tenantId: string }> {
+    const raw = await this.jwt.verifyAsync<Record<string, unknown>>(token, {
+      publicKey: this.publicKey,
+      algorithms: ['RS256'],
+      issuer: this.config.get('JWT_ISSUER', { infer: true }),
+      audience: 'invite',
+    });
+    if (
+      raw.purpose !== 'user_invite' ||
+      typeof raw.sub !== 'string' ||
+      typeof raw.tid !== 'string'
+    ) {
+      throw new Error('Not a user invite token');
+    }
+    return { userId: raw.sub, tenantId: raw.tid };
+  }
+
   private async sign(input: IssueInput, type: TokenType, ttl: string): Promise<string> {
     const payload: TokenPayload = {
       sub: input.userId,

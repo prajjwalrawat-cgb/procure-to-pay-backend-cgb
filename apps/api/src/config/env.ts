@@ -68,6 +68,19 @@ const EnvSchema = z.object({
   // with. Requests without it are rejected.
   EMAIL_INBOUND_WEBHOOK_SECRET: z.string().default('dev-email-inbound-secret'),
 
+  // Outbound transactional email (vendor invites, lifecycle notices). SMTP.
+  // When SMTP_USER/SMTP_PASS are unset the MailService runs in "log" mode:
+  // it logs the message + link instead of sending, so the flow works locally
+  // without real credentials (mirrors the sandbox-provider pattern above).
+  SMTP_HOST: z.string().default('smtp.gmail.com'),
+  SMTP_PORT: z.coerce.number().int().default(465),
+  SMTP_USER: z.string().default(''),
+  SMTP_PASS: z.string().default(''),
+  SMTP_FROM: z.string().default('Procure To Pay <no-reply@cgbindia.com>'),
+  // Public web origin that hosts the vendor portal (served under /vendor).
+  // Used to build absolute links in outbound email (e.g. the invite link).
+  APP_BASE_URL: z.string().default('http://localhost:3000'),
+
   // Slice 11c — observability (ADR-036). All optional: unset → the SDK no-ops, so
   // dev/test run with zero telemetry overhead. Set in staging/prod to export.
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().default(''), // e.g. Grafana Cloud OTLP URL

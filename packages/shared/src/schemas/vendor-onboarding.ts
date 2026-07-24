@@ -47,6 +47,17 @@ export type SelfRegistrationInput = z.infer<typeof SelfRegistrationInputSchema>;
 export const VerifyEmailInputSchema = z.object({ token: z.string().min(10) });
 export type VerifyEmailInput = z.infer<typeof VerifyEmailInputSchema>;
 
+/** Buyer-invited vendor sets their own password from the emailed magic link.
+ *  `tenantId` is carried by the link (like self-registration) so the public,
+ *  JWT-less endpoint can open the correct tenant context; `token` is the secret
+ *  gate (the onboarding's selfRegistrationToken). */
+export const AcceptInviteInputSchema = z.object({
+  token: z.string().min(10),
+  tenantId: z.string().uuid(),
+  password: z.string().min(8).max(200),
+});
+export type AcceptInviteInput = z.infer<typeof AcceptInviteInputSchema>;
+
 // ── Wizard steps (each step has its own schema; the UI uses these directly) ────
 
 export const OnboardingStep1Schema = z.object({

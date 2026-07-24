@@ -62,6 +62,8 @@ function makeService(
   const routing = { submit, onApproved: vi.fn() } as unknown as ApprovalRoutingService;
   const verification = {} as unknown as VendorVerificationService;
   const scorecard = {} as unknown as VendorScorecardService;
+  const mail = { send: vi.fn().mockResolvedValue(undefined) } as never;
+  const config = { get: vi.fn().mockReturnValue('http://localhost:3000') } as never;
   const pennyDrop = {
     verify: vi.fn().mockResolvedValue({ registeredName: 'x', matchScore: 1 }),
   } as never;
@@ -79,6 +81,8 @@ function makeService(
     routing,
     verification,
     scorecard,
+    mail,
+    config,
     pennyDrop,
     captcha,
   );
@@ -180,7 +184,9 @@ describe('VendorOnboardingService.startSelfRegistration — tenant scoping', () 
       noop,
       noop,
       noop,
-      noop,
+      noop, // mail
+      noop, // config
+      noop, // pennyDrop
       captcha,
     );
   }

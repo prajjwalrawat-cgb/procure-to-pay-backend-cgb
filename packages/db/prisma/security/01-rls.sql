@@ -76,6 +76,13 @@ $$;
 -- self-sufficient after a reset.
 GRANT USAGE ON SCHEMA public TO procureflow_app;
 
+-- pgcrypto lives in the `extensions` schema on managed Postgres (Supabase). The
+-- audit-chain verification query calls extensions.digest(...) at runtime as the
+-- app role, so it needs USAGE on that schema + EXECUTE on its functions. (The
+-- insert-time trigger runs as owner and doesn't rely on this grant.)
+GRANT USAGE ON SCHEMA extensions TO procureflow_app;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA extensions TO procureflow_app;
+
 -- Non-tenanted tables the app must still read/write (no RLS by tenant_id).
 GRANT SELECT, INSERT, UPDATE, DELETE ON "Session" TO procureflow_app;
 GRANT SELECT ON "Role" TO procureflow_app;

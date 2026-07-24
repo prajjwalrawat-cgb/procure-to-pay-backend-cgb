@@ -515,6 +515,9 @@ model User {
   mfaSecret String?
   mfaEnabled Boolean   @default(false)
   isActive  Boolean    @default(true)
+  // Set when an admin invites this user; cleared when they accept and activate.
+  // A row with invitedAt != null && isActive = false is a PENDING invitation.
+  invitedAt DateTime?  @map("invited_at") @db.Timestamptz(6)
   createdAt DateTime   @default(now()) @db.Timestamptz(6)
   updatedAt DateTime   @updatedAt @db.Timestamptz(6)
 

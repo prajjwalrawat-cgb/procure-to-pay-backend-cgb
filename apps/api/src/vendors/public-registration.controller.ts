@@ -1,9 +1,11 @@
 import { Body, Controller, Get, Post } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import {
+  AcceptInviteInputSchema,
   SelfRegistrationInputSchema,
   VENDOR_CATEGORY_CONFIGS,
   VerifyEmailInputSchema,
+  type AcceptInviteInput,
   type SelfRegistrationInput,
   type VerifyEmailInput,
 } from '@procureflow/shared';
@@ -48,5 +50,14 @@ export class PublicRegistrationController {
     @Body(new ZodValidationPipe(VerifyEmailInputSchema)) dto: VerifyEmailInput,
   ): Promise<{ vendorId: string }> {
     return this.onboarding.verifyEmail(dto.token);
+  }
+
+  /** Buyer-invited vendor sets their own password from the emailed magic link. */
+  @Public()
+  @Post('accept-invite')
+  async acceptInvite(
+    @Body(new ZodValidationPipe(AcceptInviteInputSchema)) dto: AcceptInviteInput,
+  ): Promise<{ email: string }> {
+    return this.onboarding.acceptInvite(dto.tenantId, dto.token, dto.password);
   }
 }
