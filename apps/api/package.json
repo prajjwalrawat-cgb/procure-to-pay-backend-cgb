@@ -19,6 +19,7 @@
     "@nestjs/core": "^10.3.9",
     "@nestjs/jwt": "^10.2.0",
     "@nestjs/platform-express": "^10.3.9",
+    "@nestjs/swagger": "^7.4.2",
     "@nestjs/throttler": "^6",
     "@opentelemetry/auto-instrumentations-node": "^0.78.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.221.0",

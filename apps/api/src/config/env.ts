@@ -41,6 +41,13 @@ const EnvSchema = z.object({
   API_RATE_LIMIT_DEFAULT: z.coerce.number().int().default(300),
   API_RATE_LIMIT_PAYMENT: z.coerce.number().int().default(30),
 
+  // Swagger / OpenAPI UI at /docs (spec JSON at /docs-json). Enabled by default
+  // outside production; set SWAGGER_ENABLED=true to expose it in production too.
+  SWAGGER_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === 'true')),
+
   // Slice 10a — integrations.
   // 32-byte key (base64/hex/utf8) for AES-256-GCM encryption of
   // TenantIntegrationCredential ciphertext. Dev default is NON-SECRET and must

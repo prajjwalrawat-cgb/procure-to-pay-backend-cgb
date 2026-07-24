@@ -9,6 +9,7 @@ import { Logger } from 'nestjs-pino';
 
 import { AppModule } from './app.module';
 import type { Env } from './config/env';
+import { setupSwagger } from './swagger';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
@@ -23,6 +24,15 @@ async function bootstrap(): Promise<void> {
     origin: config.get('API_CORS_ORIGINS', { infer: true }).split(','),
     credentials: true,
   });
+
+  // Swagger UI at /docs (spec at /docs-json). On by default outside production;
+  // set SWAGGER_ENABLED=true to expose it in production too.
+  const swaggerFlag = config.get('SWAGGER_ENABLED', { infer: true });
+  const swaggerEnabled =
+    swaggerFlag ?? config.get('NODE_ENV', { infer: true }) !== 'production';
+  if (swaggerEnabled) {
+    setupSwagger(app);
+  }
 
   // Railway (and most PaaS) inject a dynamic $PORT the service must bind; fall
   // back to API_PORT for local/dev. Bind 0.0.0.0 so the container is reachable.
