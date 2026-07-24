@@ -1,0 +1,64 @@
+{
+  "name": "@procureflow/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "scripts": {
+    "generate": "prisma generate",
+    "build": "prisma generate && tsup",
+    "dev": "prisma generate && tsup --watch",
+    "migrate:dev": "prisma migrate dev && pnpm run security:apply",
+    "migrate:deploy": "prisma migrate deploy && pnpm run security:apply",
+    "security:apply": "tsx scripts/apply-security.ts",
+    "seed": "tsx seed/star-cement.ts",
+    "seed:slice1": "tsx seed/slice1.ts",
+    "seed:slice2": "tsx seed/slice2.ts",
+    "seed:slice3": "tsx seed/slice3.ts",
+    "seed:slice4": "tsx seed/slice4.ts",
+    "seed:slice5": "tsx seed/slice5.ts",
+    "seed:slice6": "tsx seed/slice6.ts",
+    "seed:slice7": "tsx seed/slice7.ts",
+    "seed:slice8": "tsx seed/slice8.ts",
+    "seed:slice9": "tsx seed/slice9.ts",
+    "seed:slice10a": "tsx seed/slice10a.ts",
+    "seed:load": "tsx seed/load-test.ts",
+    "index:audit": "tsx scripts/index-audit.ts",
+    "n1:probe": "tsx scripts/n1-probe.ts",
+    "audit:verify": "tsx scripts/verify-audit-chain.ts",
+    "studio": "prisma studio",
+    "lint": "eslint \"{src,seed,scripts}/**/*.ts\" --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "rls:check": "tsx scripts/rls-coverage.ts",
+    "security:sweep": "tsx scripts/security-sweep.ts",
+    "data-correction:drill": "tsx scripts/data-correction-drill.ts",
+    "migration:compat": "tsx scripts/migration-compat.ts"
+  },
+  "prisma": {
+    "schema": "prisma/schema.prisma"
+  },
+  "dependencies": {
+    "@prisma/client": "5.16.1",
+    "@procureflow/shared": "workspace:*",
+    "argon2": "^0.40.3",
+    "decimal.js": "^10.4.3",
+    "ulid": "^2.3.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.6",
+    "pg": "^8.12.0",
+    "prisma": "5.16.1",
+    "tsup": "^8.1.0",
+    "tsx": "^4.15.6",
+    "typescript": "5.4.5"
+  }
+}

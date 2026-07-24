@@ -1,0 +1,139 @@
+/**
+ * Vendor category configs (Slice 7 deliverable) — drive progressive disclosure
+ * in the onboarding wizard: which documents/screenings/certifications a category
+ * requires, which approval matrix routes it, and the review SLA. Seeded into
+ * VendorCategoryConfig; the wizard reads these directly for conditional sections.
+ */
+
+import type { ScreeningType, VendorDocumentType } from '../constants/vendor-status';
+
+export interface VendorCategoryConfig {
+  categoryKey: string;
+  displayName: string;
+  description: string;
+  requiredDocuments: VendorDocumentType[];
+  optionalDocuments: VendorDocumentType[];
+  requiredScreenings: ScreeningType[];
+  requiredCertifications: VendorDocumentType[];
+  approvalMatrixName: string;
+  slaHours: number;
+}
+
+const BASE_DOCS: VendorDocumentType[] = ['GST_CERT', 'PAN_CARD', 'CANCELLED_CHEQUE'];
+const BASE_SCREENINGS: ScreeningType[] = [
+  'GSTIN_STATUS',
+  'PAN_STATUS',
+  'SANCTIONS_OFAC',
+  'CREDIT_BUREAU',
+];
+
+export const VENDOR_CATEGORY_CONFIGS: VendorCategoryConfig[] = [
+  {
+    categoryKey: 'MECHANICAL_SPARES',
+    displayName: 'Mechanical spares',
+    description: 'Bearings, liners, castings, machined parts.',
+    requiredDocuments: [
+      ...BASE_DOCS,
+      'ISO_9001',
+      'INSURANCE_POLICY',
+      'AUDITED_FINANCIALS',
+    ],
+    optionalDocuments: ['MSME_UDYAM', 'ISO_14001', 'ISO_45001'],
+    requiredScreenings: BASE_SCREENINGS,
+    requiredCertifications: ['ISO_9001'],
+    approvalMatrixName: 'Vendor onboarding — standard',
+    slaHours: 120,
+  },
+  {
+    categoryKey: 'RAW_MATERIALS',
+    displayName: 'Raw materials',
+    description: 'Gypsum, coal, clinker, additives.',
+    requiredDocuments: [
+      ...BASE_DOCS,
+      'POLLUTION_NOC',
+      'FACTORY_LICENSE',
+      'AUDITED_FINANCIALS',
+    ],
+    optionalDocuments: ['MSME_UDYAM', 'ISO_9001'],
+    requiredScreenings: BASE_SCREENINGS,
+    requiredCertifications: [],
+    approvalMatrixName: 'Vendor onboarding — standard',
+    slaHours: 120,
+  },
+  {
+    categoryKey: 'CHEMICALS',
+    displayName: 'Chemicals',
+    description: 'Grinding aids, de-dusting oils, process chemicals.',
+    requiredDocuments: [
+      ...BASE_DOCS,
+      'REACH_DECL',
+      'SDS',
+      'POLLUTION_NOC',
+      'FACTORY_LICENSE',
+    ],
+    optionalDocuments: ['MSME_UDYAM', 'ISO_14001'],
+    requiredScreenings: [...BASE_SCREENINGS, 'ADVERSE_MEDIA'],
+    requiredCertifications: [],
+    approvalMatrixName: 'Vendor onboarding — high-risk',
+    slaHours: 168,
+  },
+  {
+    categoryKey: 'LOGISTICS',
+    displayName: 'Logistics',
+    description: 'Transport, freight, fleet operators.',
+    requiredDocuments: [...BASE_DOCS, 'RC_BOOK', 'DRIVING_LICENSE', 'INSURANCE_POLICY'],
+    optionalDocuments: ['MSME_UDYAM'],
+    requiredScreenings: BASE_SCREENINGS,
+    requiredCertifications: [],
+    approvalMatrixName: 'Vendor onboarding — standard',
+    slaHours: 72,
+  },
+  {
+    categoryKey: 'PROFESSIONAL_SERVICES',
+    displayName: 'Professional services',
+    description: 'Consulting, audit, engineering services.',
+    requiredDocuments: ['GST_CERT', 'PAN_CARD'],
+    optionalDocuments: ['MSME_UDYAM', 'CANCELLED_CHEQUE'],
+    requiredScreenings: ['GSTIN_STATUS', 'PAN_STATUS', 'SANCTIONS_OFAC'],
+    requiredCertifications: [],
+    approvalMatrixName: 'Vendor onboarding — standard',
+    slaHours: 48,
+  },
+  {
+    categoryKey: 'PACKAGING_MATERIALS',
+    displayName: 'Packaging materials',
+    description: 'Cement bags, kraft reels, shrink wrap.',
+    requiredDocuments: [...BASE_DOCS, 'AUDITED_FINANCIALS'],
+    optionalDocuments: ['MSME_UDYAM', 'BIS_CERT', 'ISO_9001'],
+    requiredScreenings: BASE_SCREENINGS,
+    requiredCertifications: [],
+    approvalMatrixName: 'Vendor onboarding — standard',
+    slaHours: 120,
+  },
+  {
+    categoryKey: 'FUEL_LUBRICANTS',
+    displayName: 'Fuel & lubricants',
+    description: 'Petcoke, furnace oil, hydraulic oils.',
+    requiredDocuments: [...BASE_DOCS, 'BIS_CERT', 'POLLUTION_NOC', 'AUDITED_FINANCIALS'],
+    optionalDocuments: ['MSME_UDYAM'],
+    requiredScreenings: [...BASE_SCREENINGS, 'ADVERSE_MEDIA'],
+    requiredCertifications: [],
+    approvalMatrixName: 'Vendor onboarding — high-risk',
+    slaHours: 168,
+  },
+  {
+    categoryKey: 'IT_SERVICES',
+    displayName: 'IT services',
+    description: 'Software, cloud, integration services.',
+    requiredDocuments: ['GST_CERT', 'PAN_CARD', 'CANCELLED_CHEQUE'],
+    optionalDocuments: ['MSME_UDYAM', 'ISO_27001'],
+    requiredScreenings: ['GSTIN_STATUS', 'PAN_STATUS', 'SANCTIONS_OFAC'],
+    requiredCertifications: [],
+    approvalMatrixName: 'Vendor onboarding — standard',
+    slaHours: 120,
+  },
+];
+
+export function categoryConfig(key: string): VendorCategoryConfig | undefined {
+  return VENDOR_CATEGORY_CONFIGS.find((c) => c.categoryKey === key);
+}

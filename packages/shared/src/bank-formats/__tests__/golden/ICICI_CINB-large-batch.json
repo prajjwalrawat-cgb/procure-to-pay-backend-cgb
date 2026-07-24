@@ -1,0 +1,53 @@
+{
+  "name": "ICICI_CINB-large-batch",
+  "formatKey": "ICICI_CINB",
+  "input": {
+    "meta": {
+      "runNumber": "PR-260614-05",
+      "cycleDate": "2026-06-14T00:00:00.000Z",
+      "tenantCode": "STAR01",
+      "debitAccountLast4": "7890",
+      "debitIfsc": "HDFC0000234",
+      "holderName": "Star Cement Ltd"
+    },
+    "payees": [
+      {
+        "beneficiaryName": "Patel Engineering",
+        "beneficiaryAccount": "50100234567890",
+        "ifsc": "HDFC0000123",
+        "amount": "1000000.0000",
+        "ref": "INV-D",
+        "narration": "NEFT PR-260614-01"
+      },
+      {
+        "beneficiaryName": "Saurashtra Refractories",
+        "beneficiaryAccount": "50200111222333",
+        "ifsc": "SBIN0004321",
+        "amount": "2000000.0000",
+        "ref": "INV-E",
+        "narration": "NEFT"
+      },
+      {
+        "beneficiaryName": "Tata Steel Long Products",
+        "beneficiaryAccount": "911020055500123",
+        "ifsc": "ICIC0000505",
+        "amount": "3000000.5000",
+        "ref": "INV-F",
+        "narration": "NEFT"
+      },
+      {
+        "beneficiaryName": "Vishakha Plastics,Pvt Ltd",
+        "beneficiaryAccount": "50100999888777",
+        "ifsc": "HDFC0000123",
+        "amount": "999999.5000",
+        "ref": "INV-G",
+        "narration": "Urgent|NEFT"
+      }
+    ]
+  },
+  "expected": {
+    "content": "PYMT_MODE,BENE_NAME,BENE_ACCT,IFSC,AMOUNT,VALUE_DATE,REMARKS\nNEFT,Patel Engineering,50100234567890,HDFC0000123,1000000.00,14/06/2026,NEFT PR-260614-01\nNEFT,Saurashtra Refractories,50200111222333,SBIN0004321,2000000.00,14/06/2026,NEFT\nNEFT,Tata Steel Long Products,911020055500123,ICIC0000505,3000000.50,14/06/2026,NEFT\nNEFT,Vishakha Plastics Pvt Ltd,50100999888777,HDFC0000123,999999.50,14/06/2026,Urgent NEFT\n",
+    "checksum": "8900a933b82bbf204486b5cdd741058d15756818e84b073af97f88bf8984448e",
+    "rowCount": 4
+  }
+}

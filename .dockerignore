@@ -1,0 +1,23 @@
+# Keep the build context small and reproducible.
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+**/coverage
+**/*.log
+
+# Never bake secrets or local env into the image.
+.env
+.env.*
+!.env.example
+
+# VCS / editor / CI noise
+.git
+.github
+.vscode
+.idea
+
+# Python OCR service builds from its OWN Dockerfile as a separate Railway
+# service — exclude its heavy local artifacts from the API image context.
+services/ocr-service/.venv
+services/ocr-service/**/__pycache__

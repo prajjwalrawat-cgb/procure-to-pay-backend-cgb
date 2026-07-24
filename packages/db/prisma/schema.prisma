@@ -1,0 +1,2972 @@
+// ProcureFlow — Prisma schema. Covers ALL core entities from Master Context §7.
+// Conventions:
+//   • Money is Decimal(18,4)               (§3 rule #4)
+//   • Timestamps are timestamptz UTC       (§3 rule #5)
+//   • tenant_id on every tenanted model    (§4) — RLS applied in security SQL
+//   • Table names PascalCase; RLS policies reference the `tenant_id` column.
+// IDs are ULIDs with an entity prefix (e.g. inv_01H...), generated in app code.
+// Tenant.id is a real uuid so `tenant_id = current_setting(...)::uuid` works.
+
+generator client {
+  provider   = "prisma-client-js"
+  engineType = "library"
+  // "native" covers local dev; "debian-openssl-3.0.x" is the query-engine target
+  // for the node:20-slim (Debian bookworm / OpenSSL 3) Docker runtime on Railway.
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
+}
+
+// ─────────────────────────────── Enums ───────────────────────────────
+
+enum RequisitionStatus {
+  DRAFT
+  SUBMITTED // legacy (Slice 0/1) — retained for existing rows
+  PENDING_APPROVAL // legacy
+  CONVERTED // legacy
+  BUDGET_BREACH_HELD // Slice 4 — submit blocked on budget; user may revise
+  AWAITING_APPROVAL // Slice 4
+  APPROVED
+  PARTIALLY_ISSUED // Slice 4 — some PR lines converted to PO(s)
+  FULLY_ISSUED // Slice 4 — all PR lines converted
+  REJECTED
+  WITHDRAWN // Slice 4 — submitter pulled back before first decision
+  CANCELLED
+  CLOSED // Slice 4
+}
+
+enum PoStatus {
+  DRAFT
+  PENDING_APPROVAL // legacy (Slice 0/1)
+  AWAITING_APPROVAL // Slice 4 — routed through the approval engine
+  APPROVED
+  ISSUED
+  ACKNOWLEDGED // Slice 4 — vendor confirmed receipt
+  PARTIALLY_RECEIVED
+  RECEIVED
+  PARTIALLY_INVOICED // Slice 4
+  INVOICED // Slice 4
+  CLOSED
+  CANCELLED
+  ON_HOLD // Slice 4
+}
+
+// Reason a non-catalogued (free-text) PR line was raised (Slice 4).
+enum NonCatalogReason {
+  NEW_PRODUCT
+  EMERGENCY
+  ONE_OFF_SPEND
+  OTHER
+}
+
+enum RequisitionPriority {
+  LOW
+  STANDARD
+  HIGH
+  CRITICAL
+}
+
+enum BudgetPeriodType {
+  ANNUAL
+  QUARTERLY
+  MONTHLY
+}
+
+enum BudgetRolloverPolicy {
+  NONE
+  FULL
+  CAPPED
+}
+
+enum BudgetCommitmentSource {
+  PR
+  PO
+  SPOT_BUY
+}
+
+enum BudgetCommitmentStatus {
+  COMMITTED
+  PARTIALLY_TRANSFERRED
+  TRANSFERRED
+  RELEASED
+  CONSUMED
+}
+
+enum BudgetAdjustmentType {
+  TRANSFER_IN
+  TRANSFER_OUT
+  INCREASE
+  DECREASE
+}
+
+enum PoType {
+  STANDARD
+  SPOT_BUY
+  BLANKET // stub (later slice)
+  AMENDMENT // stub (Slice 5.5)
+  CONTRACT_CALLOFF // Slice 9 — PO issued against an active contract rate card
+}
+
+enum CommentSource {
+  BUYER
+  VENDOR
+}
+
+enum GrnQcStatus {
+  PENDING // legacy (Slice 0/1)
+  PARTIAL // legacy
+  NOT_STARTED // Slice 5
+  IN_PROGRESS // Slice 5
+  PASSED
+  FAILED
+  CONDITIONAL_PASS // Slice 5 — some lines conditionally accepted
+  WAIVED // Slice 5 — QC waived by QC_OFFICER + PLANT_HEAD co-sign
+}
+
+// Slice 5 — physical goods-receipt lifecycle status.
+enum GrnStatus {
+  DRAFT
+  PENDING_QC
+  POSTED
+  HOLD
+  REVERSED
+}
+
+enum GrnReceiptType {
+  FULL
+  PARTIAL
+  OVER_RECEIPT
+  RETURN_RECEIPT
+}
+
+enum GrnPackingCondition {
+  OK
+  DAMAGED_PACKING
+  WET
+  TAMPERED
+}
+
+enum QcSampleType {
+  ROUTINE
+  AQL
+  DESTRUCTIVE
+}
+
+enum QcSampleResult {
+  PASS
+  FAIL
+  CONDITIONAL_PASS
+}
+
+enum QcDefectSeverity {
+  NONE
+  MINOR
+  MAJOR
+  CRITICAL
+}
+
+enum GrnAttachmentType {
+  DELIVERY_CHALLAN
+  INVOICE_COPY
+  COA
+  PACKING_PHOTO
+  DAMAGE_PHOTO
+  LAB_REPORT
+}
+
+enum RmaReasonCode {
+  DAMAGED
+  WRONG_ITEM
+  QUALITY_FAIL
+  OVER_SUPPLY
+}
+
+enum RmaStatus {
+  DRAFT
+  ISSUED
+  PICKED_UP
+  CREDIT_NOTE_RECEIVED
+  CLOSED
+  CANCELLED
+}
+
+enum ReturnFreightBorneBy {
+  VENDOR
+  BUYER
+}
+
+enum StockMovementType {
+  GRN_RECEIPT
+  RMA_ISSUE
+  ADJUSTMENT
+  CONSUMPTION
+}
+
+enum InventoryValuationMethod {
+  WEIGHTED_AVERAGE
+  FIFO
+}
+
+// Finalized in Slice 1.
+enum InvoiceStatus {
+  RECEIVED
+  OCR_PENDING
+  OCR_DONE
+  OCR_LOW_CONFIDENCE // Slice 10a — below tenant OCR floor; manual review queue
+  OCR_FAILED // Slice 10a — provider permanently failed; manual data-entry fallback
+  PENDING_VENDOR_MATCH // Slice 10a — inbound email from an unrecognised sender
+  MATCH_EXCEPTION
+  AWAITING_APPROVAL
+  APPROVED
+  SCHEDULED
+  PAID
+  HELD
+  REJECTED
+}
+
+// Machine-detected match/validation failures (Slice 1, Master Context §9).
+enum ExceptionType {
+  RATE_VARIANCE
+  QTY_VARIANCE
+  TAX_VARIANCE
+  UNAUTHORISED_LINE
+  PO_MISSING
+  GRN_MISSING
+  DUPLICATE
+  GSTIN_INACTIVE
+  GSTR2B_MISMATCH
+}
+
+enum InvoiceSource {
+  EMAIL
+  PORTAL
+  MANUAL
+  EDI
+}
+
+enum Gstr2bStatus {
+  PENDING
+  MATCHED
+  MISMATCH_AMOUNT
+  MISMATCH_DATE
+  NOT_FOUND
+}
+
+enum ExceptionSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum PaymentRunStatus {
+  DRAFT
+  COMPOSED
+  PENDING_APPROVAL
+  AWAITING_APPROVAL // Slice 3 — routed through the approval engine
+  APPROVED
+  SUBMITTED
+  SUBMITTED_PENDING_BANK_CONFIRMATION // Slice 10b — batch submitted, awaiting bank confirmation
+  SUBMITTED_TO_BANK // Slice 3 — file uploaded, invoices paid (bank call stubbed)
+  COMPLETED // Slice 10b — all items bank-confirmed + reconciled
+  FAILED // Slice 3 tab — bank rejected one or more items (Slice 10)
+  CANCELLED
+}
+
+// Slice 10b — per-item bank submission outcome (partial batch failures).
+enum PaymentItemBankStatus {
+  PENDING
+  SUBMITTED
+  CONFIRMED
+  FAILED
+}
+
+enum ApprovalDecision {
+  PENDING
+  APPROVED
+  REJECTED
+  CHANGES_REQUESTED
+  DELEGATED
+}
+
+enum VendorStatus {
+  DRAFT
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+  BLOCKED
+}
+
+enum DocumentType {
+  REQUISITION
+  PURCHASE_ORDER
+  GRN
+  INVOICE
+  PAYMENT_RUN
+  CONTRACT // Slice 9 — contract execution routes through the Slice 2 engine
+  CONTRACT_AMENDMENT // Slice 9 — mid-validity term change, scaled to the change value
+  RFQ_AWARD // Slice 6 — sourcing award routes through the Slice 2 engine
+  VENDOR_ONBOARDING // Slice 7 — vendor onboarding approval
+  VENDOR_CHANGE // Slice 7 — material post-activation change approval
+}
+
+// ─────────────────────────── Sourcing / RFQ enums (Slice 6) ───────────────────────────
+
+enum RfqType {
+  SINGLE_ENVELOPE
+  TWO_ENVELOPE
+  REVERSE_AUCTION
+  FRAMEWORK
+}
+
+enum RfqStatus {
+  DRAFT
+  PUBLISHED
+  Q_AND_A_OPEN
+  BIDDING_OPEN
+  BID_CLOSED
+  TECH_OPEN
+  COMMERCIAL_OPEN
+  EVALUATION
+  AWARD_PENDING
+  AWARDED
+  CANCELLED
+}
+
+enum RfqInvitationSource {
+  PREFERRED
+  DIRECTORY
+  REFERRAL
+  PUBLIC
+}
+
+enum RfqInvitationStatus {
+  INVITED
+  ACKNOWLEDGED
+  DECLINED
+  QUOTE_SUBMITTED
+  DISQUALIFIED
+}
+
+enum RfqCorrigendumImpact {
+  DEADLINE_EXTENSION
+  SPEC_CHANGE
+  TERMS_CHANGE
+  CLARIFICATION
+}
+
+enum QuoteEnvelopeType {
+  TECHNICAL
+  COMMERCIAL
+  COMBINED
+}
+
+enum QuoteStatus {
+  DRAFT
+  SUBMITTED
+  WITHDRAWN
+  OPENED
+  QUALIFIED
+  DISQUALIFIED
+  DISQUALIFIED_TECH
+  RESUBMISSION_REQUIRED
+  REVISED_SUPERSEDED
+}
+
+enum SpecCompliance {
+  FULL
+  PARTIAL
+  DEVIATION
+}
+
+enum QuoteAttachmentType {
+  TECH_SPEC
+  COMMERCIAL_BID
+  CERTIFICATION
+  REFERENCE
+  OTHER
+}
+
+enum QuoteEnvelope {
+  TECHNICAL
+  COMMERCIAL
+}
+
+enum RfqDocumentKind {
+  SPEC
+  DRAWING
+  TERMS
+  GENERIC
+}
+
+enum ReverseAuctionRoundStatus {
+  SCHEDULED
+  LIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum AwardStatus {
+  RECOMMENDED
+  APPROVED
+  PO_ISSUED
+  REJECTED
+}
+
+enum ActorType {
+  USER
+  SYSTEM
+}
+
+// ─────────────────────────── Tenancy & identity ───────────────────────────
+
+model Tenant {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name               String
+  gstin              String?
+  msmePaymentCapDays Int      @default(45)
+  tdsRate            Decimal  @default("0.001") @db.Decimal(6, 4)
+  currency           String   @default("INR")
+  spotBuyCeiling     Decimal  @default("50000") @map("spot_buy_ceiling") @db.Decimal(18, 4)
+  enforceItemMaster  Boolean  @default(false) @map("enforce_item_master")
+  // Slice 5 — goods-receipt tolerances & inventory valuation policy (ADR-013/015).
+  overReceiptTolerancePct  Decimal                  @default("0.02") @map("over_receipt_tolerance_pct") @db.Decimal(6, 4)
+  inventoryValuationMethod InventoryValuationMethod @default(WEIGHTED_AVERAGE) @map("inventory_valuation_method")
+  // Slice 6 — sourcing policy knobs.
+  rfqMinNoticeDays              Int     @default(3) @map("rfq_min_notice_days")
+  rfqMultiPartyOpenThreshold   Decimal @default("2500000") @map("rfq_multi_party_open_threshold") @db.Decimal(18, 4)
+  msmePreferencePct            Decimal @default("15") @map("msme_preference_pct") @db.Decimal(6, 2)
+  newVendorDefaultScore        Decimal @default("70") @map("new_vendor_default_score") @db.Decimal(6, 2)
+  // Slice 10a — integration policy knobs (Master Context §9).
+  ocrConfidenceFloorPct      Decimal @default("80") @map("ocr_confidence_floor_pct") @db.Decimal(5, 2)
+  einvoiceTurnoverThreshold  Decimal @default("50000000") @map("einvoice_turnover_threshold") @db.Decimal(18, 4)
+  plants             Plant[]
+  createdAt          DateTime @default(now()) @db.Timestamptz(6)
+
+  users             User[]
+  departments       Department[]
+  costCenters       CostCenter[]
+  vendors           Vendor[]
+  items             Item[]
+  budgets           Budget[]
+  budgetCommitments BudgetCommitment[]
+  budgetAdjustments BudgetAdjustment[]
+  requisitions      Requisition[]
+  purchaseOrders    PurchaseOrder[]
+  grns              GoodsReceiptNote[]
+  returnMaterialAuths ReturnMaterialAuth[]
+  stockLedger       StockLedger[]
+  invoices          Invoice[]
+  paymentRuns       PaymentRun[]
+  bankAccounts      BankAccount[]
+  paymentRecords    PaymentRecord[]
+  approvalMatrices  ApprovalMatrix[]
+  approvals         Approval[]
+  delegations       Delegation[]
+  notifications     Notification[]
+  auditLogs         AuditLog[]
+  domainEvents      DomainEvent[]
+  matchConfig       TenantMatchConfig?
+  rfqs              Rfq[]
+  quotes            Quote[]
+  awards            Award[]
+  vendorOnboardings VendorOnboarding[]
+  vendorBeneficialOwners VendorBeneficialOwner[]
+  vendorScreenings  VendorScreening[]
+  vendorCategoryConfigs VendorCategoryConfig[]
+  vendorScorecards  VendorScorecard[]
+  vendorSuspensions VendorSuspension[]
+  vendorChangeRequests VendorChangeRequest[]
+  contracts         Contract[]
+}
+
+// Per-tenant 3-way match tolerances (Master Context §9 defaults, overridable).
+model TenantMatchConfig {
+  id               String   @id
+  tenantId         String   @unique @map("tenant_id") @db.Uuid
+  priceVariancePct Decimal  @default("0.005") @db.Decimal(6, 4)
+  qtyVariancePct   Decimal  @default("0.02") @db.Decimal(6, 4)
+  qtyVarianceAbs   Decimal  @default("1") @db.Decimal(18, 4)
+  taxExact         Boolean  @default(true)
+  createdAt        DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+}
+
+model Role {
+  id        String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String     @unique
+  userRoles UserRole[]
+}
+
+model User {
+  id        String     @id
+  tenantId  String     @map("tenant_id") @db.Uuid
+  email     String
+  name      String
+  argonHash String
+  mfaSecret String?
+  mfaEnabled Boolean   @default(false)
+  isActive  Boolean    @default(true)
+  createdAt DateTime   @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime   @updatedAt @db.Timestamptz(6)
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id])
+  userRoles    UserRole[]
+  sessions     Session[]
+  requisitions Requisition[] @relation("RequisitionRequester")
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+}
+
+// Sessions are not tenanted (login precedes tenant context). No RLS — see §4.
+model Session {
+  id               String    @id
+  userId           String    @map("user_id")
+  refreshTokenHash String
+  userAgent        String?
+  ipAddress        String?
+  expiresAt        DateTime  @db.Timestamptz(6)
+  revokedAt        DateTime? @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([refreshTokenHash])
+}
+
+model UserRole {
+  id       String  @id
+  tenantId String  @map("tenant_id") @db.Uuid
+  userId   String  @map("user_id")
+  roleId   String  @map("role_id") @db.Uuid
+  deptId   String? @map("dept_id")
+  plantId  String? @map("plant_id")
+
+  user User @relation(fields: [userId], references: [id])
+  role Role @relation(fields: [roleId], references: [id])
+
+  @@unique([userId, roleId, deptId, plantId])
+  @@index([tenantId])
+  @@index([userId])
+  @@index([roleId])
+}
+
+// ─────────────────────────── Org structure ───────────────────────────
+
+model Plant {
+  id        String   @id
+  tenantId  String   @map("tenant_id") @db.Uuid
+  name      String
+  gstin     String?
+  address   String?
+  stateCode String
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id])
+  departments  Department[]
+  costCenters  CostCenter[]
+  requisitions Requisition[]
+  stockLedger  StockLedger[]
+
+  @@index([tenantId])
+}
+
+model Department {
+  id       String  @id
+  tenantId String  @map("tenant_id") @db.Uuid
+  name     String
+  plantId  String? @map("plant_id")
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id])
+  plant       Plant?       @relation(fields: [plantId], references: [id])
+  costCenters CostCenter[]
+
+  @@index([tenantId])
+  @@index([plantId])
+}
+
+model CostCenter {
+  id           String   @id
+  tenantId     String   @map("tenant_id") @db.Uuid
+  code         String
+  name         String
+  deptId       String?  @map("dept_id")
+  plantId      String?  @map("plant_id")
+  budgetAmount Decimal  @default("0") @db.Decimal(18, 4)
+  budgetPeriod String   @default("ANNUAL")
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id])
+  department   Department?   @relation(fields: [deptId], references: [id])
+  plant        Plant?        @relation(fields: [plantId], references: [id])
+  requisitions Requisition[]
+  stockLedger  StockLedger[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+}
+
+// ─────────────────────────── Vendors ───────────────────────────
+
+model Vendor {
+  id           String       @id
+  tenantId     String       @map("tenant_id") @db.Uuid
+  code         String
+  name         String
+  gstin        String?
+  pan          String?
+  isMsme       Boolean      @default(false)
+  udyamNumber  String?
+  msmeCategory String?
+  categoryTags String[]
+  // Slice 6 — sourcing directory + scorecard.
+  capabilityTags       String[] @map("capability_tags")
+  preliminaryStatus    Boolean  @default(false) @map("preliminary_status")
+  historicalOtif       Decimal? @map("historical_otif") @db.Decimal(6, 2)
+  historicalQuality    Decimal? @map("historical_quality") @db.Decimal(6, 2)
+  avgResponseTimeHours Decimal? @map("avg_response_time_hours") @db.Decimal(10, 2)
+  status       VendorStatus @default(DRAFT)
+  riskScore    Decimal?     @db.Decimal(6, 2)
+  onTimePct    Decimal?     @db.Decimal(6, 2)
+  qualityPct   Decimal?     @db.Decimal(6, 2)
+  // Slice 7 — vendor lifecycle + onboarding + risk.
+  lifecycleStatus         VendorLifecycleStatus @default(ACTIVE) @map("lifecycle_status")
+  legalEntityType         LegalEntityType?      @map("legal_entity_type")
+  legalEntityName         String?               @map("legal_entity_name")
+  businessPan             String?               @map("business_pan")
+  businessPanVerifiedAt   DateTime?             @map("business_pan_verified_at") @db.Timestamptz(6)
+  dateOfIncorporation     DateTime?             @map("date_of_incorporation") @db.Timestamptz(6)
+  annualTurnoverDeclared  Decimal?              @map("annual_turnover_declared") @db.Decimal(18, 4)
+  turnoverCurrency        String                @default("INR") @map("turnover_currency")
+  emailDomains            String[]              @default([]) @map("email_domains") // Slice 10a — inbound-email sender validation
+  employeeCountBracket    String?               @map("employee_count_bracket")
+  isRelatedParty          Boolean               @default(false) @map("is_related_party")
+  relatedPartyDisclosure  String?               @map("related_party_disclosure")
+  categoryConfigKey       String?               @map("category_config_key")
+  cocAcknowledgedAt       DateTime?             @map("coc_acknowledged_at") @db.Timestamptz(6)
+  cocAckIp                String?               @map("coc_ack_ip")
+  cocAckDevice            String?               @map("coc_ack_device")
+  dataProcessingConsentAt DateTime?             @map("data_processing_consent_at") @db.Timestamptz(6)
+  riskGrade               String?               @map("risk_grade")
+  riskLastComputedAt      DateTime?             @map("risk_last_computed_at") @db.Timestamptz(6)
+  onboardingStartedAt     DateTime?             @map("onboarding_started_at") @db.Timestamptz(6)
+  activatedAt             DateTime?             @map("activated_at") @db.Timestamptz(6)
+  activatedBy             String?               @map("activated_by")
+  suspensionReason        String?               @map("suspension_reason")
+  suspendedBy             String?               @map("suspended_by")
+  suspendedAt             DateTime?             @map("suspended_at") @db.Timestamptz(6)
+  blacklistReason         String?               @map("blacklist_reason")
+  blacklistedBy           String?               @map("blacklisted_by")
+  blacklistedAt           DateTime?             @map("blacklisted_at") @db.Timestamptz(6)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+
+  tenant    Tenant           @relation(fields: [tenantId], references: [id])
+  banks     VendorBank[]
+  contacts  VendorContact[]
+  documents VendorDocument[]
+  purchaseOrders PurchaseOrder[]
+  invoices  Invoice[]
+  itemPricing ItemVendorPricing[]
+  returnMaterialAuths ReturnMaterialAuth[]
+  preferredForLines RequisitionLine[] @relation("PreferredVendorLines")
+  rfqInvitations RfqInvitation[]
+  quotes    Quote[]
+  awardAllocations AwardAllocation[]
+  onboardings VendorOnboarding[]
+  beneficialOwners VendorBeneficialOwner[]
+  screenings VendorScreening[]
+  scorecards VendorScorecard[]
+  suspensions VendorSuspension[]
+  changeRequests VendorChangeRequest[]
+  contracts Contract[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, lifecycleStatus])
+}
+
+model VendorBank {
+  id                 String    @id
+  tenantId           String    @map("tenant_id") @db.Uuid
+  vendorId           String    @map("vendor_id")
+  bankName           String
+  accountNoEncrypted String
+  ifsc               String
+  holderName         String
+  isVerified         Boolean   @default(false)
+  verifiedAt         DateTime? @db.Timestamptz(6)
+  pennyDropRef       String?
+  // Slice 7 — penny-drop verification.
+  pennyDropCreditedAt   DateTime? @map("penny_drop_credited_at") @db.Timestamptz(6)
+  pennyDropNameReturned String?   @map("penny_drop_name_returned")
+  nameMatchScore        Decimal?  @map("name_match_score") @db.Decimal(6, 4)
+  nameMatchAlgorithm    String?   @map("name_match_algorithm")
+  manualOverrideReason  String?   @map("manual_override_reason")
+  overriddenBy          String?   @map("overridden_by")
+  isArchived            Boolean   @default(false) @map("is_archived")
+
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@index([tenantId])
+  @@index([vendorId])
+}
+
+model VendorContact {
+  id        String  @id
+  tenantId  String  @map("tenant_id") @db.Uuid
+  vendorId  String  @map("vendor_id")
+  name      String
+  role      String?
+  email     String?
+  phone     String?
+  isPrimary Boolean @default(false)
+  // Slice 7.
+  isAuthorizedSignatory Boolean   @default(false) @map("is_authorized_signatory")
+  department            String?
+  validFrom             DateTime? @map("valid_from") @db.Timestamptz(6)
+  validTo               DateTime? @map("valid_to") @db.Timestamptz(6)
+
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@index([tenantId])
+  @@index([vendorId])
+}
+
+model VendorDocument {
+  id         String    @id
+  tenantId   String    @map("tenant_id") @db.Uuid
+  vendorId   String    @map("vendor_id")
+  docType    String
+  s3Key      String
+  validFrom  DateTime? @db.Timestamptz(6)
+  validTo    DateTime? @db.Timestamptz(6)
+  verifiedAt DateTime? @db.Timestamptz(6)
+  // Slice 7 — verification + expiry tracking.
+  filename           String?              @map("filename")
+  sizeBytes          Int?                 @map("size_bytes")
+  fileHash           String?              @map("file_hash")
+  mimeType           String?              @map("mime_type")
+  documentNumber     String?              @map("document_number")
+  issuedBy           String?              @map("issued_by")
+  uploadedBy         String?              @map("uploaded_by")
+  uploadedAt         DateTime?            @map("uploaded_at") @db.Timestamptz(6)
+  verificationStatus DocVerificationStatus @default(PENDING) @map("verification_status")
+  verificationSource String?              @map("verification_source")
+  verifiedBy         String?              @map("verified_by")
+  verificationRef    String?              @map("verification_ref")
+  rejectionReason    String?              @map("rejection_reason")
+  reminderSentAt     DateTime?            @map("reminder_sent_at") @db.Timestamptz(6)
+
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@index([tenantId])
+  @@index([vendorId])
+  @@index([tenantId, validTo])
+}
+
+// ─────────────────────────── Requisitions ───────────────────────────
+
+model Requisition {
+  id                     String              @id
+  tenantId               String              @map("tenant_id") @db.Uuid
+  number                 String
+  title                  String?
+  businessJustification  String?             @map("business_justification")
+  requesterId            String              @map("requester_id")
+  deptId                 String              @map("dept_id")
+  costCenterId           String              @map("cost_center_id")
+  plantId                String              @map("plant_id")
+  deliveryLocation       String?             @map("delivery_location")
+  priority               RequisitionPriority @default(STANDARD)
+  status                 RequisitionStatus   @default(DRAFT)
+  totalAmount            Decimal             @default("0") @db.Decimal(18, 4)
+  taxAmount              Decimal             @default("0") @db.Decimal(18, 4)
+  currency               String              @default("INR")
+  neededBy               DateTime?           @db.Timestamptz(6)
+  budgetBreachDetail     Json?               @map("budget_breach_detail")
+  approvalMatrixSnapshot Json?               @map("approval_matrix_snapshot")
+  createdAt              DateTime            @default(now()) @db.Timestamptz(6)
+  updatedAt              DateTime            @updatedAt @db.Timestamptz(6)
+
+  tenant            Tenant               @relation(fields: [tenantId], references: [id])
+  costCenter        CostCenter           @relation(fields: [costCenterId], references: [id])
+  plant             Plant                @relation(fields: [plantId], references: [id])
+  requester         User                 @relation("RequisitionRequester", fields: [requesterId], references: [id])
+  lines             RequisitionLine[]
+  purchaseOrders    PurchaseOrder[]
+  comments          RequisitionComment[]
+  budgetCommitments BudgetCommitment[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt(sort: Desc)])
+}
+
+model RequisitionLine {
+  id                String            @id
+  tenantId          String            @map("tenant_id") @db.Uuid
+  requisitionId     String            @map("requisition_id")
+  lineNo            Int
+  itemId            String?           @map("item_id")
+  skuCode           String?           @map("sku_code")
+  itemDesc          String
+  hsnCode           String?           @map("hsn_code")
+  uom               String
+  qty               Decimal           @db.Decimal(18, 4)
+  qtyIssued         Decimal           @default("0") @map("qty_issued") @db.Decimal(18, 4)
+  unitPrice         Decimal           @db.Decimal(18, 4)
+  discountPct       Decimal           @default("0") @map("discount_pct") @db.Decimal(6, 4)
+  taxRate           Decimal           @default("0") @db.Decimal(6, 4)
+  lineTotal         Decimal           @default("0") @map("line_total") @db.Decimal(18, 4)
+  taxAmount         Decimal           @default("0") @map("tax_amount") @db.Decimal(18, 4)
+  category          String?
+  subCategory       String?           @map("sub_category")
+  notes             String?
+  preferredVendorId String?           @map("preferred_vendor_id")
+  reasonCode        NonCatalogReason? @map("reason_code")
+  isReverseCharge   Boolean           @default(false) @map("is_reverse_charge")
+  isImportDuty      Boolean           @default(false) @map("is_import_duty")
+  budgetLineRef     String?
+
+  requisition     Requisition @relation(fields: [requisitionId], references: [id])
+  item            Item?       @relation(fields: [itemId], references: [id])
+  preferredVendor Vendor?     @relation("PreferredVendorLines", fields: [preferredVendorId], references: [id])
+
+  @@index([tenantId])
+  @@index([requisitionId])
+  @@index([itemId])
+  @@index([preferredVendorId])
+}
+
+model RequisitionComment {
+  id            String   @id
+  tenantId      String   @map("tenant_id") @db.Uuid
+  requisitionId String   @map("requisition_id")
+  authorId      String   @map("author_id")
+  body          String
+  createdAt     DateTime @default(now()) @db.Timestamptz(6)
+
+  requisition Requisition @relation(fields: [requisitionId], references: [id])
+
+  @@index([tenantId])
+  @@index([requisitionId])
+}
+
+// ─────────────────────────── Purchase orders ───────────────────────────
+
+model PurchaseOrder {
+  id                     String    @id
+  tenantId               String    @map("tenant_id") @db.Uuid
+  number                 String
+  vendorId               String    @map("vendor_id")
+  requisitionId          String?   @map("requisition_id")
+  status                 PoStatus  @default(DRAFT)
+  poType                 PoType    @default(STANDARD) @map("po_type")
+  isSpotBuy              Boolean   @default(false) @map("is_spot_buy")
+  isAmendmentOf          String?   @map("is_amendment_of")
+  contractId             String?   @map("contract_id") // Slice 9 — set for CONTRACT_CALLOFF POs
+  totalAmount            Decimal   @default("0") @db.Decimal(18, 4)
+  taxAmount              Decimal   @default("0") @db.Decimal(18, 4)
+  currency               String    @default("INR")
+  deliveryAddr           String? // legacy free-text (Slice 0/1)
+  deliveryAddress        Json?     @map("delivery_address")
+  deliveryTerms          String?   @map("delivery_terms") // INCOTERM
+  paymentTermsSnapshot   Json?     @map("payment_terms_snapshot")
+  termsSnapshot          Json?     @map("terms_snapshot")
+  approvalMatrixSnapshot Json?     @map("approval_matrix_snapshot")
+  expectedAt             DateTime? @db.Timestamptz(6)
+  expectedDeliveryDate   DateTime? @map("expected_delivery_date") @db.Timestamptz(6)
+  actualDeliveryDate     DateTime? @map("actual_delivery_date") @db.Timestamptz(6)
+  issuedAt               DateTime? @db.Timestamptz(6)
+  issuedBy               String?   @map("issued_by")
+  acknowledgedAt         DateTime? @map("acknowledged_at") @db.Timestamptz(6)
+  acknowledgedBy         String?   @map("acknowledged_by")
+  pdfS3Key               String?   @map("pdf_s3_key")
+  pdfGeneratedHash       String?   @map("pdf_generated_hash")
+  holdReason             String?   @map("hold_reason")
+  cancelReason           String?   @map("cancel_reason")
+  cancelledAt            DateTime? @map("cancelled_at") @db.Timestamptz(6)
+  createdBy              String?   @map("created_by")
+  createdAt              DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt              DateTime  @updatedAt @db.Timestamptz(6)
+
+  tenant            Tenant                @relation(fields: [tenantId], references: [id])
+  vendor            Vendor                @relation(fields: [vendorId], references: [id])
+  requisition       Requisition?          @relation(fields: [requisitionId], references: [id])
+  lines             PurchaseOrderLine[]
+  grns              GoodsReceiptNote[]
+  invoices          Invoice[]
+  comments          PurchaseOrderComment[]
+  budgetCommitments BudgetCommitment[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([vendorId])
+  @@index([contractId])
+}
+
+model PurchaseOrderLine {
+  id              String  @id
+  tenantId        String  @map("tenant_id") @db.Uuid
+  poId            String  @map("po_id")
+  lineNo          Int
+  prLineId        String? @map("pr_line_id")
+  contractLineId  String? @map("contract_line_id") // Slice 9 — the rate card row this line was called off against
+  itemId          String? @map("item_id")
+  itemDesc        String
+  hsnCode         String? @map("hsn_code")
+  uom             String
+  qtyOrdered      Decimal @db.Decimal(18, 4)
+  qtyReceived     Decimal @default("0") @db.Decimal(18, 4)
+  qtyInvoiced     Decimal @default("0") @map("qty_invoiced") @db.Decimal(18, 4)
+  qtyCancelled    Decimal @default("0") @map("qty_cancelled") @db.Decimal(18, 4)
+  unitPrice       Decimal @db.Decimal(18, 4)
+  discountPct     Decimal @default("0") @map("discount_pct") @db.Decimal(6, 4)
+  taxRate         Decimal @default("0") @db.Decimal(6, 4)
+  lineTotal       Decimal @default("0") @map("line_total") @db.Decimal(18, 4)
+  glAccount       String?
+  deliveryDateLine DateTime? @map("delivery_date_line") @db.Timestamptz(6)
+
+  po           PurchaseOrder      @relation(fields: [poId], references: [id])
+  item         Item?              @relation(fields: [itemId], references: [id])
+  grnLines     GrnLine[]
+  invoiceLines InvoiceLine[]
+
+  @@index([tenantId])
+  @@index([poId])
+  @@index([itemId])
+}
+
+model PurchaseOrderComment {
+  id        String        @id
+  tenantId  String        @map("tenant_id") @db.Uuid
+  poId      String        @map("po_id")
+  authorId  String        @map("author_id")
+  source    CommentSource @default(BUYER)
+  isQuery   Boolean       @default(false) @map("is_query")
+  body      String
+  createdAt DateTime      @default(now()) @db.Timestamptz(6)
+
+  po PurchaseOrder @relation(fields: [poId], references: [id])
+
+  @@index([tenantId])
+  @@index([poId])
+}
+
+// ─────────────────────────── Item master (Slice 4) ───────────────────────────
+
+model Item {
+  id                String   @id
+  tenantId          String   @map("tenant_id") @db.Uuid
+  skuCode           String   @map("sku_code")
+  name              String
+  description       String?
+  category          String
+  subcategory       String?
+  hsnCode           String   @map("hsn_code")
+  gstRate           Decimal  @map("gst_rate") @db.Decimal(6, 4)
+  primaryUom        String   @map("primary_uom")
+  isActive          Boolean  @default(true) @map("is_active")
+  isCapex           Boolean  @default(false) @map("is_capex")
+  defaultGlAccount  String?  @map("default_gl_account")
+  // Slice 5 — QC + receipt behaviour (item master QC extension, ADR-015).
+  requiresQc        Boolean  @default(false) @map("requires_qc")
+  requiresCoa       Boolean  @default(false) @map("requires_coa")
+  requiresBatch     Boolean  @default(false) @map("requires_batch")
+  requiresSerial    Boolean  @default(false) @map("requires_serial")
+  qcParameters      Json?    @map("qc_parameters")
+  samplingPlanRef   String?  @map("sampling_plan_ref")
+  aqlLevel          String?  @map("aql_level")
+  stockGlAccount    String?  @map("stock_gl_account")
+  createdAt         DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime @updatedAt @db.Timestamptz(6)
+
+  tenant           Tenant               @relation(fields: [tenantId], references: [id])
+  uomConversions   ItemUomConversion[]
+  vendorPricing    ItemVendorPricing[]
+  requisitionLines RequisitionLine[]
+  poLines          PurchaseOrderLine[]
+  stockLedger      StockLedger[]
+
+  @@unique([tenantId, skuCode])
+  @@index([tenantId])
+  @@index([tenantId, category])
+  @@index([tenantId, isActive])
+}
+
+model ItemUomConversion {
+  id       String  @id
+  tenantId String  @map("tenant_id") @db.Uuid
+  itemId   String  @map("item_id")
+  fromUom  String  @map("from_uom")
+  toUom    String  @map("to_uom")
+  factor   Decimal @db.Decimal(18, 6)
+
+  item Item @relation(fields: [itemId], references: [id])
+
+  @@index([tenantId])
+  @@index([itemId])
+}
+
+model ItemVendorPricing {
+  id          String    @id
+  tenantId    String    @map("tenant_id") @db.Uuid
+  itemId      String    @map("item_id")
+  vendorId    String    @map("vendor_id")
+  unitPrice   Decimal   @db.Decimal(18, 4)
+  uom         String
+  currency    String    @default("INR")
+  validFrom   DateTime  @map("valid_from") @db.Timestamptz(6)
+  validTo     DateTime? @map("valid_to") @db.Timestamptz(6)
+  contractId  String?   @map("contract_id")
+  isPreferred Boolean   @default(false) @map("is_preferred")
+
+  item   Item   @relation(fields: [itemId], references: [id])
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@index([tenantId])
+  @@index([itemId])
+  @@index([vendorId])
+}
+
+// ─────────────────────────── Budgets (Slice 4) ───────────────────────────
+
+model Budget {
+  id             String               @id
+  tenantId       String               @map("tenant_id") @db.Uuid
+  costCenterId   String               @map("cost_center_id")
+  periodType     BudgetPeriodType     @default(ANNUAL) @map("period_type")
+  periodStart    DateTime             @map("period_start") @db.Timestamptz(6)
+  periodEnd      DateTime             @map("period_end") @db.Timestamptz(6)
+  currency       String               @default("INR")
+  allocatedAmount Decimal             @map("allocated_amount") @db.Decimal(18, 4)
+  openingBalance Decimal              @default("0") @map("opening_balance") @db.Decimal(18, 4)
+  // Denormalised snapshot for fast reads (recomputed on each commitment change).
+  committedAmount Decimal             @default("0") @map("committed_amount") @db.Decimal(18, 4)
+  consumedAmount Decimal              @default("0") @map("consumed_amount") @db.Decimal(18, 4)
+  rolloverPolicy BudgetRolloverPolicy @default(NONE) @map("rollover_policy")
+  isActive       Boolean              @default(true) @map("is_active")
+  createdAt      DateTime             @default(now()) @db.Timestamptz(6)
+  updatedBy      String?              @map("updated_by")
+
+  tenant      Tenant             @relation(fields: [tenantId], references: [id])
+  commitments BudgetCommitment[]
+  adjustments BudgetAdjustment[]
+
+  @@index([tenantId])
+  @@index([tenantId, costCenterId, isActive])
+}
+
+model BudgetCommitment {
+  id           String                 @id
+  tenantId     String                 @map("tenant_id") @db.Uuid
+  budgetId     String                 @map("budget_id")
+  costCenterId String                 @map("cost_center_id")
+  sourceType   BudgetCommitmentSource @map("source_type")
+  sourceId     String                 @map("source_id")
+  requisitionId String?               @map("requisition_id")
+  poId         String?                @map("po_id")
+  amount       Decimal                @db.Decimal(18, 4)
+  status       BudgetCommitmentStatus @default(COMMITTED)
+  committedAt  DateTime               @default(now()) @map("committed_at") @db.Timestamptz(6)
+  committedBy  String                 @map("committed_by")
+  releasedAt   DateTime?              @map("released_at") @db.Timestamptz(6)
+  releaseReason String?               @map("release_reason")
+
+  tenant      Tenant        @relation(fields: [tenantId], references: [id])
+  budget      Budget        @relation(fields: [budgetId], references: [id])
+  requisition Requisition?  @relation(fields: [requisitionId], references: [id])
+  po          PurchaseOrder? @relation(fields: [poId], references: [id])
+
+  @@index([tenantId])
+  @@index([budgetId])
+  @@index([tenantId, sourceType, sourceId])
+}
+
+model BudgetAdjustment {
+  id             String               @id
+  tenantId       String               @map("tenant_id") @db.Uuid
+  budgetId       String               @map("budget_id")
+  adjustmentType BudgetAdjustmentType @map("adjustment_type")
+  amount         Decimal              @db.Decimal(18, 4)
+  reason         String
+  relatedBudgetId String?             @map("related_budget_id")
+  approvedBy     String               @map("approved_by")
+  approvedAt     DateTime             @default(now()) @map("approved_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  budget Budget @relation(fields: [budgetId], references: [id])
+
+  @@index([tenantId])
+  @@index([budgetId])
+}
+
+// ─────────────────────────── Goods receipt ───────────────────────────
+
+// Slice 5 — extended from the Slice 0 skeleton. Gate-to-post receipt lifecycle.
+model GoodsReceiptNote {
+  id                       String              @id
+  tenantId                 String              @map("tenant_id") @db.Uuid
+  number                   String
+  poId                     String              @map("po_id")
+  receiptType              GrnReceiptType      @default(FULL) @map("receipt_type")
+  gateEntryRef             String?             @map("gate_entry_ref")
+  vehicleNo                String?             @map("vehicle_no")
+  driverName               String?             @map("driver_name")
+  driverPhoneLast4         String?             @map("driver_phone_last4")
+  transporter              String?
+  ewayBillNo               String?             @map("eway_bill_no")
+  ewayBillValidUntil       DateTime?           @map("eway_bill_valid_until") @db.Timestamptz(6)
+  receivedBy               String              @map("received_by")
+  receivedAt               DateTime            @db.Timestamptz(6)
+  unloadingLocation        String?             @map("unloading_location")
+  packingCondition         GrnPackingCondition @default(OK) @map("packing_condition")
+  weighbridgeSlipNo        String?             @map("weighbridge_slip_no")
+  grossWeightKg            Decimal?            @map("gross_weight_kg") @db.Decimal(18, 4)
+  tareWeightKg             Decimal?            @map("tare_weight_kg") @db.Decimal(18, 4)
+  netWeightKg              Decimal?            @map("net_weight_kg") @db.Decimal(18, 4)
+  status                   GrnStatus           @default(DRAFT)
+  qcStatus                 GrnQcStatus         @default(PENDING)
+  qcBy                     String?             @map("qc_by")
+  qcAt                     DateTime?           @db.Timestamptz(6)
+  deliveryNoteRef          String?
+  varianceFlags            Json?               @map("variance_flags")
+  requiresPlantHeadSignoff Boolean             @default(false) @map("requires_plant_head_signoff")
+  postedAt                 DateTime?           @map("posted_at") @db.Timestamptz(6)
+  postedBy                 String?             @map("posted_by")
+  reversedAt               DateTime?           @map("reversed_at") @db.Timestamptz(6)
+  reversedBy               String?             @map("reversed_by")
+  reversalReason           String?             @map("reversal_reason")
+  createdBy                String?             @map("created_by")
+  createdAt                DateTime            @default(now()) @db.Timestamptz(6)
+  updatedAt                DateTime            @default(now()) @updatedAt @db.Timestamptz(6)
+
+  tenant      Tenant               @relation(fields: [tenantId], references: [id])
+  po          PurchaseOrder        @relation(fields: [poId], references: [id])
+  lines       GrnLine[]
+  attachments GrnAttachment[]
+  rmas        ReturnMaterialAuth[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, qcStatus])
+  @@index([poId])
+}
+
+model GrnLine {
+  id                  String    @id
+  tenantId            String    @map("tenant_id") @db.Uuid
+  grnId               String    @map("grn_id")
+  poLineId            String    @map("po_line_id")
+  qtyReceived         Decimal   @default("0") @map("qty_received") @db.Decimal(18, 4)
+  qtyAccepted         Decimal   @default("0") @db.Decimal(18, 4)
+  qtyRejected         Decimal   @default("0") @db.Decimal(18, 4)
+  qtyShort            Decimal   @default("0") @map("qty_short") @db.Decimal(18, 4)
+  uomReceived         String?   @map("uom_received")
+  uomConversionFactor Decimal   @default("1") @map("uom_conversion_factor") @db.Decimal(18, 6)
+  rejectionReason     String?
+  batchNumber         String?   @map("batch_number")
+  manufacturingDate   DateTime? @map("manufacturing_date") @db.Timestamptz(6)
+  expiryDate          DateTime? @map("expiry_date") @db.Timestamptz(6)
+  lotNumber           String?   @map("lot_number")
+  serialNumbers       String[]  @map("serial_numbers")
+  storageLocation     String?   @map("storage_location")
+  binCode             String?   @map("bin_code")
+  unitLandedCost      Decimal   @default("0") @map("unit_landed_cost") @db.Decimal(18, 4)
+  glStockAccount      String?   @map("gl_stock_account")
+  varianceFlags       Json?     @map("variance_flags")
+
+  grn       GoodsReceiptNote @relation(fields: [grnId], references: [id])
+  poLine    PurchaseOrderLine @relation(fields: [poLineId], references: [id])
+  qcSamples GrnQcSample[]
+  rmaLines  ReturnMaterialAuthLine[]
+
+  @@index([tenantId])
+  @@index([grnId])
+  @@index([poLineId])
+}
+
+model GrnQcSample {
+  id                       String           @id
+  tenantId                 String           @map("tenant_id") @db.Uuid
+  grnLineId                String           @map("grn_line_id")
+  sampleType               QcSampleType     @default(AQL) @map("sample_type")
+  sampleSize               Int              @map("sample_size")
+  samplePlanRef            String?          @map("sample_plan_ref")
+  inspectedBy              String           @map("inspected_by")
+  inspectedAt              DateTime         @default(now()) @map("inspected_at") @db.Timestamptz(6)
+  parametersMeasured       Json             @map("parameters_measured")
+  parametersSpec           Json             @map("parameters_spec")
+  result                   QcSampleResult   @map("result")
+  defectsFound             String[]         @map("defects_found")
+  defectSeverity           QcDefectSeverity @default(NONE) @map("defect_severity")
+  certificateOfAnalysisS3  String?          @map("certificate_of_analysis_s3")
+  createdAt                DateTime         @default(now()) @db.Timestamptz(6)
+
+  grnLine GrnLine @relation(fields: [grnLineId], references: [id])
+
+  @@index([tenantId])
+  @@index([grnLineId])
+}
+
+model GrnAttachment {
+  id         String            @id
+  tenantId   String            @map("tenant_id") @db.Uuid
+  grnId      String            @map("grn_id")
+  s3Key      String            @map("s3_key")
+  docType    GrnAttachmentType @map("doc_type")
+  uploadedAt DateTime          @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  uploadedBy String            @map("uploaded_by")
+
+  grn GoodsReceiptNote @relation(fields: [grnId], references: [id])
+
+  @@index([tenantId])
+  @@index([grnId])
+}
+
+model ReturnMaterialAuth {
+  id                 String                @id
+  tenantId           String                @map("tenant_id") @db.Uuid
+  number             String
+  grnId              String                @map("grn_id")
+  poId               String                @map("po_id")
+  vendorId           String                @map("vendor_id")
+  reasonCode         RmaReasonCode         @map("reason_code")
+  reasonNotes        String?               @map("reason_notes")
+  totalReturnValue   Decimal               @default("0") @map("total_return_value") @db.Decimal(18, 4)
+  currency           String                @default("INR")
+  status             RmaStatus             @default(DRAFT)
+  returnFreightBorneBy ReturnFreightBorneBy @default(VENDOR) @map("return_freight_borne_by")
+  issuedAt           DateTime?             @map("issued_at") @db.Timestamptz(6)
+  pickedUpAt         DateTime?             @map("picked_up_at") @db.Timestamptz(6)
+  pickupScheduledAt  DateTime?             @map("pickup_scheduled_at") @db.Timestamptz(6)
+  creditNoteRef      String?               @map("credit_note_ref")
+  creditNoteAmount   Decimal?              @map("credit_note_amount") @db.Decimal(18, 4)
+  creditNoteS3Key    String?               @map("credit_note_s3_key")
+  vehicleOutNo       String?               @map("vehicle_out_no")
+  gatePassOutNo      String?               @map("gate_pass_out_no")
+  pdfS3Key           String?               @map("pdf_s3_key")
+  pdfGeneratedHash   String?               @map("pdf_generated_hash")
+  createdBy          String?               @map("created_by")
+  createdAt          DateTime              @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime              @default(now()) @updatedAt @db.Timestamptz(6)
+
+  tenant Tenant                   @relation(fields: [tenantId], references: [id])
+  grn    GoodsReceiptNote         @relation(fields: [grnId], references: [id])
+  vendor Vendor                   @relation(fields: [vendorId], references: [id])
+  lines  ReturnMaterialAuthLine[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([grnId])
+  @@index([vendorId])
+}
+
+model ReturnMaterialAuthLine {
+  id                 String  @id
+  tenantId           String  @map("tenant_id") @db.Uuid
+  rmaId              String  @map("rma_id")
+  grnLineId          String  @map("grn_line_id")
+  qtyReturned        Decimal @map("qty_returned") @db.Decimal(18, 4)
+  unitPrice          Decimal @default("0") @map("unit_price") @db.Decimal(18, 4)
+  lineTotal          Decimal @default("0") @map("line_total") @db.Decimal(18, 4)
+  returnReasonDetail String? @map("return_reason_detail")
+
+  rma     ReturnMaterialAuth @relation(fields: [rmaId], references: [id])
+  grnLine GrnLine            @relation(fields: [grnLineId], references: [id])
+
+  @@index([tenantId])
+  @@index([rmaId])
+  @@index([grnLineId])
+}
+
+// Slice 5 — stock ledger (NOT a WMS; see ADR-014). Movements only, no consumption.
+model StockLedger {
+  id                 String            @id
+  tenantId           String            @map("tenant_id") @db.Uuid
+  itemId             String?           @map("item_id")
+  itemDesc           String            @map("item_desc")
+  costCenterId       String?           @map("cost_center_id")
+  plantId            String?           @map("plant_id")
+  movementType       StockMovementType @map("movement_type")
+  sourceType         String            @map("source_type")
+  sourceId           String            @map("source_id")
+  qtyDelta           Decimal           @map("qty_delta") @db.Decimal(18, 4)
+  unitLandedCost     Decimal           @default("0") @map("unit_landed_cost") @db.Decimal(18, 4)
+  balanceQtyAfter    Decimal           @map("balance_qty_after") @db.Decimal(18, 4)
+  balanceValueAfter  Decimal           @map("balance_value_after") @db.Decimal(18, 4)
+  recordedAt         DateTime          @default(now()) @map("recorded_at") @db.Timestamptz(6)
+  recordedBy         String            @map("recorded_by")
+
+  tenant     Tenant      @relation(fields: [tenantId], references: [id])
+  item       Item?       @relation(fields: [itemId], references: [id])
+  plant      Plant?      @relation(fields: [plantId], references: [id])
+  costCenter CostCenter? @relation(fields: [costCenterId], references: [id])
+
+  @@index([tenantId])
+  @@index([tenantId, itemId, plantId])
+  @@index([tenantId, sourceType, sourceId])
+}
+
+// ─────────────────────────── Invoices ───────────────────────────
+
+model Invoice {
+  id                     String        @id
+  tenantId               String        @map("tenant_id") @db.Uuid
+  number                 String
+  vendorId               String        @map("vendor_id")
+  poId                   String?       @map("po_id")
+  vendorInvoiceRef       String        @map("vendor_invoice_ref")
+  invoiceDate            DateTime      @db.Timestamptz(6)
+  receivedAt            DateTime      @default(now()) @db.Timestamptz(6)
+  status                 InvoiceStatus @default(RECEIVED)
+  source                 InvoiceSource @default(MANUAL)
+  grossAmount            Decimal       @default("0") @db.Decimal(18, 4)
+  taxAmount              Decimal       @default("0") @db.Decimal(18, 4)
+  tdsAmount              Decimal       @default("0") @db.Decimal(18, 4)
+  netAmount              Decimal       @default("0") @db.Decimal(18, 4)
+  currency               String        @default("INR")
+  irn                    String?
+  ewaybillNo             String?
+  gstr2bStatus           Gstr2bStatus  @default(PENDING)
+  gstr2bMatchedAt        DateTime?     @db.Timestamptz(6)
+  ocrConfidence          Decimal?      @db.Decimal(5, 4)
+  ocrJobId               String?       @map("ocr_job_id")
+  msmeDueDate            DateTime?     @db.Timestamptz(6)
+  assignedToId           String?       @map("assigned_to_id")
+  holdReason             String?
+  paidAt                 DateTime?     @map("paid_at") @db.Timestamptz(6)
+  approvalMatrixSnapshot Json?         @map("approval_matrix_snapshot")
+  createdAt              DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt              DateTime      @updatedAt @db.Timestamptz(6)
+
+  tenant         Tenant              @relation(fields: [tenantId], references: [id])
+  vendor         Vendor              @relation(fields: [vendorId], references: [id])
+  po             PurchaseOrder?      @relation(fields: [poId], references: [id])
+  lines          InvoiceLine[]
+  exceptions     InvoiceException[]
+  attachments    InvoiceAttachment[]
+  comments       InvoiceComment[]
+  paymentItems   PaymentRunItem[]
+  paymentRecords PaymentRecord[]
+
+  @@index([tenantId, assignedToId])
+
+  @@unique([tenantId, number])
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt(sort: Desc)])
+  // Slice 11a — buyer inbox is the hottest query and sorts by receivedAt (aging).
+  // This makes it an ordered index scan (no in-memory Sort) as volume grows.
+  @@index([tenantId, receivedAt])
+  @@index([vendorId])
+  @@index([poId])
+}
+
+model InvoiceLine {
+  id        String  @id
+  tenantId  String  @map("tenant_id") @db.Uuid
+  invoiceId String  @map("invoice_id")
+  lineNo    Int
+  poLineId  String? @map("po_line_id")
+  itemDesc  String
+  uom       String
+  qty       Decimal @db.Decimal(18, 4)
+  unitPrice Decimal @db.Decimal(18, 4)
+  taxRate   Decimal @default("0") @db.Decimal(6, 4)
+  lineTotal Decimal @db.Decimal(18, 4)
+
+  invoice Invoice            @relation(fields: [invoiceId], references: [id])
+  poLine  PurchaseOrderLine? @relation(fields: [poLineId], references: [id])
+
+  @@index([tenantId])
+  @@index([invoiceId])
+}
+
+model InvoiceException {
+  id               String            @id
+  tenantId         String            @map("tenant_id") @db.Uuid
+  invoiceId        String            @map("invoice_id")
+  exceptionType    ExceptionType     @map("exception_type")
+  severity         ExceptionSeverity @default(MEDIUM)
+  poLineId         String?           @map("po_line_id")
+  invoiceLineId    String?           @map("invoice_line_id")
+  details          Json
+  raisedAt         DateTime          @default(now()) @db.Timestamptz(6)
+  raisedBy         String            @map("raised_by")
+  resolvedAt       DateTime?         @db.Timestamptz(6)
+  resolvedBy       String?           @map("resolved_by")
+  resolutionAction String?
+  resolutionNotes  String?
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+
+  @@index([tenantId])
+  @@index([invoiceId])
+  @@index([tenantId, exceptionType])
+}
+
+model InvoiceComment {
+  id        String   @id
+  tenantId  String   @map("tenant_id") @db.Uuid
+  invoiceId String   @map("invoice_id")
+  authorId  String   @map("author_id")
+  body      String
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+
+  @@index([tenantId])
+  @@index([invoiceId])
+}
+
+enum InvoiceAttachmentType {
+  INVOICE_PDF
+  EMAIL_BODY // Slice 10a — raw inbound email body kept for audit reference
+  SUPPORTING
+}
+
+model InvoiceAttachment {
+  id         String                @id
+  tenantId   String                @map("tenant_id") @db.Uuid
+  invoiceId  String                @map("invoice_id")
+  s3Key      String
+  mimeType   String
+  sizeBytes  Int
+  docType    InvoiceAttachmentType @default(INVOICE_PDF) @map("doc_type")
+  uploadedAt DateTime              @default(now()) @db.Timestamptz(6)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+
+  @@index([tenantId])
+  @@index([invoiceId])
+}
+
+// ─────────────────────────── Payments ───────────────────────────
+
+// A tenant's configured bank account + the bank-file format it exports (Slice 3).
+model BankAccount {
+  id             String   @id
+  tenantId       String   @map("tenant_id") @db.Uuid
+  bankName       String
+  accountNoLast4 String   @map("account_no_last4")
+  ifsc           String
+  holderName     String
+  formatKey      String   @map("format_key")
+  isActive       Boolean  @default(true)
+  dailyLimit     Decimal? @map("daily_limit") @db.Decimal(18, 4)
+  uploadConfig   Json?    @map("upload_config")
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id])
+  paymentRuns PaymentRun[]
+
+  @@index([tenantId])
+}
+
+model PaymentRun {
+  id             String           @id
+  tenantId       String           @map("tenant_id") @db.Uuid
+  number         String
+  name           String?
+  cycleDate      DateTime         @db.Timestamptz(6)
+  status         PaymentRunStatus @default(DRAFT)
+  grossAmount    Decimal          @default("0") @db.Decimal(18, 4)
+  tdsTotal       Decimal          @default("0") @db.Decimal(18, 4)
+  netAmount      Decimal          @default("0") @db.Decimal(18, 4)
+  currency       String           @default("INR")
+  bankAccountRef String?
+  bankAccountId  String?          @map("bank_account_id")
+  bankFileS3Key  String?          @map("bank_file_s3_key")
+  bankFileHash   String?          @map("bank_file_hash")
+  previewHash    String?          @map("preview_hash")
+  composedBy     String           @map("composed_by")
+  composedAt     DateTime         @default(now()) @db.Timestamptz(6)
+  approvals      Json?
+  submittedAt    DateTime?        @db.Timestamptz(6)
+
+  tenant         Tenant           @relation(fields: [tenantId], references: [id])
+  bankAccount    BankAccount?     @relation(fields: [bankAccountId], references: [id])
+  items          PaymentRunItem[]
+  paymentRecords PaymentRecord[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId])
+  @@index([tenantId, status])
+}
+
+model PaymentRunItem {
+  id           String  @id
+  tenantId     String  @map("tenant_id") @db.Uuid
+  paymentRunId String  @map("payment_run_id")
+  invoiceId    String  @map("invoice_id")
+  gross        Decimal @db.Decimal(18, 4)
+  tds          Decimal @default("0") @db.Decimal(18, 4)
+  net          Decimal @db.Decimal(18, 4)
+  orderInBatch Int
+  // Slice 10b — per-item bank submission outcome.
+  bankStatus       PaymentItemBankStatus @default(PENDING) @map("bank_status")
+  bankErrorMessage String?               @map("bank_error_message")
+  bankUtr          String?               @map("bank_utr")
+
+  paymentRun PaymentRun @relation(fields: [paymentRunId], references: [id])
+  invoice    Invoice    @relation(fields: [invoiceId], references: [id])
+
+  @@unique([paymentRunId, invoiceId])
+  @@index([tenantId])
+  @@index([paymentRunId])
+  @@index([invoiceId])
+}
+
+// Immutable payment posting per invoice (Master Context §3 rule #10). UTR is a
+// stub (`is_stub = true`) until the real bank integration lands in Slice 10.
+model PaymentRecord {
+  id           String   @id
+  tenantId     String   @map("tenant_id") @db.Uuid
+  invoiceId    String   @map("invoice_id")
+  paymentRunId String   @map("payment_run_id")
+  gross        Decimal  @db.Decimal(18, 4)
+  tds          Decimal  @default("0") @db.Decimal(18, 4)
+  net          Decimal  @db.Decimal(18, 4)
+  utr          String
+  isStub       Boolean  @default(true) @map("is_stub")
+  paidAt       DateTime @map("paid_at") @db.Timestamptz(6)
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  invoice    Invoice    @relation(fields: [invoiceId], references: [id])
+  paymentRun PaymentRun @relation(fields: [paymentRunId], references: [id])
+
+  @@index([tenantId])
+  @@index([invoiceId])
+  @@index([paymentRunId])
+}
+
+// ─────────────────────────── Approvals ───────────────────────────
+
+model ApprovalMatrix {
+  id                String       @id
+  tenantId          String       @map("tenant_id") @db.Uuid
+  documentType      DocumentType
+  name              String
+  priority          Int          @default(0)
+  isActive          Boolean      @default(true)
+  version           Int          @default(1)
+  previousVersionId String?      @map("previous_version_id")
+  conditions        Json
+  steps             Json
+  createdAt         DateTime     @default(now()) @db.Timestamptz(6)
+  updatedBy         String?      @map("updated_by")
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id])
+  approvals Approval[]
+
+  @@index([tenantId])
+  @@index([tenantId, documentType, isActive])
+  @@index([tenantId, name, documentType])
+}
+
+model Approval {
+  id               String           @id
+  tenantId         String           @map("tenant_id") @db.Uuid
+  documentType     DocumentType
+  documentId       String           @map("document_id")
+  stepNo           Int
+  stepName         String?          @map("step_name")
+  scope            String?
+  parallelGroup    String?          @map("parallel_group")
+  approverId       String           @map("approver_id")
+  decision         ApprovalDecision @default(PENDING)
+  decidedAt        DateTime?        @db.Timestamptz(6)
+  comment          String?
+  slaHours         Int              @default(24)
+  slaDueAt         DateTime?        @map("sla_due_at") @db.Timestamptz(6)
+  escalatedAt      DateTime?        @map("escalated_at") @db.Timestamptz(6)
+  isEscalation     Boolean          @default(false) @map("is_escalation")
+  delegatedFromId  String?          @map("delegated_from_id")
+  matrixSnapshotId String           @map("matrix_snapshot_id")
+  createdAt        DateTime         @default(now()) @db.Timestamptz(6)
+
+  tenant Tenant         @relation(fields: [tenantId], references: [id])
+  matrix ApprovalMatrix @relation(fields: [matrixSnapshotId], references: [id])
+
+  @@index([tenantId])
+  @@index([tenantId, documentType, documentId])
+  @@index([tenantId, approverId, decision])
+  @@index([approverId])
+}
+
+// Standing delegation of approval authority (Slice 2). ApproverResolver consults
+// active delegations so a delegate is routed instead of the delegator.
+model Delegation {
+  id             String         @id
+  tenantId       String         @map("tenant_id") @db.Uuid
+  userId         String         @map("user_id")
+  delegateUserId String         @map("delegate_user_id")
+  scope          String         @default("ALL")
+  documentTypes  DocumentType[] @map("document_types")
+  reason         String
+  fromDate       DateTime       @map("from_date") @db.Timestamptz(6)
+  toDate         DateTime       @map("to_date") @db.Timestamptz(6)
+  isActive       Boolean        @default(true) @map("is_active")
+  createdBy      String         @map("created_by")
+  createdAt      DateTime       @default(now()) @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@index([tenantId, userId, isActive])
+  @@index([delegateUserId])
+}
+
+// In-app notifications (Slice 2 writes + renders; email delivery in Slice 10).
+model Notification {
+  id         String    @id
+  tenantId   String    @map("tenant_id") @db.Uuid
+  userId     String    @map("user_id")
+  type       String
+  title      String
+  body       String?
+  entityType String?   @map("entity_type")
+  entityId   String?   @map("entity_id")
+  href       String?
+  readAt     DateTime? @map("read_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@index([tenantId, userId, readAt])
+}
+
+// ─────────────────────────── Audit & events ───────────────────────────
+
+// Append-only. UPDATE/DELETE revoked; BEFORE INSERT trigger chains the hash.
+model AuditLog {
+  id           String    @id
+  tenantId     String    @map("tenant_id") @db.Uuid
+  timestamp    DateTime  @default(now()) @db.Timestamptz(6)
+  actorId      String?   @map("actor_id")
+  actorType    ActorType @default(USER)
+  action       String
+  entityType   String
+  entityId     String
+  before       Json?
+  after        Json?
+  ipAddress    String?
+  userAgent    String?
+  hashCurrent  String    @map("hash_current")
+  hashPrevious String?   @map("hash_previous")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@index([tenantId, timestamp(sort: Desc)])
+  @@index([tenantId, entityType, entityId])
+}
+
+model DomainEvent {
+  id          String    @id
+  tenantId    String    @map("tenant_id") @db.Uuid
+  eventType   String
+  payload     Json
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  processedAt DateTime? @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@index([tenantId, processedAt])
+}
+
+// ─────────────────────────── Sourcing / RFQ (Slice 6) ───────────────────────────
+
+model Rfq {
+  id                    String    @id
+  tenantId              String    @map("tenant_id") @db.Uuid
+  number                String
+  title                 String
+  requisitionId         String?   @map("requisition_id")
+  category              String
+  subcategory           String?
+  rfqType               RfqType   @map("rfq_type")
+  status                RfqStatus @default(DRAFT)
+  currency              String    @default("INR")
+  incotermDefault       String    @map("incoterm_default")
+  deliveryLocation      Json      @map("delivery_location")
+  paymentTermsDefault   String    @map("payment_terms_default")
+  estimatedValue        Decimal   @default("0") @map("estimated_value") @db.Decimal(18, 4)
+  budgetRangeMin        Decimal?  @map("budget_range_min") @db.Decimal(18, 4)
+  budgetRangeMax        Decimal?  @map("budget_range_max") @db.Decimal(18, 4)
+  evaluationCriteria    Json      @map("evaluation_criteria")
+  requiredDocuments     Json      @map("required_documents")
+  allowPartialAward     Boolean   @default(false) @map("allow_partial_award")
+  allowSplitAward       Boolean   @default(true) @map("allow_split_award")
+  maxAwardVendors       Int       @default(2) @map("max_award_vendors")
+  blindEvaluation       Boolean   @default(false) @map("blind_evaluation")
+  publishedAt           DateTime? @map("published_at") @db.Timestamptz(6)
+  publishBy             DateTime? @map("publish_by") @db.Timestamptz(6)
+  qaDeadline            DateTime? @map("qa_deadline") @db.Timestamptz(6)
+  bidDeadline           DateTime? @map("bid_deadline") @db.Timestamptz(6)
+  techOpenAt            DateTime? @map("tech_open_at") @db.Timestamptz(6)
+  commercialOpenAt      DateTime? @map("commercial_open_at") @db.Timestamptz(6)
+  awardDeadline         DateTime? @map("award_deadline") @db.Timestamptz(6)
+  allowBidRevision      Boolean   @default(false) @map("allow_bid_revision")
+  revisionCountMax      Int       @default(0) @map("revision_count_max")
+  corrigendaCount       Int       @default(0) @map("corrigenda_count")
+  isReverseAuction      Boolean   @default(false) @map("is_reverse_auction")
+  reverseAuctionConfig  Json?     @map("reverse_auction_config")
+  spotBuyException      Boolean   @default(false) @map("spot_buy_exception")
+  cancelReason          String?   @map("cancel_reason")
+  createdBy             String    @map("created_by")
+  createdAt             DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime  @updatedAt @db.Timestamptz(6)
+
+  tenant      Tenant           @relation(fields: [tenantId], references: [id])
+  lines       RfqLine[]
+  documents   RfqDocument[]
+  invitations RfqInvitation[]
+  questions   RfqQuestion[]
+  corrigenda  RfqCorrigendum[]
+  quotes      Quote[]
+  reverseAuctionRounds ReverseAuctionRound[]
+  awards      Award[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([requisitionId])
+}
+
+model RfqLine {
+  id                   String    @id
+  tenantId             String    @map("tenant_id") @db.Uuid
+  rfqId                String    @map("rfq_id")
+  lineNo               Int       @map("line_no")
+  itemId               String?   @map("item_id")
+  itemDesc             String    @map("item_desc")
+  uom                  String
+  qtyRequired          Decimal   @map("qty_required") @db.Decimal(18, 4)
+  qtyMinSplit          Decimal   @default("0") @map("qty_min_split") @db.Decimal(18, 4)
+  hsnCode              String?   @map("hsn_code")
+  taxRate              Decimal   @default("0") @map("tax_rate") @db.Decimal(6, 4)
+  specDetails          Json?     @map("spec_details")
+  deliveryDateRequired DateTime? @map("delivery_date_required") @db.Timestamptz(6)
+  unitCostEstimate     Decimal?  @map("unit_cost_estimate") @db.Decimal(18, 4)
+  unitWeightKg         Decimal?  @map("unit_weight_kg") @db.Decimal(18, 4)
+
+  rfq        Rfq         @relation(fields: [rfqId], references: [id])
+  quoteLines QuoteLine[]
+
+  @@index([tenantId])
+  @@index([rfqId])
+}
+
+model RfqDocument {
+  id         String          @id
+  tenantId   String          @map("tenant_id") @db.Uuid
+  rfqId      String          @map("rfq_id")
+  docType    RfqDocumentKind @map("doc_type")
+  s3Key      String          @map("s3_key")
+  filename   String
+  sizeBytes  Int             @map("size_bytes")
+  uploadedAt DateTime        @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+
+  rfq Rfq @relation(fields: [rfqId], references: [id])
+
+  @@index([tenantId])
+  @@index([rfqId])
+}
+
+model RfqInvitation {
+  id               String              @id
+  tenantId         String              @map("tenant_id") @db.Uuid
+  rfqId            String              @map("rfq_id")
+  vendorId         String              @map("vendor_id")
+  invitedAt        DateTime            @default(now()) @map("invited_at") @db.Timestamptz(6)
+  invitedBy        String              @map("invited_by")
+  invitationSource RfqInvitationSource @map("invitation_source")
+  status           RfqInvitationStatus @default(INVITED)
+  acknowledgedAt   DateTime?           @map("acknowledged_at") @db.Timestamptz(6)
+  declineReason    String?             @map("decline_reason")
+  canViewQa        Boolean             @default(true) @map("can_view_qa")
+  canBid           Boolean             @default(true) @map("can_bid")
+  isPreliminary    Boolean             @default(false) @map("is_preliminary")
+  watermarkSeed    String              @map("watermark_seed")
+
+  rfq       Rfq           @relation(fields: [rfqId], references: [id])
+  vendor    Vendor        @relation(fields: [vendorId], references: [id])
+  questions RfqQuestion[]
+  quotes    Quote[]
+
+  @@unique([rfqId, vendorId])
+  @@index([tenantId])
+  @@index([rfqId])
+  @@index([vendorId])
+}
+
+model RfqQuestion {
+  id                String    @id
+  tenantId          String    @map("tenant_id") @db.Uuid
+  rfqId             String    @map("rfq_id")
+  invitationId      String    @map("invitation_id")
+  questionText      String    @map("question_text")
+  askedAt           DateTime  @default(now()) @map("asked_at") @db.Timestamptz(6)
+  askedBy           String    @map("asked_by")
+  isPublic          Boolean   @default(true) @map("is_public")
+  answerText        String?   @map("answer_text")
+  answeredAt        DateTime? @map("answered_at") @db.Timestamptz(6)
+  answeredBy        String?   @map("answered_by")
+  corrigendumIssued String?   @map("corrigendum_issued")
+
+  rfq        Rfq           @relation(fields: [rfqId], references: [id])
+  invitation RfqInvitation @relation(fields: [invitationId], references: [id])
+
+  @@index([tenantId])
+  @@index([rfqId])
+  @@index([invitationId])
+}
+
+model RfqCorrigendum {
+  id             String               @id
+  tenantId       String               @map("tenant_id") @db.Uuid
+  rfqId          String               @map("rfq_id")
+  number         Int
+  title          String
+  description    String
+  impact         RfqCorrigendumImpact
+  issuedAt       DateTime             @default(now()) @map("issued_at") @db.Timestamptz(6)
+  issuedBy       String               @map("issued_by")
+  newBidDeadline DateTime?            @map("new_bid_deadline") @db.Timestamptz(6)
+
+  rfq Rfq @relation(fields: [rfqId], references: [id])
+
+  @@index([tenantId])
+  @@index([rfqId])
+}
+
+model Quote {
+  id                      String            @id
+  tenantId                String            @map("tenant_id") @db.Uuid
+  rfqId                   String            @map("rfq_id")
+  invitationId            String            @map("invitation_id")
+  vendorId                String            @map("vendor_id")
+  quoteNo                 String?           @map("quote_no")
+  envelopeType            QuoteEnvelopeType @map("envelope_type")
+  status                  QuoteStatus       @default(DRAFT)
+  currency                String            @default("INR")
+  incoterm                String
+  deliveryLocationOffered String?           @map("delivery_location_offered")
+  validityDays            Int?              @map("validity_days")
+  validityUntil           DateTime?         @map("validity_until") @db.Timestamptz(6)
+  paymentTermsOffered     String?           @map("payment_terms_offered")
+  totalCommercialValue    Decimal?          @map("total_commercial_value") @db.Decimal(18, 4)
+  submissionHash          String?           @map("submission_hash")
+  submittedAt             DateTime?         @map("submitted_at") @db.Timestamptz(6)
+  openedAt                DateTime?         @map("opened_at") @db.Timestamptz(6)
+  openedBy                String?           @map("opened_by")
+  withdrawnAt             DateTime?         @map("withdrawn_at") @db.Timestamptz(6)
+  withdrawalReason        String?           @map("withdrawal_reason")
+  deviationSummary        Json?             @map("deviation_summary")
+  attachmentManifest      Json?             @map("attachment_manifest")
+  weightedScore           Decimal?          @map("weighted_score") @db.Decimal(8, 2)
+  techQualifiedAt         DateTime?         @map("tech_qualified_at") @db.Timestamptz(6)
+  techQualifyNotes        String?           @map("tech_qualify_notes")
+  revisionNo              Int               @default(0) @map("revision_no")
+  createdAt               DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt               DateTime          @updatedAt @db.Timestamptz(6)
+
+  tenant      Tenant             @relation(fields: [tenantId], references: [id])
+  rfq         Rfq                @relation(fields: [rfqId], references: [id])
+  invitation  RfqInvitation      @relation(fields: [invitationId], references: [id])
+  vendor      Vendor             @relation(fields: [vendorId], references: [id])
+  lines       QuoteLine[]
+  attachments QuoteAttachment[]
+  evaluations QuoteEvaluation[]
+  reverseAuctionBids ReverseAuctionBid[]
+  openLogs    QuoteOpenLog[]
+  awardAllocations AwardAllocation[]
+
+  @@index([tenantId])
+  @@index([rfqId])
+  @@index([invitationId])
+  @@index([vendorId])
+  @@index([rfqId, status])
+}
+
+model QuoteLine {
+  id                 String         @id
+  tenantId           String         @map("tenant_id") @db.Uuid
+  quoteId            String         @map("quote_id")
+  rfqLineId          String         @map("rfq_line_id")
+  qtyQuoted          Decimal        @map("qty_quoted") @db.Decimal(18, 4)
+  unitPriceNative    Decimal        @map("unit_price_native") @db.Decimal(18, 4)
+  unitPriceInrLanded Decimal?       @map("unit_price_inr_landed") @db.Decimal(18, 4)
+  discountPct        Decimal        @default("0") @map("discount_pct") @db.Decimal(6, 4)
+  taxRate            Decimal        @default("0") @map("tax_rate") @db.Decimal(6, 4)
+  lineFreightNative  Decimal?       @map("line_freight_native") @db.Decimal(18, 4)
+  lineCustomsNative  Decimal?       @map("line_customs_native") @db.Decimal(18, 4)
+  lineTotalNative    Decimal        @default("0") @map("line_total_native") @db.Decimal(18, 4)
+  deliveryLeadDays   Int            @map("delivery_lead_days")
+  specCompliance     SpecCompliance @default(FULL) @map("spec_compliance")
+  deviationNotes     String?        @map("deviation_notes")
+  noQuoteReason      String?        @map("no_quote_reason")
+  landedBreakdown    Json?          @map("landed_breakdown")
+
+  quote   Quote   @relation(fields: [quoteId], references: [id])
+  rfqLine RfqLine @relation(fields: [rfqLineId], references: [id])
+
+  @@index([tenantId])
+  @@index([quoteId])
+  @@index([rfqLineId])
+}
+
+model QuoteAttachment {
+  id              String              @id
+  tenantId        String              @map("tenant_id") @db.Uuid
+  quoteId         String              @map("quote_id")
+  docType         QuoteAttachmentType @map("doc_type")
+  s3Key           String              @map("s3_key")
+  filename        String
+  sizeBytes       Int                 @map("size_bytes")
+  mimeType        String              @map("mime_type")
+  fileHash        String              @map("file_hash")
+  envelope        QuoteEnvelope
+  watermarkApplied Boolean            @default(false) @map("watermark_applied")
+  uploadedAt      DateTime            @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+
+  quote Quote @relation(fields: [quoteId], references: [id])
+
+  @@index([tenantId])
+  @@index([quoteId])
+}
+
+model QuoteEvaluation {
+  id            String   @id
+  tenantId      String   @map("tenant_id") @db.Uuid
+  quoteId       String   @map("quote_id")
+  evaluatorId   String   @map("evaluator_id")
+  criterion     String
+  weight        Int
+  rawScore      Decimal  @map("raw_score") @db.Decimal(6, 2)
+  weightedScore Decimal  @map("weighted_score") @db.Decimal(8, 2)
+  notes         String?
+  evaluatedAt   DateTime @default(now()) @map("evaluated_at") @db.Timestamptz(6)
+
+  quote Quote @relation(fields: [quoteId], references: [id])
+
+  @@unique([quoteId, criterion])
+  @@index([tenantId])
+  @@index([quoteId])
+}
+
+model ReverseAuctionRound {
+  id               String                    @id
+  tenantId         String                    @map("tenant_id") @db.Uuid
+  rfqId            String                    @map("rfq_id")
+  roundNo          Int                       @map("round_no")
+  startsAt         DateTime                  @map("starts_at") @db.Timestamptz(6)
+  endsAt           DateTime                  @map("ends_at") @db.Timestamptz(6)
+  startingPrice    Decimal                   @map("starting_price") @db.Decimal(18, 4)
+  decrementMin     Decimal                   @map("decrement_min") @db.Decimal(18, 4)
+  decrementMax     Decimal?                  @map("decrement_max") @db.Decimal(18, 4)
+  extensionSeconds Int                       @default(120) @map("extension_seconds")
+  currentLeaderId  String?                   @map("current_leader_id")
+  status           ReverseAuctionRoundStatus @default(SCHEDULED)
+  createdBy        String                    @map("created_by")
+  createdAt        DateTime                  @default(now()) @db.Timestamptz(6)
+
+  rfq  Rfq                 @relation(fields: [rfqId], references: [id])
+  bids ReverseAuctionBid[]
+
+  @@index([tenantId])
+  @@index([rfqId])
+}
+
+model ReverseAuctionBid {
+  id       String   @id
+  tenantId String   @map("tenant_id") @db.Uuid
+  roundId  String   @map("round_id")
+  quoteId  String   @map("quote_id")
+  vendorId String   @map("vendor_id")
+  bidPrice Decimal  @map("bid_price") @db.Decimal(18, 4)
+  bidAt    DateTime @default(now()) @map("bid_at") @db.Timestamptz(6)
+  isValid  Boolean  @default(true) @map("is_valid")
+
+  round ReverseAuctionRound @relation(fields: [roundId], references: [id])
+  quote Quote               @relation(fields: [quoteId], references: [id])
+
+  @@index([tenantId])
+  @@index([roundId])
+  @@index([quoteId])
+}
+
+model Award {
+  id                    String      @id
+  tenantId              String      @map("tenant_id") @db.Uuid
+  rfqId                 String      @map("rfq_id")
+  recommendationBy      String      @map("recommendation_by")
+  recommendationAt      DateTime    @default(now()) @map("recommendation_at") @db.Timestamptz(6)
+  recommendationNotes   String?     @map("recommendation_notes")
+  varianceFromL1Reason  String?     @map("variance_from_l1_reason")
+  totalValue            Decimal     @default("0") @map("total_value") @db.Decimal(18, 4)
+  approvedAt            DateTime?   @map("approved_at") @db.Timestamptz(6)
+  approvedBy            String?     @map("approved_by")
+  status                AwardStatus @default(RECOMMENDED)
+  approvalMatrixSnapshot Json?      @map("approval_matrix_snapshot")
+  justificationS3Key    String?     @map("justification_s3_key")
+  justificationHash     String?     @map("justification_hash")
+  createdAt             DateTime    @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime    @updatedAt @db.Timestamptz(6)
+
+  tenant      Tenant            @relation(fields: [tenantId], references: [id])
+  rfq         Rfq               @relation(fields: [rfqId], references: [id])
+  allocations AwardAllocation[]
+
+  @@index([tenantId])
+  @@index([rfqId])
+  @@index([tenantId, status])
+}
+
+model AwardAllocation {
+  id           String  @id
+  tenantId     String  @map("tenant_id") @db.Uuid
+  awardId      String  @map("award_id")
+  quoteId      String  @map("quote_id")
+  vendorId     String  @map("vendor_id")
+  rfqLineId    String  @map("rfq_line_id")
+  qtyAllocated Decimal @map("qty_allocated") @db.Decimal(18, 4)
+  unitPrice    Decimal @map("unit_price") @db.Decimal(18, 4)
+  totalValue   Decimal @map("total_value") @db.Decimal(18, 4)
+  poId         String? @map("po_id")
+
+  award  Award  @relation(fields: [awardId], references: [id])
+  quote  Quote  @relation(fields: [quoteId], references: [id])
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@index([tenantId])
+  @@index([awardId])
+  @@index([quoteId])
+  @@index([vendorId])
+}
+
+model QuoteOpenLog {
+  id           String        @id
+  tenantId     String        @map("tenant_id") @db.Uuid
+  quoteId      String        @map("quote_id")
+  envelope     QuoteEnvelope
+  openedAt     DateTime      @default(now()) @map("opened_at") @db.Timestamptz(6)
+  participants Json
+  hashBefore   String?       @map("hash_before")
+  hashAfter    String?       @map("hash_after")
+  reasonIfLate String?       @map("reason_if_late")
+
+  quote Quote @relation(fields: [quoteId], references: [id])
+
+  @@index([tenantId])
+  @@index([quoteId])
+}
+
+// ─────────────────────────── Vendor lifecycle enums (Slice 7) ───────────────────────────
+
+enum VendorLifecycleStatus {
+  INVITED
+  SELF_REGISTERED
+  IN_ONBOARDING
+  UNDER_REVIEW
+  ACTIVE
+  SUSPENDED
+  BLACKLISTED
+  ARCHIVED
+}
+
+enum LegalEntityType {
+  PROPRIETORSHIP
+  PARTNERSHIP
+  LLP
+  PVT_LTD
+  PUBLIC_LTD
+  HUF
+  TRUST
+  SOCIETY
+  INDIVIDUAL
+}
+
+enum OnboardingInvitationSource {
+  BUYER_INVITE_RFQ
+  BUYER_INVITE_SPOT
+  SELF_REGISTRATION
+}
+
+enum OnboardingReviewDecision {
+  APPROVED
+  REJECTED
+  RETURNED_FOR_INFO
+}
+
+enum DocVerificationStatus {
+  PENDING
+  AUTO_VERIFIED
+  MANUALLY_VERIFIED
+  FAILED
+  EXPIRED
+}
+
+enum ScreeningType {
+  GSTIN_STATUS
+  PAN_STATUS
+  UDYAM_STATUS
+  MCA_DIRECTORS
+  RBI_DEFAULTER
+  SANCTIONS_OFAC
+  SANCTIONS_EU
+  SANCTIONS_UK
+  ADVERSE_MEDIA
+  CREDIT_BUREAU
+}
+
+enum ScreeningStatus {
+  PENDING
+  CLEAR
+  FLAGGED
+  ERROR
+  EXPIRED
+}
+
+enum ScreeningFlagSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ScreeningReviewDecision {
+  CLEAR
+  ACCEPT_RISK
+  REJECT_VENDOR
+}
+
+enum SanctionsScreeningStatus {
+  NOT_LISTED
+  POTENTIAL_MATCH
+  CONFIRMED_MATCH
+  CLEARED
+}
+
+enum OwnershipType {
+  DIRECT
+  INDIRECT
+  CONTROL_VIA_AGREEMENT
+}
+
+enum SuspensionType {
+  TEMPORARY
+  INDEFINITE
+  BLACKLIST
+}
+
+enum SuspensionReasonCode {
+  DOC_EXPIRED
+  QUALITY_ISSUE
+  PAYMENT_DISPUTE
+  COMPLIANCE_BREACH
+  SANCTIONS_HIT
+  REQUESTED_BY_VENDOR
+  OTHER
+}
+
+enum ChangeRequestType {
+  BANK_CHANGE
+  GSTIN_CHANGE
+  OWNERSHIP_CHANGE
+  CATEGORY_ADD
+  CONTACT_UPDATE
+}
+
+enum ChangeRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  AUTO_APPROVED
+}
+
+enum ScorecardPeriod {
+  ROLLING_90D
+  ROLLING_365D
+  ALL_TIME
+}
+
+// ─────────────────────────── Vendor lifecycle models (Slice 7) ───────────────────────────
+
+model VendorOnboarding {
+  id                    String                     @id
+  tenantId              String                     @map("tenant_id") @db.Uuid
+  vendorId              String                     @map("vendor_id")
+  invitationSource      OnboardingInvitationSource @map("invitation_source")
+  invitationRef         String?                    @map("invitation_ref")
+  invitedBy             String?                    @map("invited_by")
+  selfRegistrationToken String?                    @map("self_registration_token")
+  tokenExpiresAt        DateTime?                  @map("token_expires_at") @db.Timestamptz(6)
+  emailVerifiedAt       DateTime?                  @map("email_verified_at") @db.Timestamptz(6)
+  wizardState           Json                       @map("wizard_state")
+  categoryConfigKey     String                     @map("category_config_key")
+  reviewDecision        OnboardingReviewDecision?  @map("review_decision")
+  reviewedBy            String?                    @map("reviewed_by")
+  reviewNotes           String?                    @map("review_notes")
+  reviewStartedAt       DateTime?                  @map("review_started_at") @db.Timestamptz(6)
+  returnForInfoItems    Json?                      @map("return_for_info_items")
+  startedAt             DateTime                   @default(now()) @map("started_at") @db.Timestamptz(6)
+  submittedAt           DateTime?                  @map("submitted_at") @db.Timestamptz(6)
+  decisionAt            DateTime?                  @map("decision_at") @db.Timestamptz(6)
+  slaTargetHours        Int                        @map("sla_target_hours")
+  slaBreachAt           DateTime?                  @map("sla_breach_at") @db.Timestamptz(6)
+  approvalMatrixSnapshot Json?                     @map("approval_matrix_snapshot")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@index([tenantId])
+  @@index([tenantId, vendorId])
+  @@index([selfRegistrationToken])
+}
+
+model VendorBeneficialOwner {
+  id                     String                   @id
+  tenantId               String                   @map("tenant_id") @db.Uuid
+  vendorId               String                   @map("vendor_id")
+  ownerName              String                   @map("owner_name")
+  ownerPan               String                   @map("owner_pan")
+  ownerDob               DateTime?                @map("owner_dob") @db.Timestamptz(6)
+  ownershipPct           Decimal                  @map("ownership_pct") @db.Decimal(6, 2)
+  ownershipType          OwnershipType            @default(DIRECT) @map("ownership_type")
+  countryOfResidence     String                   @default("IN") @map("country_of_residence")
+  isPep                  Boolean                  @default(false) @map("is_pep")
+  pepDetails             String?                  @map("pep_details")
+  sanctionsScreeningStatus SanctionsScreeningStatus @default(NOT_LISTED) @map("sanctions_screening_status")
+  sanctionsScreeningAt   DateTime?                @map("sanctions_screening_at") @db.Timestamptz(6)
+  declaredAt             DateTime                 @default(now()) @map("declared_at") @db.Timestamptz(6)
+  declaredBy             String                   @map("declared_by")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@index([tenantId])
+  @@index([vendorId])
+}
+
+model VendorScreening {
+  id                String                @id
+  tenantId          String                @map("tenant_id") @db.Uuid
+  vendorId          String                @map("vendor_id")
+  screeningType     ScreeningType         @map("screening_type")
+  screeningProvider String                @map("screening_provider")
+  requestedAt       DateTime              @default(now()) @map("requested_at") @db.Timestamptz(6)
+  completedAt       DateTime?             @map("completed_at") @db.Timestamptz(6)
+  status            ScreeningStatus       @default(PENDING)
+  flagSeverity      ScreeningFlagSeverity? @map("flag_severity")
+  providerResponse  Json?                 @map("provider_response")
+  findings          Json?
+  reviewedBy        String?               @map("reviewed_by")
+  reviewDecision    ScreeningReviewDecision? @map("review_decision")
+  reviewNotes       String?               @map("review_notes")
+  nextScreeningDueAt DateTime?            @map("next_screening_due_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@index([tenantId])
+  @@index([vendorId])
+  @@index([tenantId, vendorId, screeningType])
+}
+
+model VendorCategoryConfig {
+  id                     String  @id
+  tenantId               String  @map("tenant_id") @db.Uuid
+  categoryKey            String  @map("category_key")
+  displayName            String  @map("display_name")
+  description            String?
+  requiredDocuments      Json    @map("required_documents")
+  optionalDocuments      Json    @map("optional_documents")
+  requiredScreenings     Json    @map("required_screenings")
+  requiredCertifications Json    @map("required_certifications")
+  approvalMatrixName     String  @map("approval_matrix_name")
+  slaHours               Int     @map("sla_hours")
+  isActive               Boolean @default(true) @map("is_active")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, categoryKey])
+  @@index([tenantId])
+}
+
+model VendorScorecard {
+  id               String          @id
+  tenantId         String          @map("tenant_id") @db.Uuid
+  vendorId         String          @map("vendor_id")
+  categoryKey      String?         @map("category_key")
+  period           ScorecardPeriod
+  metrics          Json
+  score            Decimal?        @db.Decimal(6, 2)
+  grade            String
+  transactionCount Int             @default(0) @map("transaction_count")
+  spendAmount      Decimal         @default("0") @map("spend_amount") @db.Decimal(18, 4)
+  computedAt       DateTime        @default(now()) @map("computed_at") @db.Timestamptz(6)
+  computedBy       String?         @map("computed_by")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@unique([vendorId, categoryKey, period])
+  @@index([tenantId])
+  @@index([vendorId])
+}
+
+model VendorSuspension {
+  id             String               @id
+  tenantId       String               @map("tenant_id") @db.Uuid
+  vendorId       String               @map("vendor_id")
+  suspensionType SuspensionType       @map("suspension_type")
+  reasonCode     SuspensionReasonCode @map("reason_code")
+  reasonNotes    String               @map("reason_notes")
+  imposedBy      String               @map("imposed_by")
+  imposedAt      DateTime             @default(now()) @map("imposed_at") @db.Timestamptz(6)
+  cosignedBy     String?              @map("cosigned_by")
+  effectiveFrom  DateTime             @default(now()) @map("effective_from") @db.Timestamptz(6)
+  effectiveUntil DateTime?            @map("effective_until") @db.Timestamptz(6)
+  liftConditions String?              @map("lift_conditions")
+  liftedBy       String?              @map("lifted_by")
+  liftedAt       DateTime?            @map("lifted_at") @db.Timestamptz(6)
+  liftReason     String?              @map("lift_reason")
+  isActive       Boolean              @default(true) @map("is_active")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@index([tenantId])
+  @@index([vendorId])
+  @@index([tenantId, vendorId, isActive])
+}
+
+model VendorChangeRequest {
+  id                    String              @id
+  tenantId              String              @map("tenant_id") @db.Uuid
+  vendorId              String              @map("vendor_id")
+  requestedBy           String              @map("requested_by")
+  requestType           ChangeRequestType   @map("request_type")
+  proposedChanges       Json                @map("proposed_changes")
+  currentValues         Json                @map("current_values")
+  status                ChangeRequestStatus @default(PENDING)
+  requiresReverification Boolean            @default(false) @map("requires_reverification")
+  reverificationTypes   Json?               @map("reverification_types")
+  requestedAt           DateTime            @default(now()) @map("requested_at") @db.Timestamptz(6)
+  decidedAt             DateTime?           @map("decided_at") @db.Timestamptz(6)
+  decidedBy             String?             @map("decided_by")
+  decisionNotes         String?             @map("decision_notes")
+  approvalMatrixSnapshot Json?              @map("approval_matrix_snapshot")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@index([tenantId])
+  @@index([vendorId])
+  @@index([tenantId, status])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice 8 — Analytics & MSME compliance
+// Aggregation layer is job-refreshed RLS-protected summary tables (not Postgres
+// materialized views: MVs cannot carry RLS policies, which Master Context §3
+// rule #1 forbids). See ADR-028. Each summary row carries refreshedAt; the
+// AnalyticsRefreshLog tracks per-view refresh status for the "as of" UI badge.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum SavingsInitiativeType {
+  HARD_RFQ          // negotiated via RFQ: baseline highest-qualified-quote vs awarded
+  PRICE_IMPROVEMENT // PO unit price below reference (labelled "price improvement", not "savings")
+  SOFT_PAYMENT_TERM // working-capital benefit from extended payment terms (estimate)
+  AVOIDED_COST      // self-reported, requires justification + review
+}
+
+enum SavingsSourceType {
+  RFQ_AWARD
+  NEGOTIATED_PO
+  PAYMENT_TERM
+  MANUAL
+}
+
+enum SavingsEntryStatus {
+  CONFIRMED
+  PENDING_REVIEW // avoided-cost awaiting sign-off
+  REJECTED
+}
+
+/// Per-tenant compliance/finance config: RBI reference rate (MSME §15 interest =
+/// rate x 3 per Master Context §9) and cost-of-capital for soft-savings estimates.
+model TenantComplianceConfig {
+  id                   String    @id
+  tenantId             String    @unique @map("tenant_id") @db.Uuid
+  rbiReferenceRatePct  Decimal   @default("6.5000") @map("rbi_reference_rate_pct") @db.Decimal(6, 4)
+  rbiRateEffectiveFrom DateTime? @map("rbi_rate_effective_from") @db.Timestamptz(6)
+  rbiRateSource        String?   @map("rbi_rate_source")
+  costOfCapitalPct     Decimal   @default("12.0000") @map("cost_of_capital_pct") @db.Decimal(6, 4)
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([tenantId])
+}
+
+/// Savings ledger — written by event listeners (RFQ award, PO issue) and manual
+/// avoided-cost entries. A real table (not a materialized view): it has a write path.
+model SavingsLedgerEntry {
+  id             String                @id
+  tenantId       String                @map("tenant_id") @db.Uuid
+  periodMonth    String                @map("period_month") // 'YYYY-MM'
+  initiativeType SavingsInitiativeType @map("initiative_type")
+  sourceType     SavingsSourceType     @map("source_type")
+  sourceId       String?               @map("source_id") // awardId / poId / null
+  vendorId       String?               @map("vendor_id")
+  category       String?
+  baselineValue  Decimal               @map("baseline_value") @db.Decimal(18, 4)
+  awardedValue   Decimal               @map("awarded_value") @db.Decimal(18, 4)
+  savingsAmount  Decimal               @map("savings_amount") @db.Decimal(18, 4)
+  savingsPct     Decimal               @map("savings_pct") @db.Decimal(9, 4)
+  buyerId        String?               @map("buyer_id") // leaderboard attribution
+  status         SavingsEntryStatus    @default(CONFIRMED)
+  notes          String?
+  createdAt      DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdBy      String?               @map("created_by")
+
+  @@unique([tenantId, sourceType, sourceId, initiativeType])
+  @@index([tenantId])
+  @@index([tenantId, periodMonth])
+  @@index([tenantId, buyerId])
+}
+
+/// Tracks the last refresh of each summary view per tenant — powers the "as of"
+/// badge and the manual-refresh polling endpoint.
+model AnalyticsRefreshLog {
+  id          String   @id
+  tenantId    String   @map("tenant_id") @db.Uuid
+  viewName    String   @map("view_name")
+  refreshedAt DateTime @default(now()) @map("refreshed_at") @db.Timestamptz(6)
+  durationMs  Int?     @map("duration_ms")
+  status      String   @default("OK")
+  trigger     String   @default("SCHEDULED") // SCHEDULED | EVENT | MANUAL
+
+  @@unique([tenantId, viewName])
+  @@index([tenantId])
+}
+
+/// Summary: net/gross/tax spend + txn count per month (from Invoice). Exact ledger match.
+model AnalyticsSpendMonthly {
+  id          String   @id
+  tenantId    String   @map("tenant_id") @db.Uuid
+  month       String // 'YYYY-MM'
+  grossSpend  Decimal  @default("0") @map("gross_spend") @db.Decimal(18, 4)
+  taxSpend    Decimal  @default("0") @map("tax_spend") @db.Decimal(18, 4)
+  netSpend    Decimal  @default("0") @map("net_spend") @db.Decimal(18, 4)
+  txnCount    Int      @default(0) @map("txn_count")
+  refreshedAt DateTime @default(now()) @map("refreshed_at") @db.Timestamptz(6)
+
+  @@unique([tenantId, month])
+  @@index([tenantId])
+}
+
+/// Summary: net/gross spend + txn count per vendor per month (concentration + top-vendors).
+model AnalyticsVendorMonthly {
+  id          String   @id
+  tenantId    String   @map("tenant_id") @db.Uuid
+  vendorId    String   @map("vendor_id")
+  month       String
+  grossSpend  Decimal  @default("0") @map("gross_spend") @db.Decimal(18, 4)
+  netSpend    Decimal  @default("0") @map("net_spend") @db.Decimal(18, 4)
+  txnCount    Int      @default(0) @map("txn_count")
+  refreshedAt DateTime @default(now()) @map("refreshed_at") @db.Timestamptz(6)
+
+  @@unique([tenantId, vendorId, month])
+  @@index([tenantId])
+  @@index([tenantId, month])
+}
+
+/// Summary: AP performance per month (first-pass yield, exceptions, straight-through, cycle time).
+model AnalyticsApMonthly {
+  id                  String   @id
+  tenantId            String   @map("tenant_id") @db.Uuid
+  month               String
+  invoicesTotal       Int      @default(0) @map("invoices_total")
+  invoicesFirstPass   Int      @default(0) @map("invoices_first_pass")
+  invoicesException   Int      @default(0) @map("invoices_exception")
+  invoicesStraightThr Int      @default(0) @map("invoices_straight_through")
+  cycleHoursSum       Decimal  @default("0") @map("cycle_hours_sum") @db.Decimal(18, 4)
+  cycleCount          Int      @default(0) @map("cycle_count")
+  refreshedAt         DateTime @default(now()) @map("refreshed_at") @db.Timestamptz(6)
+
+  @@unique([tenantId, month])
+  @@index([tenantId])
+}
+
+/// Summary: MSME breach count + interest exposure per month (compliance trend).
+model AnalyticsMsmeMonthly {
+  id             String   @id
+  tenantId       String   @map("tenant_id") @db.Uuid
+  month          String
+  breachCount    Int      @default(0) @map("breach_count")
+  breachExposure Decimal  @default("0") @map("breach_exposure") @db.Decimal(18, 4)
+  refreshedAt    DateTime @default(now()) @map("refreshed_at") @db.Timestamptz(6)
+
+  @@unique([tenantId, month])
+  @@index([tenantId])
+}
+
+// ─────────────────────────── Contracts (Slice 9) ───────────────────────────
+
+enum ContractType {
+  RATE_CONTRACT
+  FRAMEWORK_AGREEMENT
+  BLANKET_PO
+  SERVICE_AGREEMENT
+}
+
+enum ContractStatus {
+  DRAFT
+  UNDER_NEGOTIATION
+  AWAITING_APPROVAL
+  APPROVED // approved, awaiting execution (PDF generation)
+  ACTIVE
+  AWAITING_VENDOR_SIGNATURE
+  EXPIRING_SOON
+  EXPIRED
+  TERMINATED
+  SUPERSEDED
+}
+
+enum CommitmentPeriod {
+  ANNUAL
+  CONTRACT_LIFETIME
+}
+
+enum ContractClauseType {
+  PAYMENT_TERMS
+  DELIVERY_SLA
+  QUALITY_STANDARD
+  PENALTY
+  FORCE_MAJEURE
+  CONFIDENTIALITY
+  IP
+  TERMINATION
+  LIABILITY
+  INSURANCE
+  CUSTOM
+}
+
+enum EscalationType {
+  INDEXED
+  FIXED_STEP
+}
+
+enum VolumeTrackingStatus {
+  ON_TRACK
+  AT_RISK
+  SHORTFALL
+}
+
+enum ContractDocType {
+  EXECUTED_PDF
+  AMENDMENT
+  VENDOR_COUNTERSIGNED
+  SUPPORTING_ANNEXURE
+}
+
+enum ContractRenewalAlertType {
+  NOTICE_90D
+  NOTICE_60D
+  NOTICE_30D
+  EXPIRED
+}
+
+enum RenewalAlertAction {
+  RENEWED
+  ALLOWED_TO_EXPIRE
+  TERMINATED_EARLY
+  UNDER_NEGOTIATION
+}
+
+enum ContractAmendmentStatus {
+  DRAFT
+  AWAITING_APPROVAL
+  APPROVED
+  REJECTED
+}
+
+/// A pre-negotiated agreement POs are issued against (call-offs) without
+/// re-approval of pricing. Structured data (rate cards, clauses, commitments)
+/// the PO engine validates against — not merely an attached document.
+model Contract {
+  id                           String           @id
+  tenantId                     String           @map("tenant_id") @db.Uuid
+  number                       String
+  title                        String
+  contractType                 ContractType     @map("contract_type")
+  vendorId                     String           @map("vendor_id")
+  category                     String
+  rfqId                        String?          @map("rfq_id") // if born from a Slice 6 FRAMEWORK RFQ
+  status                       ContractStatus   @default(DRAFT)
+  validityStart                DateTime         @map("validity_start") @db.Timestamptz(6)
+  validityEnd                  DateTime         @map("validity_end") @db.Timestamptz(6)
+  autoRenew                    Boolean          @default(false) @map("auto_renew")
+  renewalNoticeDays            Int              @default(90) @map("renewal_notice_days")
+  currency                     String           @default("INR")
+  totalValueEstimate           Decimal          @default("0") @map("total_value_estimate") @db.Decimal(18, 4)
+  minimumCommitmentValue       Decimal?         @map("minimum_commitment_value") @db.Decimal(18, 4)
+  minimumCommitmentQty         Decimal?         @map("minimum_commitment_qty") @db.Decimal(18, 4)
+  commitmentUom                String?          @map("commitment_uom")
+  commitmentPeriod             CommitmentPeriod @default(ANNUAL) @map("commitment_period")
+  paymentTermsSnapshot         Json?            @map("payment_terms_snapshot")
+  escalationClause             Json?            @map("escalation_clause") // {type, indexRef?, reviewFrequency, capPct?}
+  terminationNoticeDays        Int              @default(30) @map("termination_notice_days")
+  governingLaw                 String?          @map("governing_law")
+  disputeResolution            String?          @map("dispute_resolution")
+  requireVendorCountersign     Boolean          @default(false) @map("require_vendor_countersign")
+  skipPoApprovalWithinContract Boolean          @default(true) @map("skip_po_approval_within_contract")
+  maxCallOffValue              Decimal?         @map("max_call_off_value") @db.Decimal(18, 4) // per-call-off cap (optional)
+  parentContractId             String?          @map("parent_contract_id") // amendment/renewal predecessor
+  supersedesContractId         String?          @map("supersedes_contract_id")
+  approvalMatrixSnapshot       Json?            @map("approval_matrix_snapshot")
+  amendmentNo                  Int              @default(0) @map("amendment_no")
+  pdfS3Key                     String?          @map("pdf_s3_key")
+  pdfGeneratedHash             String?          @map("pdf_generated_hash")
+  executedAt                   DateTime?        @map("executed_at") @db.Timestamptz(6)
+  executedBy                   String?          @map("executed_by")
+  vendorSignedAt               DateTime?        @map("vendor_signed_at") @db.Timestamptz(6)
+  terminatedAt                 DateTime?        @map("terminated_at") @db.Timestamptz(6)
+  terminationReason            String?          @map("termination_reason")
+  createdBy                    String?          @map("created_by")
+  createdAt                    DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                    DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant         Tenant                   @relation(fields: [tenantId], references: [id])
+  vendor         Vendor                   @relation(fields: [vendorId], references: [id])
+  rateCards      ContractRateCard[]
+  clauses        ContractClause[]
+  documents      ContractDocument[]
+  callOffs       ContractCallOff[]
+  volumeTracking ContractVolumeTracking[]
+  amendments     ContractAmendment[]
+  renewalAlerts  ContractRenewalAlert[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, validityEnd])
+  @@index([vendorId])
+}
+
+/// Locked rate rows. Multi-year (rateYear), volume-banded, and route-based
+/// (logistics) pricing all first-class. Call-off unit price is pulled from here.
+model ContractRateCard {
+  id            String   @id
+  tenantId      String   @map("tenant_id") @db.Uuid
+  contractId    String   @map("contract_id")
+  lineNo        Int      @map("line_no")
+  itemId        String?  @map("item_id")
+  itemDesc      String   @map("item_desc")
+  uom           String
+  rateYear      Int      @default(1) @map("rate_year")
+  unitRate      Decimal  @map("unit_rate") @db.Decimal(18, 4)
+  taxRate       Decimal  @default("0") @map("tax_rate") @db.Decimal(6, 4)
+  volumeBandMin Decimal? @map("volume_band_min") @db.Decimal(18, 4)
+  volumeBandMax Decimal? @map("volume_band_max") @db.Decimal(18, 4)
+  routeOrigin   String?  @map("route_origin")
+  routeDest     String?  @map("route_destination")
+  effectiveFrom DateTime @map("effective_from") @db.Timestamptz(6)
+  effectiveTo   DateTime @map("effective_to") @db.Timestamptz(6)
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([contractId])
+}
+
+/// Clauses — library-sourced or custom. Executed contracts are frozen: library
+/// edits never retroactively propagate (deliberate non-goal, Slice 9).
+model ContractClause {
+  id              String             @id
+  tenantId        String             @map("tenant_id") @db.Uuid
+  contractId      String             @map("contract_id")
+  clauseType      ContractClauseType @map("clause_type")
+  title           String
+  contentText     String             @map("content_text")
+  isFromLibrary   Boolean            @default(false) @map("is_from_library")
+  libraryClauseId String?            @map("library_clause_id")
+  orderNo         Int                @map("order_no")
+  isMandatory     Boolean            @default(false) @map("is_mandatory")
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([contractId])
+}
+
+/// Tenant's reusable standard clauses. Only TENANT_ADMIN / LEGAL_OFFICER edit.
+model ClauseLibrary {
+  id          String             @id
+  tenantId    String             @map("tenant_id") @db.Uuid
+  clauseType  ContractClauseType @map("clause_type")
+  title       String
+  contentText String             @map("content_text")
+  isDefault   Boolean            @default(false) @map("is_default")
+  version     Int                @default(1)
+  createdBy   String?            @map("created_by")
+  createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([tenantId])
+  @@index([tenantId, clauseType])
+}
+
+model ContractDocument {
+  id         String          @id
+  tenantId   String          @map("tenant_id") @db.Uuid
+  contractId String          @map("contract_id")
+  docType    ContractDocType @map("doc_type")
+  s3Key      String          @map("s3_key")
+  filename   String
+  fileHash   String?         @map("file_hash")
+  mimeType   String?         @map("mime_type")
+  sizeBytes  Int?            @map("size_bytes")
+  uploadedAt DateTime        @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  uploadedBy String?         @map("uploaded_by")
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([contractId])
+}
+
+/// Links a call-off PO back to the contract + the rate card row it used.
+model ContractCallOff {
+  id             String   @id
+  tenantId       String   @map("tenant_id") @db.Uuid
+  contractId     String   @map("contract_id")
+  poId           String   @map("po_id")
+  rateCardIdUsed String?  @map("rate_card_id_used")
+  qty            Decimal  @db.Decimal(18, 4)
+  value          Decimal  @db.Decimal(18, 4)
+  calledOffAt    DateTime @default(now()) @map("called_off_at") @db.Timestamptz(6)
+  calledOffBy    String?  @map("called_off_by")
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([contractId])
+  @@index([poId])
+}
+
+/// Actual-vs-committed volume per commitment period. Surfaces take-or-pay risk;
+/// does NOT post a shortfall liability (finance/Tally decision, out of scope).
+model ContractVolumeTracking {
+  id             String               @id
+  tenantId       String               @map("tenant_id") @db.Uuid
+  contractId     String               @map("contract_id")
+  period         String // e.g. 'FY2026' or 'LIFETIME'
+  committedQty   Decimal?             @map("committed_qty") @db.Decimal(18, 4)
+  actualQty      Decimal              @default("0") @map("actual_qty") @db.Decimal(18, 4)
+  committedValue Decimal?             @map("committed_value") @db.Decimal(18, 4)
+  actualValue    Decimal              @default("0") @map("actual_value") @db.Decimal(18, 4)
+  shortfallQty   Decimal?             @map("shortfall_qty") @db.Decimal(18, 4)
+  shortfallValue Decimal?             @map("shortfall_value") @db.Decimal(18, 4)
+  status         VolumeTrackingStatus @default(ON_TRACK)
+  updatedAt      DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@unique([contractId, period])
+  @@index([tenantId])
+  @@index([contractId])
+}
+
+/// A mid-validity term change. Routes through its own CONTRACT_AMENDMENT approval,
+/// scaled to the value of the change (not the whole contract).
+model ContractAmendment {
+  id                     String                  @id
+  tenantId               String                  @map("tenant_id") @db.Uuid
+  contractId             String                  @map("contract_id")
+  amendmentNo            Int                     @map("amendment_no")
+  status                 ContractAmendmentStatus @default(DRAFT)
+  changeSummary          String                  @map("change_summary")
+  changedFields          Json                    @map("changed_fields")
+  changeValue            Decimal                 @default("0") @map("change_value") @db.Decimal(18, 4)
+  approvalMatrixSnapshot Json?                   @map("approval_matrix_snapshot")
+  requestedBy            String?                 @map("requested_by")
+  requestedAt            DateTime                @default(now()) @map("requested_at") @db.Timestamptz(6)
+  approvedAt             DateTime?               @map("approved_at") @db.Timestamptz(6)
+  approvedBy             String?                 @map("approved_by")
+  effectiveFrom          DateTime                @map("effective_from") @db.Timestamptz(6)
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([contractId])
+}
+
+/// Proactive renewal risk. Nightly job creates 90/60/30-day + EXPIRED rows.
+model ContractRenewalAlert {
+  id             String                   @id
+  tenantId       String                   @map("tenant_id") @db.Uuid
+  contractId     String                   @map("contract_id")
+  alertType      ContractRenewalAlertType @map("alert_type")
+  triggeredAt    DateTime                 @default(now()) @map("triggered_at") @db.Timestamptz(6)
+  acknowledgedAt DateTime?                @map("acknowledged_at") @db.Timestamptz(6)
+  acknowledgedBy String?                  @map("acknowledged_by")
+  actionTaken    RenewalAlertAction?      @map("action_taken")
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@unique([contractId, alertType])
+  @@index([tenantId])
+  @@index([contractId])
+}
+
+// ─────────────────────────── Integrations (Slice 10a) ───────────────────────────
+
+/// External integration providers (Master Context §9). Kept as an enum so the
+/// credential vault + usage log stay provider-agnostic in code.
+enum IntegrationProvider {
+  OCR
+  GSP // GST Suvidha Provider — GSTR-2B, IRN, e-Way (ADR-033)
+  EMAIL_INBOUND
+  PENNY_DROP // (10b)
+  BANK // (10b)
+  GSTN // (10c)
+  PAN // (10c)
+  UDYAM // (10c)
+  MCA // (10c)
+  SANCTIONS // (10c)
+  ADVERSE_MEDIA // (10c)
+  CREDIT_BUREAU // (10c)
+  ISO_CERT // (10c)
+  CAPTCHA // (10c)
+}
+
+/// Per-tenant integration credentials, encrypted at rest (AES-256-GCM). The
+/// ciphertext is NEVER returned in any API response, logged, or surfaced in an
+/// error (ADR-033). Some tenants bring their own GSP account; others use ours.
+model TenantIntegrationCredential {
+  id            String              @id
+  tenantId      String              @map("tenant_id") @db.Uuid
+  provider      IntegrationProvider
+  label         String? // e.g. 'Star Cement GSP account'
+  ciphertext    String              @map("ciphertext") // base64(iv:tag:data)
+  keyVersion    Int                 @default(1) @map("key_version")
+  isActive      Boolean             @default(true) @map("is_active")
+  lastRotatedAt DateTime?           @map("last_rotated_at") @db.Timestamptz(6)
+  createdAt     DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([tenantId, provider])
+  @@index([tenantId])
+}
+
+/// Per-call usage/cost ledger for priced integrations (OCR, GSP, screening).
+/// Feeds future billing + per-tenant cost analysis from day one.
+model IntegrationUsageLog {
+  id           String              @id
+  tenantId     String              @map("tenant_id") @db.Uuid
+  provider     IntegrationProvider
+  operation    String // e.g. 'ocr.extract', 'gstr2b.fetch', 'irn.validate'
+  documentType String?             @map("document_type")
+  documentId   String?             @map("document_id")
+  costMicros   Int                 @default(0) @map("cost_micros") // INR × 1e6, integer-safe
+  outcome      String              @default("OK") // OK | ERROR | CIRCUIT_OPEN | FALLBACK
+  simulated    Boolean             @default(true) // true until a real provider is wired
+  latencyMs    Int?                @map("latency_ms")
+  createdAt    DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([tenantId])
+  @@index([tenantId, provider, createdAt])
+}
+
+enum InboundEmailStatus {
+  RECEIVED
+  INVOICE_CREATED
+  PENDING_VENDOR_MATCH // sender not recognised — AP must attribute
+  DEAD_LETTER // malformed / no attachment / corrupt — AP handles manually
+}
+
+/// An inbound email captured by the intake worker/webhook. Preserves the raw
+/// message for audit + manual handling; unrecognised senders and malformed
+/// messages are quarantined here rather than silently creating invoices.
+model InboundEmail {
+  id            String             @id
+  tenantId      String             @map("tenant_id") @db.Uuid
+  fromEmail     String             @map("from_email")
+  fromDomain    String             @map("from_domain")
+  subject       String?
+  status        InboundEmailStatus @default(RECEIVED)
+  matchedVendorId String?          @map("matched_vendor_id")
+  invoiceId     String?            @map("invoice_id")
+  bodyS3Key     String?            @map("body_s3_key")
+  attachmentS3Key String?          @map("attachment_s3_key")
+  attachmentName String?           @map("attachment_name")
+  deadLetterReason String?         @map("dead_letter_reason")
+  providerMessageId String?        @map("provider_message_id")
+  resolvedBy    String?            @map("resolved_by")
+  resolvedAt    DateTime?          @map("resolved_at") @db.Timestamptz(6)
+  createdAt     DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+}
+
+// ─────────────────────────── Banking (Slice 10b) ───────────────────────────
+
+enum PaymentSubmissionStatus {
+  INTENT // written BEFORE the bank call (crash-recovery anchor)
+  SUBMITTED // bank accepted the batch for processing
+  CONFIRMED // bank confirmed final settlement
+  FAILED // submission failed as a whole (batch-level)
+}
+
+/// Idempotent bank-submission record (Slice 10b, ADR-034). Written BEFORE the
+/// bank call so a crash mid-submission is recoverable/auditable rather than a
+/// silent double-pay risk. One row per (paymentRunId, attemptNo); the
+/// idempotencyKey is the bank Idempotency-Key for that attempt.
+model PaymentSubmissionIntent {
+  id             String                  @id
+  tenantId       String                  @map("tenant_id") @db.Uuid
+  paymentRunId   String                  @map("payment_run_id")
+  attemptNo      Int                     @map("attempt_no")
+  idempotencyKey String                  @unique @map("idempotency_key")
+  status         PaymentSubmissionStatus @default(INTENT)
+  bankBatchRef   String?                 @map("bank_batch_ref")
+  fileHash       String?                 @map("file_hash")
+  itemCount      Int                     @default(0) @map("item_count")
+  acceptedCount  Int                     @default(0) @map("accepted_count")
+  failedCount    Int                     @default(0) @map("failed_count")
+  simulated      Boolean                 @default(true)
+  errorMessage   String?                 @map("error_message")
+  createdAt      DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  submittedAt    DateTime?               @map("submitted_at") @db.Timestamptz(6)
+  confirmedAt    DateTime?               @map("confirmed_at") @db.Timestamptz(6)
+
+  @@unique([paymentRunId, attemptNo])
+  @@index([tenantId])
+  @@index([paymentRunId])
+}

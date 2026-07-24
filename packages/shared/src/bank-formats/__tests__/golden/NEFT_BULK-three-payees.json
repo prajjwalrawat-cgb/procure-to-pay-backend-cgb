@@ -1,0 +1,45 @@
+{
+  "name": "NEFT_BULK-three-payees",
+  "formatKey": "NEFT_BULK",
+  "input": {
+    "meta": {
+      "runNumber": "PR-260614-04",
+      "cycleDate": "2026-06-14T00:00:00.000Z",
+      "tenantCode": "STAR01",
+      "debitAccountLast4": "7890",
+      "debitIfsc": "HDFC0000234",
+      "holderName": "Star Cement Ltd"
+    },
+    "payees": [
+      {
+        "beneficiaryName": "Patel Engineering",
+        "beneficiaryAccount": "50100234567890",
+        "ifsc": "HDFC0000123",
+        "amount": "100.0000",
+        "ref": "INV-A",
+        "narration": "NEFT PR-260614-01"
+      },
+      {
+        "beneficiaryName": "Saurashtra Refractories",
+        "beneficiaryAccount": "50200111222333",
+        "ifsc": "SBIN0004321",
+        "amount": "250.2500",
+        "ref": "INV-B",
+        "narration": "NEFT"
+      },
+      {
+        "beneficiaryName": "Tata Steel Long Products",
+        "beneficiaryAccount": "911020055500123",
+        "ifsc": "ICIC0000505",
+        "amount": "49.7500",
+        "ref": "INV-C",
+        "narration": "NEFT"
+      }
+    ]
+  },
+  "expected": {
+    "content": "H,STAR01,PR-260614-04,20260614,3,400.00\r\n50100234567890,HDFC0000123,Patel Engineering,100.00,INV-A,NEFT PR-260614-01\r\n50200111222333,SBIN0004321,Saurashtra Refractories,250.25,INV-B,NEFT\r\n911020055500123,ICIC0000505,Tata Steel Long Products,49.75,INV-C,NEFT\r\nT,3,400.00\r\n",
+    "checksum": "fcd26011be84c4e94adc78b9ae812da2bf217758cb43240163aa3fceee42ee07",
+    "rowCount": 3
+  }
+}

@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Builds
+dist/
+.next/
+out/
+build/
+*.tsbuildinfo
+
+# Env & secrets
+.env
+.env.local
+.env.*.local
+*.pem
+keys/
+
+# Test & coverage
+coverage/
+playwright-report/
+test-results/
+.turbo/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Prisma
+packages/db/prisma/*.db
+
+# Word lock files
+~$*
+docs/**/~$*

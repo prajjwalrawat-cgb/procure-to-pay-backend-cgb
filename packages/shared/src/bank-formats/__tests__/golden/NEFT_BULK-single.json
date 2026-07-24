@@ -1,0 +1,29 @@
+{
+  "name": "NEFT_BULK-single",
+  "formatKey": "NEFT_BULK",
+  "input": {
+    "meta": {
+      "runNumber": "PR-260614-01",
+      "cycleDate": "2026-06-14T00:00:00.000Z",
+      "tenantCode": "STAR01",
+      "debitAccountLast4": "7890",
+      "debitIfsc": "HDFC0000234",
+      "holderName": "Star Cement Ltd"
+    },
+    "payees": [
+      {
+        "beneficiaryName": "Patel Engineering",
+        "beneficiaryAccount": "50100234567890",
+        "ifsc": "HDFC0000123",
+        "amount": "18900.0000",
+        "ref": "INV-4408",
+        "narration": "NEFT PR-260614-01"
+      }
+    ]
+  },
+  "expected": {
+    "content": "H,STAR01,PR-260614-01,20260614,1,18900.00\r\n50100234567890,HDFC0000123,Patel Engineering,18900.00,INV-4408,NEFT PR-260614-01\r\nT,1,18900.00\r\n",
+    "checksum": "32c413c2679bc5303aaa0b2deb2cb2ea5b8c20fd4bf18171eb353ce14e76fd04",
+    "rowCount": 1
+  }
+}

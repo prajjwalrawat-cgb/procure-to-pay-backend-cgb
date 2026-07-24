@@ -1,0 +1,29 @@
+{
+  "name": "NEFT_BULK-sanitize",
+  "formatKey": "NEFT_BULK",
+  "input": {
+    "meta": {
+      "runNumber": "PR-260614-03",
+      "cycleDate": "2026-06-14T00:00:00.000Z",
+      "tenantCode": "STAR01",
+      "debitAccountLast4": "7890",
+      "debitIfsc": "HDFC0000234",
+      "holderName": "Star Cement Ltd"
+    },
+    "payees": [
+      {
+        "beneficiaryName": "Vishakha Plastics,Pvt Ltd",
+        "beneficiaryAccount": "50100999888777",
+        "ifsc": "HDFC0000123",
+        "amount": "1000.0000",
+        "ref": "INV-4411",
+        "narration": "Urgent|NEFT"
+      }
+    ]
+  },
+  "expected": {
+    "content": "H,STAR01,PR-260614-03,20260614,1,1000.00\r\n50100999888777,HDFC0000123,Vishakha Plastics Pvt Ltd,1000.00,INV-4411,Urgent NEFT\r\nT,1,1000.00\r\n",
+    "checksum": "d93cca8ab64bc39f8fe2a660b8a3091f8437b1bb676bd86d92c148e315eb6895",
+    "rowCount": 1
+  }
+}

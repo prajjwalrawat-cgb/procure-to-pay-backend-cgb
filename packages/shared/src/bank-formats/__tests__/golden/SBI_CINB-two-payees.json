@@ -1,0 +1,37 @@
+{
+  "name": "SBI_CINB-two-payees",
+  "formatKey": "SBI_CINB",
+  "input": {
+    "meta": {
+      "runNumber": "PR-260614-02",
+      "cycleDate": "2026-06-14T00:00:00.000Z",
+      "tenantCode": "STAR01",
+      "debitAccountLast4": "7890",
+      "debitIfsc": "HDFC0000234",
+      "holderName": "Star Cement Ltd"
+    },
+    "payees": [
+      {
+        "beneficiaryName": "Saurashtra Refractories",
+        "beneficiaryAccount": "50200111222333",
+        "ifsc": "SBIN0004321",
+        "amount": "12500.5000",
+        "ref": "INV-4409",
+        "narration": "NEFT"
+      },
+      {
+        "beneficiaryName": "Tata Steel Long Products",
+        "beneficiaryAccount": "911020055500123",
+        "ifsc": "ICIC0000505",
+        "amount": "9999.9900",
+        "ref": "INV-4410",
+        "narration": "NEFT"
+      }
+    ]
+  },
+  "expected": {
+    "content": "SBBULK,7890,PR-260614-02,14-06-2026,2,22500.49\n1,Saurashtra Refractories,50200111222333,SBIN0004321,12500.50,NEFT\n2,Tata Steel Long Products,911020055500123,ICIC0000505,9999.99,NEFT\n",
+    "checksum": "84475bf667e3e0b6f602064b38e166ce3039d01b6cf03ba41fbe80a16e364a7a",
+    "rowCount": 2
+  }
+}

@@ -1,0 +1,13 @@
+# Railway config for the API service (the service whose root directory is the
+# backend repo root). The Python OCR runs as a SECOND Railway service pointed at
+# services/ocr-service/Dockerfile — configure that one in the Railway UI.
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "node apps/api/dist/main.js"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 5

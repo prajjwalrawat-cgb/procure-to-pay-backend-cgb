@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "moduleResolution": "Bundler",
+    "incremental": false,
+    "lib": ["ES2022", "DOM"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/*.test.ts",
+    // Dev-only golden-file generator: uses node built-ins and runs via tsx, so it
+    // is out of scope for this isomorphic (DOM/ES2022, no @types/node) library build.
+    "src/bank-formats/__tests__/generate-golden.ts"
+  ]
+}

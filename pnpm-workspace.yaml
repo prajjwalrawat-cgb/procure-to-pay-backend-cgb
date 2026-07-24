@@ -1,0 +1,5 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+# services/ocr-service is a Python service (no package.json) — not a pnpm
+# workspace member; it builds from its own Dockerfile as a separate Railway service.

@@ -1,0 +1,24 @@
+# --- Core service ---
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.29,<1.0
+httpx>=0.27,<1.0
+pydantic>=2.6,<3.0
+pydantic-settings>=2.2,<3.0
+pytz>=2024.1
+
+# --- Azure Document Intelligence engine (default, OCR_PROVIDER=azure) ---
+azure-ai-documentintelligence>=1.0.0
+azure-core>=1.30.0
+
+# --- LLM structured extraction (required for paddleocr / rapidocr, and the
+#     Azure bad-scan fallback). litellm speaks OpenAI/Azure/Gemini/Groq/etc. ---
+litellm>=1.40.0
+
+# --- PDF text layer (skips OCR when a PDF already has selectable text) ---
+pypdf>=4.2.0
+
+# --- Self-hosted OCR engines. rapidocr is the recommended local engine
+#     (no PaddlePaddle Windows-CPU crash). Uncomment what you need. ---
+rapidocr-onnxruntime>=1.3.0
+# paddleocr>=2.7.0
+# paddlepaddle>=2.6.0

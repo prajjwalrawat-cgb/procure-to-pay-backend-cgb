@@ -1,0 +1,29 @@
+{
+  "name": "SBI_CINB-sanitize",
+  "formatKey": "SBI_CINB",
+  "input": {
+    "meta": {
+      "runNumber": "PR-260614-03",
+      "cycleDate": "2026-06-14T00:00:00.000Z",
+      "tenantCode": "STAR01",
+      "debitAccountLast4": "7890",
+      "debitIfsc": "HDFC0000234",
+      "holderName": "Star Cement Ltd"
+    },
+    "payees": [
+      {
+        "beneficiaryName": "Vishakha Plastics,Pvt Ltd",
+        "beneficiaryAccount": "50100999888777",
+        "ifsc": "HDFC0000123",
+        "amount": "1000.0000",
+        "ref": "INV-4411",
+        "narration": "Urgent|NEFT"
+      }
+    ]
+  },
+  "expected": {
+    "content": "SBBULK,7890,PR-260614-03,14-06-2026,1,1000.00\n1,Vishakha Plastics Pvt Ltd,50100999888777,HDFC0000123,1000.00,Urgent NEFT\n",
+    "checksum": "db1b5370b6646cd80b432a37af1c8bff038188e25bb33e302fd7c914898060a7",
+    "rowCount": 1
+  }
+}
