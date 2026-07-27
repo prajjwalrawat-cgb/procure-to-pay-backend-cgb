@@ -63,6 +63,10 @@ function makeService(
   const verification = {} as unknown as VendorVerificationService;
   const scorecard = {} as unknown as VendorScorecardService;
   const mail = { send: vi.fn().mockResolvedValue(undefined) } as never;
+  const storage = {
+    presignedGetUrl: vi.fn().mockResolvedValue('https://signed.example/doc'),
+    put: vi.fn().mockResolvedValue(''),
+  } as never;
   const config = { get: vi.fn().mockReturnValue('http://localhost:3000') } as never;
   const pennyDrop = {
     verify: vi.fn().mockResolvedValue({ registeredName: 'x', matchScore: 1 }),
@@ -82,6 +86,7 @@ function makeService(
     verification,
     scorecard,
     mail,
+    storage,
     config,
     pennyDrop,
     captcha,
@@ -185,6 +190,7 @@ describe('VendorOnboardingService.startSelfRegistration — tenant scoping', () 
       noop,
       noop,
       noop, // mail
+      noop, // storage
       noop, // config
       noop, // pennyDrop
       captcha,

@@ -68,6 +68,10 @@ export interface VendorDocumentView {
   verificationStatus: DocVerificationStatus;
   validTo: string | null;
   uploadedAt: string;
+  /** Time-limited presigned URL so a reviewer can open the file. Empty string
+   *  when the object is missing or the presigner fails — render no link then. */
+  url: string;
+  sizeBytes: number;
 }
 
 export interface VendorScreeningView {

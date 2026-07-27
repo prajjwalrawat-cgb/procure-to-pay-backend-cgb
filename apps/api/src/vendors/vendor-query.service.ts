@@ -21,6 +21,7 @@ import {
 import Decimal from 'decimal.js';
 
 import { ApprovalRoutingService } from '../approvals/approval-routing.service';
+import { StorageService } from '../common/storage/storage.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 const ACTIVE_PO_STATUSES: Prisma.PurchaseOrderWhereInput['status'] = {
@@ -52,6 +53,7 @@ export class VendorQueryService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly routing: ApprovalRoutingService,
+    private readonly storage: StorageService,
   ) {}
 
   // ── Vendor master list ───────────────────────────────────────────────────
@@ -259,7 +261,7 @@ export class VendorQueryService {
       startedAt: ob.startedAt.toISOString(),
       submittedAt: ob.submittedAt?.toISOString() ?? null,
       steps,
-      documents: v.documents.map(toDocView),
+      documents: await this.toDocViews(v.documents),
       screenings: v.screenings.map(toScreeningView),
       beneficialOwners: v.beneficialOwners.map((o) => ({
         id: o.id,
@@ -336,7 +338,7 @@ export class VendorQueryService {
         isPep: o.isPep,
         sanctionsScreeningStatus: o.sanctionsScreeningStatus,
       })),
-      documents: v.documents.map(toDocView),
+      documents: await this.toDocViews(v.documents),
       suspensions: v.suspensions.map(toSuspensionView),
       changeRequests: v.changeRequests.map(toChangeView),
     };
@@ -428,21 +430,28 @@ export class VendorQueryService {
       },
     ];
   }
+
+  /** Attach a short-lived presigned URL so a reviewer can open each document.
+   *  A presigner failure degrades to an empty url rather than failing the page. */
+  private async toDocViews(
+    docs: Prisma.VendorDocumentGetPayload<Record<string, never>>[],
+  ): Promise<VendorDocumentView[]> {
+    return Promise.all(
+      docs.map(async (d) => ({
+        id: d.id,
+        docType: d.docType as VendorDocumentView['docType'],
+        filename: d.filename ?? d.s3Key,
+        documentNumber: d.documentNumber,
+        verificationStatus: d.verificationStatus,
+        validTo: d.validTo?.toISOString() ?? null,
+        uploadedAt: d.uploadedAt?.toISOString() ?? '',
+        url: await this.storage.presignedGetUrl(d.s3Key).catch(() => ''),
+        sizeBytes: d.sizeBytes ?? 0,
+      })),
+    );
+  }
 }
 
-function toDocView(
-  d: Prisma.VendorDocumentGetPayload<Record<string, never>>,
-): VendorDocumentView {
-  return {
-    id: d.id,
-    docType: d.docType as VendorDocumentView['docType'],
-    filename: d.filename ?? d.s3Key,
-    documentNumber: d.documentNumber,
-    verificationStatus: d.verificationStatus,
-    validTo: d.validTo?.toISOString() ?? null,
-    uploadedAt: d.uploadedAt?.toISOString() ?? '',
-  };
-}
 
 function toScreeningView(
   s: Prisma.VendorScreeningGetPayload<Record<string, never>>,

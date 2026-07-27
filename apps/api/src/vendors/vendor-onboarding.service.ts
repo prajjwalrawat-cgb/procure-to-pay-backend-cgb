@@ -31,6 +31,7 @@ import { NotificationService } from '../approvals/notification.service';
 import { AuditLogService } from '../audit/audit.service';
 import { DomainEventService } from '../common/events/domain-event.service';
 import { MailService } from '../common/mail/mail.service';
+import { StorageService } from '../common/storage/storage.service';
 import type { Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
 import { VendorScorecardService } from './vendor-scorecard.service';
@@ -55,6 +56,18 @@ interface WizardState {
   steps: Record<string, { done: boolean; data: Record<string, unknown> }>;
 }
 
+/** A document the vendor has already uploaded, as shown in their own wizard. */
+export interface UploadedDocumentView {
+  id: string;
+  docType: string;
+  filename: string;
+  sizeBytes: number;
+  verificationStatus: string;
+  uploadedAt: string;
+  /** Presigned GET, or '' if the object could not be signed. */
+  url: string;
+}
+
 /**
  * VendorOnboardingService (Slice 7 §2). Buyer-invite and self-registration both
  * land in one review queue: invite → wizard (6 steps, auto-triggered
@@ -73,6 +86,7 @@ export class VendorOnboardingService implements OnModuleInit {
     private readonly verification: VendorVerificationService,
     private readonly scorecard: VendorScorecardService,
     private readonly mail: MailService,
+    private readonly storage: StorageService,
     private readonly config: ConfigService<Env, true>,
     @Inject(PENNY_DROP_PROVIDER) private readonly pennyDrop: IPennyDropProvider,
     @Inject(CAPTCHA_PROVIDER) private readonly captcha: ICaptchaProvider,
@@ -298,14 +312,32 @@ export class VendorOnboardingService implements OnModuleInit {
     onboardingId: string;
     categoryKey: string;
     wizardState: WizardState;
+    documents: UploadedDocumentView[];
   }> {
     const vendorId = await this.resolveVendorId(userId);
     const onboarding = await this.requireActiveOnboarding(vendorId);
+    // Documents come back with the wizard so an uploaded file is still shown
+    // (and openable) after a refresh — the ticks are not just client state.
+    const docs = await this.prisma.client.vendorDocument.findMany({
+      where: { vendorId },
+      orderBy: { uploadedAt: 'desc' },
+    });
     return {
       vendorId,
       onboardingId: onboarding.id,
       categoryKey: onboarding.categoryConfigKey,
       wizardState: onboarding.wizardState as unknown as WizardState,
+      documents: await Promise.all(
+        docs.map(async (d) => ({
+          id: d.id,
+          docType: d.docType,
+          filename: d.filename ?? d.s3Key,
+          sizeBytes: d.sizeBytes ?? 0,
+          verificationStatus: d.verificationStatus,
+          uploadedAt: d.uploadedAt?.toISOString() ?? '',
+          url: await this.storage.presignedGetUrl(d.s3Key).catch(() => ''),
+        })),
+      ),
     };
   }
 
