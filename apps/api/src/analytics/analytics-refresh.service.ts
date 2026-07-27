@@ -6,6 +6,7 @@ import IORedis from 'ioredis';
 import { PinoLogger } from 'nestjs-pino';
 
 import { ApprovalRoutingService } from '../approvals/approval-routing.service';
+import { guardBullMq, scheduleRepeatable } from '../common/queue/queue-guard';
 import type { Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -72,10 +73,12 @@ export class AnalyticsRefreshService implements OnModuleInit, OnModuleDestroy {
     });
     const conn = this.connection as unknown as ConnectionOptions;
     this.queue = new Queue(ANALYTICS_REFRESH_QUEUE, { connection: conn });
-    void this.queue.add(
+    scheduleRepeatable(
+      ANALYTICS_REFRESH_QUEUE,
+      this.queue,
       'nightly',
-      {},
       { repeat: { pattern: '0 3 * * *' }, removeOnComplete: true, removeOnFail: 50 },
+      (m) => this.logger.error(m),
     );
     this.worker = new Worker(
       ANALYTICS_REFRESH_QUEUE,
@@ -87,6 +90,11 @@ export class AnalyticsRefreshService implements OnModuleInit, OnModuleDestroy {
     this.worker.on('failed', (job, err) => {
       this.logger.error({ jobId: job?.id, err: err.message }, 'Analytics refresh failed');
     });
+    guardBullMq(
+      ANALYTICS_REFRESH_QUEUE,
+      { connection: this.connection, queue: this.queue, worker: this.worker },
+      (m) => this.logger.error(m),
+    );
   }
 
   async onModuleDestroy(): Promise<void> {

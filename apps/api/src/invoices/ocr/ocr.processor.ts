@@ -13,6 +13,7 @@ import {
   CircuitBreaker,
   CircuitOpenError,
 } from '../../common/integrations/circuit-breaker';
+import { guardBullMq } from '../../common/queue/queue-guard';
 import type { Env } from '../../config/env';
 import { IntegrationUsageService } from '../../integrations/integration-usage.service';
 import { InvoiceService } from '../invoice.service';
@@ -54,6 +55,9 @@ export class OcrProcessor implements OnModuleInit, OnModuleDestroy {
     this.worker.on('failed', (job, err) => {
       this.logger.error({ jobId: job?.id, err: err.message }, 'OCR job failed');
     });
+    guardBullMq(OCR_QUEUE, { connection: this.connection, worker: this.worker }, (m) =>
+      this.logger.error(m),
+    );
   }
 
   /** Extract → apply, with retry/circuit-breaker + graceful OCR_FAILED fallback. */

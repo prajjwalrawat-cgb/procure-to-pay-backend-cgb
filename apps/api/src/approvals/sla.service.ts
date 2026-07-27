@@ -8,6 +8,7 @@ import { PinoLogger } from 'nestjs-pino';
 
 import { AuditLogService } from '../audit/audit.service';
 import { DomainEventService } from '../common/events/domain-event.service';
+import { guardBullMq, scheduleRepeatable } from '../common/queue/queue-guard';
 import type { Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
 import { ApprovalContextService } from './approval-context.service';
@@ -52,10 +53,12 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
     });
     const conn = this.connection as unknown as ConnectionOptions;
     this.queue = new Queue(SLA_QUEUE, { connection: conn });
-    void this.queue.add(
+    scheduleRepeatable(
+      SLA_QUEUE,
+      this.queue,
       'sweep',
-      {},
       { repeat: { every: 5 * 60 * 1000 }, removeOnComplete: true, removeOnFail: 50 },
+      (m) => this.logger.error(m),
     );
     this.worker = new Worker(
       SLA_QUEUE,
@@ -67,6 +70,11 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
     this.worker.on('failed', (job, err) => {
       this.logger.error({ jobId: job?.id, err: err.message }, 'SLA sweep failed');
     });
+    guardBullMq(
+      SLA_QUEUE,
+      { connection: this.connection, queue: this.queue, worker: this.worker },
+      (m) => this.logger.error(m),
+    );
   }
 
   /** Sweep every tenant. Each tenant runs in its own RLS context. */

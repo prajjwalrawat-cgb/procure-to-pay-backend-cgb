@@ -12,6 +12,7 @@ import IORedis from 'ioredis';
 
 import { AuditLogService } from '../audit/audit.service';
 import { DomainEventService } from '../common/events/domain-event.service';
+import { guardBullMq, scheduleRepeatable } from '../common/queue/queue-guard';
 import type { Env } from '../config/env';
 import { GspClient, type Gstr2bEntry } from '../integrations/gsp/gsp-client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -59,10 +60,12 @@ export class Gstr2bReconciliationService implements OnModuleInit, OnModuleDestro
     });
     const conn = this.connection as unknown as ConnectionOptions;
     this.queue = new Queue(GSTR2B_RECONCILE_QUEUE, { connection: conn });
-    void this.queue.add(
+    scheduleRepeatable(
+      GSTR2B_RECONCILE_QUEUE,
+      this.queue,
       'nightly',
-      {},
       { repeat: { pattern: '0 4 * * *' }, removeOnComplete: true, removeOnFail: 50 },
+      (m) => this.logger.error(m),
     );
     this.worker = new Worker(
       GSTR2B_RECONCILE_QUEUE,
@@ -74,6 +77,11 @@ export class Gstr2bReconciliationService implements OnModuleInit, OnModuleDestro
     this.worker.on('failed', (job, err) => {
       this.logger.error(`GSTR-2B recon job ${job?.id} failed: ${err.message}`);
     });
+    guardBullMq(
+      GSTR2B_RECONCILE_QUEUE,
+      { connection: this.connection, queue: this.queue, worker: this.worker },
+      (m) => this.logger.error(m),
+    );
   }
 
   async onModuleDestroy(): Promise<void> {

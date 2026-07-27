@@ -9,6 +9,7 @@ import type { ScreeningType } from '@procureflow/shared';
 import { Queue, Worker, type ConnectionOptions } from 'bullmq';
 import IORedis from 'ioredis';
 
+import { guardBullMq, scheduleRepeatable } from '../common/queue/queue-guard';
 import type { Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
 import { VendorVerificationService } from './vendor-verification.service';
@@ -45,10 +46,12 @@ export class VendorScreeningRefreshService implements OnModuleInit, OnModuleDest
     this.queue = new Queue(VENDOR_SCREENING_REFRESH_QUEUE, { connection: conn });
     // Daily at 05:00 — the per-type cadence is enforced by nextScreeningDueAt, so
     // a daily sweep only re-screens whatever is actually due that day.
-    void this.queue.add(
+    scheduleRepeatable(
+      VENDOR_SCREENING_REFRESH_QUEUE,
+      this.queue,
       'daily',
-      {},
       { repeat: { pattern: '0 5 * * *' }, removeOnComplete: true, removeOnFail: 50 },
+      (m) => this.logger.error(m),
     );
     this.worker = new Worker(
       VENDOR_SCREENING_REFRESH_QUEUE,
@@ -60,6 +63,11 @@ export class VendorScreeningRefreshService implements OnModuleInit, OnModuleDest
     this.worker.on('failed', (job, err) => {
       this.logger.error(`Screening refresh job ${job?.id} failed: ${err.message}`);
     });
+    guardBullMq(
+      VENDOR_SCREENING_REFRESH_QUEUE,
+      { connection: this.connection, queue: this.queue, worker: this.worker },
+      (m) => this.logger.error(m),
+    );
   }
 
   async onModuleDestroy(): Promise<void> {

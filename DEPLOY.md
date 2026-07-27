@@ -69,7 +69,9 @@ Create ONE Railway project with **two services** from the backend repo:
   | `JWT_PRIVATE_KEY_BASE64` / `JWT_PUBLIC_KEY_BASE64` | RS256 keypair (base64 PEM) |
   | `JWT_ACCESS_TTL` `JWT_REFRESH_TTL` `JWT_ISSUER` `JWT_BUYER_AUDIENCE` `JWT_VENDOR_AUDIENCE` | as in `.env.example` |
   | `API_CORS_ORIGINS` | `https://<web>.vercel.app,https://<vendor>.vercel.app` (the deployed frontend origins) |
-  | `SMTP_HOST` `SMTP_PORT` `SMTP_FROM` | mail config |
+  | `RESEND_API_KEY` **or** `BREVO_API_KEY` | **One is required.** Railway blocks outbound SMTP on every plan below Pro (`:465` and `:587` both `ETIMEDOUT`), so nodemailer cannot deliver from here — mail must go over HTTPS. Resend needs the `SMTP_FROM` *domain* DNS-verified (SPF + DKIM) or it 403s; Brevo needs only the single *address* verified by clicking a link it emails there, so it works without DNS access. |
+  | `SMTP_FROM` | e.g. `Procure To Pay <no-reply@cgbindia.com>` — the from address on every transport |
+  | `APP_BASE_URL` | Public web origin (e.g. `https://vendor.artboxsolutions.ai`) — builds the invite/set-password links. Defaults to `http://localhost:3000`, which silently produces dead links. |
   | `OCR_API_URL` | `http://ocr.railway.internal:8000` (private URL of service B) |
 
   Do NOT set `API_INTERNAL_URL` here — that's a frontend var.

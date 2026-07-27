@@ -68,10 +68,21 @@ const EnvSchema = z.object({
   // with. Requests without it are rejected.
   EMAIL_INBOUND_WEBHOOK_SECRET: z.string().default('dev-email-inbound-secret'),
 
-  // Outbound transactional email (vendor invites, lifecycle notices). SMTP.
-  // When SMTP_USER/SMTP_PASS are unset the MailService runs in "log" mode:
-  // it logs the message + link instead of sending, so the flow works locally
-  // without real credentials (mirrors the sandbox-provider pattern above).
+  // Outbound transactional email (vendor invites, lifecycle notices).
+  // MailService picks the first transport that is configured, in this order:
+  //   1. RESEND_API_KEY → Resend HTTP API over :443. Needs the SMTP_FROM domain
+  //      verified in Resend via DNS (SPF + DKIM); best deliverability.
+  //   2. BREVO_API_KEY  → Brevo HTTP API over :443. Needs only the single
+  //      SMTP_FROM address verified by clicking a link Brevo emails to it — no
+  //      DNS access required, so this is the fastest path to working mail.
+  //   3. SMTP_USER + SMTP_PASS → direct SMTP. Local dev only in practice: most
+  //      PaaS providers block :25/:465/:587 (Railway allows SMTP on Pro only),
+  //      so this times out with ETIMEDOUT when hosted.
+  //   4. none of the above → "log" mode: the message + link are logged, not
+  //      sent, so the flow works locally without credentials.
+  // The active transport is logged at boot.
+  RESEND_API_KEY: z.string().default(''),
+  BREVO_API_KEY: z.string().default(''),
   SMTP_HOST: z.string().default('smtp.gmail.com'),
   SMTP_PORT: z.coerce.number().int().default(465),
   SMTP_USER: z.string().default(''),

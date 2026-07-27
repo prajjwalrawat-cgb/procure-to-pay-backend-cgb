@@ -1,8 +1,9 @@
-import { Injectable, type OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Queue, type ConnectionOptions } from 'bullmq';
 import IORedis from 'ioredis';
 
+import { guardBullMq } from '../../common/queue/queue-guard';
 import type { Env } from '../../config/env';
 
 export const OCR_QUEUE = 'ocr';
@@ -16,6 +17,7 @@ export interface OcrJobData {
 /** Enqueues OCR jobs (Master Context §2 — BullMQ on Redis). */
 @Injectable()
 export class OcrService implements OnModuleDestroy {
+  private readonly logger = new Logger(OcrService.name);
   private readonly connection: IORedis;
   private readonly queue: Queue;
 
@@ -26,6 +28,9 @@ export class OcrService implements OnModuleDestroy {
     this.queue = new Queue(OCR_QUEUE, {
       connection: this.connection as unknown as ConnectionOptions,
     });
+    guardBullMq(OCR_QUEUE, { connection: this.connection, queue: this.queue }, (m) =>
+      this.logger.error(m),
+    );
   }
 
   /** Submit a document for OCR; ~2.5s mock latency so the UI shows OCR_PENDING. */
