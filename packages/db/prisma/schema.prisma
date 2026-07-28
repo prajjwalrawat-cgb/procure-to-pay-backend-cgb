@@ -444,6 +444,10 @@ model Tenant {
   // Slice 10a — integration policy knobs (Master Context §9).
   ocrConfidenceFloorPct      Decimal @default("80") @map("ocr_confidence_floor_pct") @db.Decimal(5, 2)
   einvoiceTurnoverThreshold  Decimal @default("50000000") @map("einvoice_turnover_threshold") @db.Decimal(18, 4)
+  // Slice 12 — inventory policy knobs. An internal issue at or above either
+  // threshold requires an approver (business rule 3).
+  inventoryIssueApprovalQty      Int     @default(50) @map("inventory_issue_approval_qty")
+  inventoryIssueApprovalValue    Decimal @default("25000") @map("inventory_issue_approval_value") @db.Decimal(18, 4)
   plants             Plant[]
   createdAt          DateTime @default(now()) @db.Timestamptz(6)
 
@@ -482,6 +486,12 @@ model Tenant {
   vendorSuspensions VendorSuspension[]
   vendorChangeRequests VendorChangeRequest[]
   contracts         Contract[]
+  // Slice 12 inventory
+  products             Product[]
+  locations            Location[]
+  stockLedgerEntries   StockLedgerEntry[]
+  importBatches        ImportBatch[]
+  importRows           ImportRow[]
 }
 
 // Per-tenant 3-way match tolerances (Master Context §9 defaults, overridable).
@@ -693,6 +703,7 @@ model Vendor {
   suspensions VendorSuspension[]
   changeRequests VendorChangeRequest[]
   contracts Contract[]
+  inventoryLedgerEntries StockLedgerEntry[]
 
   @@unique([tenantId, code])
   @@index([tenantId])
@@ -914,6 +925,7 @@ model PurchaseOrder {
   invoices          Invoice[]
   comments          PurchaseOrderComment[]
   budgetCommitments BudgetCommitment[]
+  inventoryLedgerEntries StockLedgerEntry[]
 
   @@unique([tenantId, number])
   @@index([tenantId])
@@ -1005,6 +1017,7 @@ model Item {
   requisitionLines RequisitionLine[]
   poLines          PurchaseOrderLine[]
   stockLedger      StockLedger[]
+  inventoryProducts Product[]
 
   @@unique([tenantId, skuCode])
   @@index([tenantId])
@@ -1369,6 +1382,7 @@ model Invoice {
   comments       InvoiceComment[]
   paymentItems   PaymentRunItem[]
   paymentRecords PaymentRecord[]
+  inventoryLedgerEntries StockLedgerEntry[]
 
   @@index([tenantId, assignedToId])
 
@@ -2972,4 +2986,270 @@ model PaymentSubmissionIntent {
   @@unique([paymentRunId, attemptNo])
   @@index([tenantId])
   @@index([paymentRunId])
+}
+
+// ══════════════════════ Inventory Management (Slice 12) ══════════════════════
+//
+// A native warehouse inventory module (ADR-036), reverse-engineered from a real
+// operating gifting-warehouse workbook — NOT a generic e-commerce schema.
+//
+// Design principle: ONE insert-only, immutable ledger (`StockLedgerEntry`).
+// Every physical movement writes exactly one row; nothing is updated or deleted.
+// Corrections are compensating entries linked via `correctionOfId`. Current
+// stock is SUM(qty * direction) grouped by (product_id, location_id).
+//
+// Relationship to Slice 5's `StockLedger`: they are deliberately parallel and
+// independent. `StockLedger` is the *financial* ledger — Decimal quantities,
+// snapshot running balances, weighted-average/FIFO valuation, item+plant scoped,
+// written by GRN posting. `StockLedgerEntry` is the *physical* warehouse ledger —
+// integer piece counts, product+location scoped, spanning vendor receipts,
+// internal issues, D2C order fulfilment and returns. Neither can express the
+// other, so nothing auto-posts between them; inventory receipts merely validate
+// `purchaseOrderId` against the PO module and may carry an informational
+// `grnId`/`rmaId` back-reference.
+
+/// Every physical movement shape observed across the nine source sheets.
+enum StockTxnType {
+  VENDOR_INWARD // Vendor Inward Sheet — GRN receipt against a PO
+  VENDOR_RETURN_OUT // Vendor Outward Sheet — gate-pass return (e.g. for repair)
+  SAMPLE_INWARD // Sample Inward Sheet — non-stock sample receipt
+  INTERNAL_ISSUE // Photoshoot / Sales / Other issue to a person or place
+  INTERNAL_RETURN // partial or full return against an INTERNAL_ISSUE
+  CUSTOMER_ORDER_OUT // Daily Order Report — Amazon/Shopify dispatch
+  CUSTOMER_RETURN_IN // Return Inventory — customer return intake
+  DAMAGE_WRITE_OFF // damage removed from sellable stock
+  ADJUSTMENT // opening stock, migration seeding, stock counts, corrections
+}
+
+/// Which internal team an INTERNAL_ISSUE went to (source sheets are per-team).
+enum IssueDept {
+  PHOTOSHOOT
+  SALES
+  OTHER
+}
+
+/// Inventory-side QC verdict. Deliberately simpler than Slice 5's `GrnQcStatus`
+/// (which drives AQL sampling plans) — the source sheet only records Ok/Rejected.
+enum QcStatus {
+  PENDING
+  OK
+  REJECTED
+}
+
+/// Warehouse product catalogue. Distinct from the `Item` procurement master:
+/// `Item` mandates hsnCode/gstRate/primaryUom, which none of the 625 legacy rows
+/// carry. `itemId` optionally bridges a warehouse SKU to its procurement Item.
+model Product {
+  id                   String    @id
+  tenantId             String    @map("tenant_id") @db.Uuid
+  /// Auto-generated {CATEGORY_PREFIX}-{sequence}, e.g. HD-000123. Supersedes the
+  /// legacy Product ID / SKU columns, which are "N/A" on all 625 source rows.
+  code                 String
+  legacyProductId      String?   @map("legacy_product_id")
+  legacySku            String?   @map("legacy_sku")
+  name                 String
+  /// Required going forward; legacy nulls are backfilled as "Uncategorized"
+  /// (601 of 625 source rows have no category).
+  category             String
+  colour               String?
+  imageUrl             String?   @map("image_url")
+  unit                 String    @default("pcs")
+  reorderPoint         Int?      @map("reorder_point")
+  expiryOrWarrantyDate DateTime? @map("expiry_or_warranty_date") @db.Timestamptz(6)
+  /// Product-level free-text notes, carried over verbatim at migration. Distinct
+  /// from StockLedgerEntry.remark, which is per-transaction.
+  remark               String?
+  active               Boolean   @default(true)
+  /// Optional bridge to the Slice 4 procurement item master.
+  itemId               String?   @map("item_id")
+  /// Traceability back to the bulk upload that created this product, if any.
+  createdFromImportBatchId String? @map("created_from_import_batch_id")
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  /// Powers "Last Updated" — the ledger service touches this on every entry.
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant        Tenant             @relation(fields: [tenantId], references: [id])
+  item          Item?              @relation(fields: [itemId], references: [id])
+  ledgerEntries StockLedgerEntry[]
+
+  @@unique([tenantId, code])
+  /// Migration matching key from the legacy sheet — verified unique across all
+  /// 625 source rows. A partial index in the migration SQL closes the NULL-colour
+  /// hole that Postgres would otherwise leave open.
+  @@unique([tenantId, name, colour])
+  @@index([tenantId])
+  @@index([tenantId, category])
+  @@index([tenantId, active])
+}
+
+/// Physical storage location. Stock lives in several locations per SKU
+/// simultaneously, recorded today as free text ("Confrance Room-600 & -B2-205").
+/// `parentId` allows optional room -> rack -> bin nesting.
+model Location {
+  id       String  @id
+  tenantId String  @map("tenant_id") @db.Uuid
+  name     String
+  rackNo   String? @map("rack_no")
+  parentId String? @map("parent_id")
+  active   Boolean @default(true)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant        Tenant             @relation(fields: [tenantId], references: [id])
+  parent        Location?          @relation("LocationTree", fields: [parentId], references: [id])
+  children      Location[]         @relation("LocationTree")
+  ledgerEntries StockLedgerEntry[]
+
+  @@unique([tenantId, name, rackNo])
+  @@index([tenantId])
+  @@index([parentId])
+}
+
+/// THE immutable ledger. Insert-only: no update or delete route is exposed
+/// anywhere. Mistakes are corrected with an offsetting ADJUSTMENT entry that
+/// points back via `correctionOfId`.
+model StockLedgerEntry {
+  id         String       @id
+  tenantId   String       @map("tenant_id") @db.Uuid
+  productId  String       @map("product_id")
+  locationId String       @map("location_id")
+  txnType    StockTxnType @map("txn_type")
+  /// Always positive; the sign lives in `direction`.
+  qty        Int
+  /// +1 or -1, denormalised so current stock is a plain SUM(qty * direction).
+  direction  Int
+
+  // ── vendor-side refs (VENDOR_INWARD / VENDOR_RETURN_OUT / SAMPLE_INWARD) ──
+  vendorId        String?   @map("vendor_id")
+  purchaseOrderId String?   @map("purchase_order_id")
+  invoiceId       String?   @map("invoice_id")
+  /// Informational back-reference to a formal Slice 5 GoodsReceiptNote / RMA.
+  grnId           String?   @map("grn_id")
+  rmaId           String?   @map("rma_id")
+  grnNo           String?   @map("grn_no")
+  gatePassNo      String?   @map("gate_pass_no")
+  rate            Decimal?  @db.Decimal(18, 4)
+  taxPct          Decimal?  @map("tax_pct") @db.Decimal(6, 4)
+  qcStatus        QcStatus? @map("qc_status")
+  damageQty       Int?      @default(0) @map("damage_qty")
+
+  // ── internal issue refs ──────────────────────────────────────────────────
+  issueDept           IssueDept? @map("issue_dept")
+  /// Team member / sales person / place the stock went to.
+  issuedToName        String?    @map("issued_to_name")
+  approvedById        String?    @map("approved_by_id")
+  /// Running unreturned balance for this issue. Status is derived: > 0 = Open.
+  balanceQty          Int?       @map("balance_qty")
+  tentativeReturnDate DateTime?  @map("tentative_return_date") @db.Timestamptz(6)
+  /// Set on INTERNAL_RETURN rows — the INTERNAL_ISSUE they discharge.
+  issueEntryId        String?    @map("issue_entry_id")
+
+  // ── customer order refs ──────────────────────────────────────────────────
+  platform     String? // Amazon / Shopify / etc
+  orderId      String?  @map("order_id")
+  customerName String?  @map("customer_name")
+  courierName  String?  @map("courier_name")
+  trackingId   String?  @map("tracking_id")
+  paymentMode  String?  @map("payment_mode")
+  orderValue   Decimal? @map("order_value") @db.Decimal(18, 4)
+
+  // ── customer return refs ─────────────────────────────────────────────────
+  returnReason     String?  @map("return_reason")
+  productCondition String?  @map("product_condition")
+  /// Null until decided; false routes the qty to DAMAGE_WRITE_OFF.
+  restockDecision  Boolean? @map("restock_decision")
+
+  /// Immutability escape hatch (business rule 6) — the entry this one offsets.
+  correctionOfId String?  @map("correction_of_id")
+  performedById  String   @map("performed_by_id")
+  remark         String?
+  txnDate        DateTime @default(now()) @map("txn_date") @db.Timestamptz(6)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  /// Set when this row was created via bulk upload.
+  importBatchId String? @map("import_batch_id")
+  /// "<sheet>:<row>" — traceability back to the original file row.
+  sourceRowRef  String? @map("source_row_ref")
+
+  tenant        Tenant             @relation(fields: [tenantId], references: [id])
+  product       Product            @relation(fields: [productId], references: [id])
+  location      Location           @relation(fields: [locationId], references: [id])
+  vendor        Vendor?            @relation(fields: [vendorId], references: [id])
+  purchaseOrder PurchaseOrder?     @relation(fields: [purchaseOrderId], references: [id])
+  invoice       Invoice?           @relation(fields: [invoiceId], references: [id])
+  correctionOf  StockLedgerEntry?  @relation("LedgerCorrection", fields: [correctionOfId], references: [id])
+  corrections   StockLedgerEntry[] @relation("LedgerCorrection")
+  issueEntry    StockLedgerEntry?  @relation("IssueReturn", fields: [issueEntryId], references: [id])
+  returns       StockLedgerEntry[] @relation("IssueReturn")
+  importBatch   ImportBatch?       @relation(fields: [importBatchId], references: [id])
+
+  @@unique([importBatchId, sourceRowRef])
+  @@index([tenantId])
+  @@index([productId, locationId])
+  @@index([txnType, txnDate])
+  @@index([tenantId, txnType, txnDate])
+  @@index([tenantId, orderId])
+  @@index([issueEntryId])
+  @@index([purchaseOrderId])
+}
+
+// ─────────────────── Bulk Upload (Slice 12, first-class) ───────────────────
+// The legacy Excel migration is the first use, but bulk upload is a permanent
+// capability: staged, validated and resumable rather than a one-off script.
+
+enum ImportType {
+  PRODUCT_MASTER
+  STOCK_LEDGER
+}
+
+enum ImportRowStatus {
+  PENDING
+  VALID
+  CREATED
+  UPDATED
+  ERROR
+  SKIPPED // e.g. quarantined pending manual product match
+}
+
+model ImportBatch {
+  id           String     @id
+  tenantId     String     @map("tenant_id") @db.Uuid
+  importType   ImportType @map("import_type")
+  fileName     String     @map("file_name")
+  uploadedById String     @map("uploaded_by_id")
+  /// PROCESSING | COMPLETED | COMPLETED_WITH_ERRORS | FAILED
+  status       String     @default("PROCESSING")
+  totalRows    Int        @default(0) @map("total_rows")
+  successRows  Int        @default(0) @map("success_rows")
+  errorRows    Int        @default(0) @map("error_rows")
+  skippedRows  Int        @default(0) @map("skipped_rows")
+  errorMessage String?    @map("error_message")
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  completedAt  DateTime?  @map("completed_at") @db.Timestamptz(6)
+
+  tenant        Tenant             @relation(fields: [tenantId], references: [id])
+  rows          ImportRow[]
+  ledgerEntries StockLedgerEntry[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+}
+
+model ImportRow {
+  id            String          @id
+  tenantId      String          @map("tenant_id") @db.Uuid
+  batchId       String          @map("batch_id")
+  rowNumber     Int             @map("row_number")
+  /// Original row, untouched — enables re-processing without re-uploading.
+  rawData       Json            @map("raw_data")
+  status        ImportRowStatus @default(PENDING)
+  productId     String?         @map("product_id")
+  ledgerEntryId String?         @map("ledger_entry_id")
+  errorMessage  String?         @map("error_message")
+  createdAt     DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant Tenant      @relation(fields: [tenantId], references: [id])
+  batch  ImportBatch @relation(fields: [batchId], references: [id])
+
+  @@index([batchId, status])
+  @@index([tenantId])
 }

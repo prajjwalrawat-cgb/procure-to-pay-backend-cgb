@@ -22,6 +22,7 @@ import { buildLoggerParams } from './config/logger';
 import { BudgetsModule } from './budgets/budgets.module';
 import { GrnModule } from './grn/grn.module';
 import { HealthModule } from './health/health.module';
+import { InventoryModule } from './inventory/inventory.module';
 import { InvoicesModule } from './invoices/invoices.module';
 import { ItemMasterModule } from './item-master/item-master.module';
 import { PaymentRunsModule } from './payment-runs/payment-runs.module';
@@ -84,6 +85,7 @@ import { ComplianceModule } from './compliance/compliance.module';
     RequisitionsModule,
     PurchaseOrdersModule,
     GrnModule,
+    InventoryModule,
     SourcingModule,
     VendorsModule,
     AnalyticsModule,

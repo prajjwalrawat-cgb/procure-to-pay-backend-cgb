@@ -138,6 +138,16 @@ export const PERMISSIONS = {
   INTEGRATION_MANAGE: 'integration:manage', // set credentials, trigger jobs
   INVOICE_INTAKE_MANAGE: 'invoice:intake_manage', // email queues + manual OCR review
   COMPLIANCE_RUN: 'compliance:run', // trigger GSTR-2B recon / IRN validate
+
+  // Inventory management (Slice 12). Receipts and QC deliberately reuse the
+  // Slice 5 stores/QC permissions rather than minting parallel ones — the same
+  // people do both jobs.
+  INVENTORY_READ: 'inventory:read', // stock overview, ledger, reports
+  INVENTORY_PRODUCT_MANAGE: 'inventory:product_manage', // product + location catalogue
+  INVENTORY_IMPORT: 'inventory:import', // bulk upload + quarantine resolution
+  INVENTORY_ISSUE: 'inventory:issue', // internal issue / return (photoshoot, sales, other)
+  INVENTORY_FULFILL: 'inventory:fulfill', // customer order-out + customer return intake
+  INVENTORY_ADJUST: 'inventory:adjust', // damage write-off, adjustments, corrections
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -156,6 +166,21 @@ const PROCURE_READ: Permission[] = [
   PERMISSIONS.GRN_READ,
   PERMISSIONS.RMA_READ,
   PERMISSIONS.STOCK_READ,
+  PERMISSIONS.INVENTORY_READ,
+];
+
+/**
+ * Warehouse floor authority (Slice 12). Receiving and QC are NOT here — they
+ * stay on the Slice 5 `stores:receive_goods` / `qc:inspect` permissions so a
+ * single grant governs both the formal GRN flow and the inventory ledger.
+ */
+const INVENTORY_OPS: Permission[] = [
+  PERMISSIONS.INVENTORY_READ,
+  PERMISSIONS.INVENTORY_PRODUCT_MANAGE,
+  PERMISSIONS.INVENTORY_IMPORT,
+  PERMISSIONS.INVENTORY_ISSUE,
+  PERMISSIONS.INVENTORY_FULFILL,
+  PERMISSIONS.INVENTORY_ADJUST,
 ];
 
 /** Raise + manage own requisitions — Slice 4. */
@@ -271,6 +296,7 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     PERMISSIONS.REQUISITION_CANCEL,
     PERMISSIONS.ITEM_CREATE,
     PERMISSIONS.ITEM_UPDATE,
+    ...INVENTORY_OPS,
   ],
   [ROLES.REQUESTER]: [
     PERMISSIONS.INVOICE_READ_OWN,
@@ -318,6 +344,7 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     PERMISSIONS.REQUISITION_UPDATE,
     PERMISSIONS.REQUISITION_SUBMIT,
     PERMISSIONS.REQUISITION_CANCEL,
+    ...INVENTORY_OPS,
   ],
   [ROLES.PLANT_HEAD]: [
     PERMISSIONS.ANALYTICS_READ,
@@ -336,6 +363,9 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     PERMISSIONS.RMA_MANAGE,
     ...PROCURE_READ,
     ...CONTRACT_READ_ONLY,
+    // Plant head authorises high-value internal issues and signs off write-offs.
+    PERMISSIONS.INVENTORY_ISSUE,
+    PERMISSIONS.INVENTORY_ADJUST,
   ],
   [ROLES.FINANCE_OFFICER]: [
     PERMISSIONS.ANALYTICS_READ,
@@ -384,6 +414,8 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     PERMISSIONS.STORES_RECEIVE_GOODS,
     PERMISSIONS.RMA_MANAGE,
     ...PROCURE_READ,
+    // The warehouse floor runs the inventory module day to day (Slice 12).
+    ...INVENTORY_OPS,
   ],
   [ROLES.QC_OFFICER]: [
     PERMISSIONS.APPROVAL_MATRIX_READ,

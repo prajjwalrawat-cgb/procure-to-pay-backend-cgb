@@ -95,6 +95,12 @@ export const ID_PREFIX = {
   inboundEmail: 'iem',
   // Slice 10b banking
   paymentSubmissionIntent: 'psi',
+  // Slice 12 inventory
+  product: 'prd',
+  location: 'loc',
+  stockLedgerEntry: 'sle',
+  importBatch: 'imb',
+  importRow: 'imr',
 } as const;
 
 export type EntityKind = keyof typeof ID_PREFIX;

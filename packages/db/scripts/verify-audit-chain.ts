@@ -62,8 +62,11 @@ async function main(): Promise<void> {
                 lag(a.hash_current) OVER w AS prev_link,
                 encode(
                   sha256(
-                    (coalesce(a.hash_previous, '') ||
-                     (to_jsonb(a) - 'hash_current' - 'hash_previous')::text)::bytea
+                    convert_to(
+                      coalesce(a.hash_previous, '') ||
+                      (to_jsonb(a) - 'hash_current' - 'hash_previous')::text,
+                      'UTF8'
+                    )
                   ), 'hex'
                 ) AS recomputed
          FROM "AuditLog" a

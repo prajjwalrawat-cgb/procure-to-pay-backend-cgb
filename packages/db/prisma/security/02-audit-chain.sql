@@ -34,10 +34,21 @@ BEGIN
   -- digest(text,'sha256'): pg_catalog is always on the search_path, whereas
   -- pgcrypto may live in a non-default schema (e.g. Supabase installs it in
   -- "extensions"), which made unqualified digest() fail to resolve inside this
-  -- trigger. sha256((t)::bytea) is byte-identical to digest(t,'sha256'), so the
-  -- existing hash chain stays valid.
+  -- trigger.
+  --
+  -- convert_to(t,'UTF8'), NOT t::bytea. The text->bytea *cast* interprets
+  -- backslash escapes, and row_json is JSON text: any audited value containing
+  -- a double quote produces \" in that JSON, which is an invalid bytea escape
+  -- and made the whole INSERT fail with 22P02. It surfaced on a product named
+  -- 'Umbrellas (Pcs.) 24" x 8" 2 Fold', but it would break any audited row with
+  -- a quote (or a backslash) in any field.
+  --
+  -- convert_to() encodes the characters literally, so for text without escape
+  -- sequences it is byte-identical to the old cast and existing chains stay
+  -- valid; the only rows whose hash changes are ones that could not be written
+  -- at all before.
   NEW.hash_current := encode(
-    sha256((coalesce(NEW.hash_previous, '') || row_json)::bytea),
+    sha256(convert_to(coalesce(NEW.hash_previous, '') || row_json, 'UTF8')),
     'hex'
   );
 

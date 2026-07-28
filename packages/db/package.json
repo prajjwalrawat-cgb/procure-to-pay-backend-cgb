@@ -20,6 +20,8 @@
     "migrate:dev": "prisma migrate dev && pnpm run security:apply",
     "migrate:deploy": "prisma migrate deploy && pnpm run security:apply",
     "security:apply": "tsx scripts/apply-security.ts",
+    "legacy:parse": "tsx scripts/parse-legacy-workbook.ts",
+    "test": "vitest run --passWithNoTests",
     "seed": "tsx seed/star-cement.ts",
     "seed:slice1": "tsx seed/slice1.ts",
     "seed:slice2": "tsx seed/slice2.ts",
@@ -51,6 +53,7 @@
     "@procureflow/shared": "workspace:*",
     "argon2": "^0.40.3",
     "decimal.js": "^10.4.3",
+    "exceljs": "^4.4.0",
     "ulid": "^2.3.0"
   },
   "devDependencies": {
@@ -59,6 +62,7 @@
     "prisma": "5.16.1",
     "tsup": "^8.1.0",
     "tsx": "^4.15.6",
-    "typescript": "5.4.5"
+    "typescript": "5.4.5",
+    "vitest": "^1.6.0"
   }
 }

@@ -49,7 +49,9 @@ DECLARE
     -- Slice 10a integrations
     'TenantIntegrationCredential', 'IntegrationUsageLog', 'InboundEmail',
     -- Slice 10b banking
-    'PaymentSubmissionIntent'
+    'PaymentSubmissionIntent',
+    -- Slice 12 inventory (native warehouse module)
+    'Product', 'Location', 'StockLedgerEntry', 'ImportBatch', 'ImportRow'
   ];
 BEGIN
   FOREACH t IN ARRAY tenanted_tables LOOP
@@ -87,3 +89,14 @@ GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA extensions TO procureflow_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON "Session" TO procureflow_app;
 GRANT SELECT ON "Role" TO procureflow_app;
 GRANT SELECT ON "Tenant" TO procureflow_app;
+
+-- Slice 12 — derived stock summary. Read-only; tenant isolation comes from the
+-- view's `security_invoker` setting plus the RLS policy on StockLedgerEntry,
+-- and the service layer filters on tenant_id as well.
+DO $$
+BEGIN
+  EXECUTE 'GRANT SELECT ON product_stock_summary TO procureflow_app';
+EXCEPTION WHEN undefined_table THEN
+  RAISE NOTICE 'product_stock_summary not present yet — run `prisma migrate deploy` first.';
+END
+$$;

@@ -41,14 +41,21 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     return this.als.getStore()?.tenantId;
   }
 
+  /**
+   * `options` forwards Prisma's interactive-transaction settings. The 5s default
+   * suits an HTTP handler but not bulk work (a 625-row import blows straight
+   * through it), so background jobs pass a longer `timeout` — and should still
+   * chunk, so no single transaction holds locks for long.
+   */
   async runInTenantContext<T>(
     tenantId: string,
     fn: (tx: Prisma.TransactionClient) => Promise<T>,
+    options?: { timeout?: number; maxWait?: number },
   ): Promise<T> {
     return this.$transaction(async (tx) => {
       // Parameterised set_config (local to this tx) — no SQL injection surface.
       await tx.$executeRaw`SELECT set_config('app.tenant_id', ${tenantId}, true)`;
       return this.als.run({ tenantId, tx }, () => fn(tx));
-    });
+    }, options);
   }
 }

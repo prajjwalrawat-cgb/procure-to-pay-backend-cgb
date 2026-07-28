@@ -189,7 +189,42 @@ export const DOMAIN_EVENTS = {
   PAYMENT_BATCH_SUBMITTED: 'PaymentBatchSubmitted',
   PAYMENT_BANK_CONFIRMED: 'PaymentBankConfirmed',
   PAYMENT_ITEM_FAILED: 'PaymentItemFailed',
+  // Slice 12 — inventory management
+  INVENTORY_ENTRY_POSTED: 'InventoryEntryPosted',
+  INVENTORY_LOW_STOCK: 'InventoryLowStock',
+  INVENTORY_QC_REJECTED: 'InventoryQcRejected',
+  INVENTORY_IMPORT_COMPLETED: 'InventoryImportCompleted',
 } as const;
+
+/** Emitted once per immutable ledger row (Slice 12). */
+export interface InventoryEntryPostedEvent {
+  entryId: string;
+  productId: string;
+  locationId: string;
+  txnType: string;
+  qty: number;
+  direction: number;
+  performedById: string;
+}
+
+/** Raised when a movement leaves a product at or below its reorder point. */
+export interface InventoryLowStockEvent {
+  productId: string;
+  productCode: string;
+  currentStock: number;
+  reorderPoint: number;
+}
+
+/** A bulk import batch finished — carries the row disposition tallies. */
+export interface InventoryImportCompletedEvent {
+  batchId: string;
+  importType: string;
+  status: string;
+  totalRows: number;
+  successRows: number;
+  errorRows: number;
+  skippedRows: number;
+}
 
 export interface InboundEmailReceivedEvent {
   inboundEmailId: string;

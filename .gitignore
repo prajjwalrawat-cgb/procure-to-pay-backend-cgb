@@ -13,6 +13,10 @@ build/
 .env
 .env.local
 .env.*.local
+# Any other .env variant (backups, per-environment copies) — these hold live
+# credentials. .env.example is the one intentional exception.
+.env.*
+!.env.example
 *.pem
 keys/
 
@@ -42,3 +46,9 @@ packages/db/prisma/*.db
 # Word lock files
 ~$*
 docs/**/~$*
+
+# Source workbooks: real operational data (customer names, staff emails).
+# Keep local — never in git history.
+Docs/
+*.xlsx
+*.xlsm
