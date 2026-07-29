@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import {
   AdjustmentInputSchema,
   CustomerReturnInputSchema,
@@ -23,6 +32,7 @@ import {
   type DamageWriteOffInput,
   type IssueCreateInput,
   type IssueReturnInput,
+  type LedgerEntryView,
   type LedgerQuery,
   type LedgerResponse,
   type LocationCreateInput,
@@ -283,6 +293,19 @@ export class InventoryController {
     @Query(new ZodValidationPipe(LedgerQuerySchema)) q: LedgerQuery,
   ): Promise<LedgerResponse> {
     return this.query.ledgerEntries(q);
+  }
+
+  /**
+   * One ledger entry. Read-only — this is what the correction flow loads so it
+   * can pre-fill the offsetting ADJUSTMENT; there is deliberately still no way
+   * to update or delete the entry itself.
+   */
+  @Get('ledger/:id')
+  @RequirePermission(PERMISSIONS.INVENTORY_READ)
+  async ledgerEntry(@Param('id') id: string): Promise<LedgerEntryView> {
+    const entry = await this.query.ledgerEntry(id);
+    if (!entry) throw new NotFoundException('Ledger entry not found');
+    return entry;
   }
 
   @Get('pending-dispositions')

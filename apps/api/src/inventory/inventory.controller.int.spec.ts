@@ -41,6 +41,7 @@ describe('InventoryController (integration)', () => {
     productDetail: vi.fn().mockResolvedValue({ id: 'prd_1', code: 'HD-000001' }),
     productStock: vi.fn().mockResolvedValue({ productId: 'prd_1', total: 950, locations: [] }),
     ledgerEntries: vi.fn().mockResolvedValue({ items: [], nextCursor: null, totalEstimate: 0 }),
+    ledgerEntry: vi.fn().mockResolvedValue({ id: 'sle_1', productId: 'prd_1', signedQty: -12 }),
     pendingDispositions: vi.fn().mockResolvedValue({ qcPending: [], restockPending: [] }),
   };
   const receipts = {
@@ -118,6 +119,19 @@ describe('InventoryController (integration)', () => {
 
     it('rejects an unknown txnType filter with 422', async () => {
       await request(app.getHttpServer()).get('/inventory/ledger?txnType=TELEPORT').expect(422);
+    });
+
+    it('returns one ledger entry so a correction can be pre-filled', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/inventory/ledger/sle_1')
+        .expect(200);
+      expect(query.ledgerEntry).toHaveBeenCalledWith('sle_1');
+      expect(res.body.signedQty).toBe(-12);
+    });
+
+    it('404s for a ledger entry that does not exist', async () => {
+      query.ledgerEntry.mockResolvedValueOnce(null);
+      await request(app.getHttpServer()).get('/inventory/ledger/sle_nope').expect(404);
     });
   });
 
@@ -281,6 +295,55 @@ describe('InventoryController (integration)', () => {
       await request(app.getHttpServer())
         .patch('/inventory/products/prd_1')
         .send({ name: 'Renamed' })
+        .expect(200);
+    });
+
+    it('reading one entry does not make it writable', async () => {
+      // GET /inventory/ledger/:id was added for the correction flow; the same
+      // path must still reject every write verb.
+      const server = app.getHttpServer();
+      await request(server).get('/inventory/ledger/sle_1').expect(200);
+      await request(server).patch('/inventory/ledger/sle_1').send({ qty: 1 }).expect(404);
+      await request(server).delete('/inventory/ledger/sle_1').expect(404);
+    });
+  });
+
+  /** Backs the product edit drawer: descriptive fields only, never stock. */
+  describe('catalogue edits', () => {
+    it('updates the descriptive fields of a product', async () => {
+      await request(app.getHttpServer())
+        .patch('/inventory/products/prd_1')
+        .send({
+          name: 'Ceramic Mug',
+          category: 'Drinkware',
+          colour: 'White',
+          unit: 'pcs',
+          reorderPoint: 25,
+          remark: 'Reordered quarterly',
+        })
+        .expect(200);
+      expect(products.update).toHaveBeenCalledWith(
+        'prd_1',
+        expect.objectContaining({ name: 'Ceramic Mug', reorderPoint: 25 }),
+        'usr_1',
+      );
+    });
+
+    it('rejects an unparseable image URL', async () => {
+      await request(app.getHttpServer())
+        .patch('/inventory/products/prd_1')
+        .send({ imageUrl: 'not-a-url' })
+        .expect(422);
+    });
+
+    it('retires and reactivates a product without touching its stock', async () => {
+      const server = app.getHttpServer();
+      await request(server).post('/inventory/products/prd_1/deactivate').expect(201);
+      expect(products.deactivate).toHaveBeenCalledWith('prd_1', 'usr_1');
+
+      await request(server)
+        .patch('/inventory/products/prd_1')
+        .send({ active: true })
         .expect(200);
     });
   });
