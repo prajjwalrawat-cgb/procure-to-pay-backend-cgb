@@ -9,6 +9,7 @@ export * from './constants/vendor-status';
 export * from './constants/contract-status';
 export * from './constants/inventory-status';
 export * from './constants/currency';
+export * from './constants/gst-states';
 export * from './schemas/auth';
 export * from './schemas/invoice';
 export * from './schemas/approvals';

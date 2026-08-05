@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { GST_STATES } from '../constants/gst-states';
 import {
   CHANGE_REQUEST_TYPE,
   EMPLOYEE_COUNT_BRACKET,
@@ -17,13 +18,40 @@ const decimalString = z.string().regex(/^-?\d+(\.\d+)?$/, 'must be a decimal str
 const gstinRegex = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]{3}$/;
 const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
+/* Every user-facing field carries an explicit message. Zod's stock text ("Invalid
+ * email", "String must contain exactly 2 character(s)") reaches the vendor verbatim
+ * via problem+json `context.issues`, so it has to read as instructions, not as a
+ * type error. The two most-confused fields say what the *right* value looks like:
+ * PAN is routinely filled with the 15-char GSTIN, and stateCode with "DEL"/"MH"
+ * instead of the 2-digit GST state code the tax engine keys off. */
+const EMAIL_MESSAGE = 'Enter a valid email address, e.g. name@company.com';
+const PAN_MESSAGE =
+  'PAN must be 10 characters: 5 letters, 4 digits, 1 letter (e.g. AFMFS3755D). If you have a 15-character GSTIN, the PAN is characters 3–12 of it';
+const GSTIN_MESSAGE =
+  'GSTIN must be 15 characters: 2-digit state code, 10-character PAN, then 3 more (e.g. 07AFMFS3755D1ZS)';
+const STATE_CODE_MESSAGE =
+  'Select your state — this must be the 2-digit GST state code (e.g. 07 for Delhi), not the state name';
+
+/* Checked against the real code list, not just `length(2)`: a well-formed but
+ * wrong code ("AB", or a digit typo) passes a length check and then silently
+ * picks the wrong GST heads downstream in determineTaxKind. Retired codes stay
+ * valid so re-saving a legacy vendor record doesn't fail. */
+const GST_STATE_CODES = new Set(GST_STATES.map((s) => s.code));
+const IFSC_MESSAGE = 'IFSC must be exactly 11 characters, e.g. HDFC0001234';
+
 // ── Buyer: invite ────────────────────────────────────────────────────────────
 
 export const InviteVendorInputSchema = z.object({
-  legalEntityName: z.string().min(2).max(200),
-  email: z.string().email(),
-  name: z.string().min(2).max(200),
-  categoryKey: z.string().min(1),
+  legalEntityName: z
+    .string()
+    .min(2, 'Enter the vendor’s registered legal entity name (at least 2 characters)')
+    .max(200, 'Legal entity name cannot exceed 200 characters'),
+  email: z.string().email(EMAIL_MESSAGE),
+  name: z
+    .string()
+    .min(2, 'Display name must be at least 2 characters')
+    .max(200, 'Display name cannot exceed 200 characters'),
+  categoryKey: z.string().min(1, 'Select a category'),
   source: z.enum(ONBOARDING_INVITATION_SOURCE).default('BUYER_INVITE_SPOT'),
   rfqId: z.string().nullish(),
 });
@@ -35,12 +63,18 @@ export const SelfRegistrationInputSchema = z.object({
   /** Which tenant this vendor is registering with — carried by the buyer-issued
    *  registration link. Required so a public signup can never land in an
    *  arbitrary/defaulted tenant (audit: multi-tenancy self-registration gap). */
-  tenantId: z.string().uuid(),
-  legalEntityName: z.string().min(2).max(200),
-  email: z.string().email(),
-  phone: z.string().min(6).max(20),
-  categoryKey: z.string().min(1),
-  captchaResponse: z.string().min(1),
+  tenantId: z.string().uuid('This registration link is invalid or incomplete'),
+  legalEntityName: z
+    .string()
+    .min(2, 'Enter your registered legal entity name (at least 2 characters)')
+    .max(200, 'Legal entity name cannot exceed 200 characters'),
+  email: z.string().email(EMAIL_MESSAGE),
+  phone: z
+    .string()
+    .min(6, 'Enter a valid phone number (at least 6 digits)')
+    .max(20, 'Phone number cannot exceed 20 characters'),
+  categoryKey: z.string().min(1, 'Select a category'),
+  captchaResponse: z.string().min(1, 'Please complete the captcha'),
 });
 export type SelfRegistrationInput = z.infer<typeof SelfRegistrationInputSchema>;
 
@@ -52,9 +86,12 @@ export type VerifyEmailInput = z.infer<typeof VerifyEmailInputSchema>;
  *  JWT-less endpoint can open the correct tenant context; `token` is the secret
  *  gate (the onboarding's selfRegistrationToken). */
 export const AcceptInviteInputSchema = z.object({
-  token: z.string().min(10),
-  tenantId: z.string().uuid(),
-  password: z.string().min(8).max(200),
+  token: z.string().min(10, 'This invitation link is invalid or incomplete'),
+  tenantId: z.string().uuid('This invitation link is invalid or incomplete'),
+  password: z
+    .string()
+    .min(8, 'Password must be at least 8 characters')
+    .max(200, 'Password cannot exceed 200 characters'),
 });
 export type AcceptInviteInput = z.infer<typeof AcceptInviteInputSchema>;
 
@@ -62,31 +99,57 @@ export type AcceptInviteInput = z.infer<typeof AcceptInviteInputSchema>;
 
 export const OnboardingStep1Schema = z.object({
   legalEntityType: z.enum(LEGAL_ENTITY_TYPE),
-  legalEntityName: z.string().min(2).max(200),
+  legalEntityName: z
+    .string()
+    .min(2, 'Enter your registered legal entity name (at least 2 characters)')
+    .max(200, 'Legal entity name cannot exceed 200 characters'),
   dateOfIncorporation: z.string().datetime().nullish(),
-  businessPan: z.string().regex(panRegex, 'invalid PAN'),
-  addressLine1: z.string().min(2).max(200),
-  city: z.string().min(1).max(80),
-  stateCode: z.string().length(2),
-  pincode: z.string().min(6).max(10),
-  primaryContactName: z.string().min(2).max(120),
-  primaryContactEmail: z.string().email(),
-  primaryContactPhone: z.string().min(6).max(20),
+  businessPan: z.string().regex(panRegex, PAN_MESSAGE),
+  addressLine1: z
+    .string()
+    .min(2, 'Enter your registered address')
+    .max(200, 'Address cannot exceed 200 characters'),
+  city: z.string().min(1, 'Enter your city').max(80, 'City cannot exceed 80 characters'),
+  stateCode: z
+    .string()
+    .refine((v) => GST_STATE_CODES.has(v), { message: STATE_CODE_MESSAGE }),
+  pincode: z
+    .string()
+    .min(6, 'Pincode must be at least 6 digits')
+    .max(10, 'Pincode cannot exceed 10 characters'),
+  primaryContactName: z
+    .string()
+    .min(2, 'Enter the primary contact’s name')
+    .max(120, 'Contact name cannot exceed 120 characters'),
+  primaryContactEmail: z.string().email(EMAIL_MESSAGE),
+  primaryContactPhone: z
+    .string()
+    .min(6, 'Enter a valid phone number (at least 6 digits)')
+    .max(20, 'Phone number cannot exceed 20 characters'),
 });
 export type OnboardingStep1 = z.infer<typeof OnboardingStep1Schema>;
 
 export const OnboardingStep2Schema = z.object({
-  gstin: z.string().regex(gstinRegex, 'invalid GSTIN'),
+  gstin: z.string().regex(gstinRegex, GSTIN_MESSAGE),
   isMsme: z.boolean().default(false),
-  udyamNumber: z.string().max(40).nullish(),
+  udyamNumber: z.string().max(40, 'Udyam number cannot exceed 40 characters').nullish(),
 });
 export type OnboardingStep2 = z.infer<typeof OnboardingStep2Schema>;
 
 export const OnboardingStep3Schema = z.object({
-  bankName: z.string().min(2).max(120),
-  accountNumber: z.string().min(6).max(30),
-  ifsc: z.string().min(11).max(11),
-  holderName: z.string().min(2).max(200),
+  bankName: z
+    .string()
+    .min(2, 'Enter your bank’s name')
+    .max(120, 'Bank name cannot exceed 120 characters'),
+  accountNumber: z
+    .string()
+    .min(6, 'Account number must be at least 6 characters')
+    .max(30, 'Account number cannot exceed 30 characters'),
+  ifsc: z.string().min(11, IFSC_MESSAGE).max(11, IFSC_MESSAGE),
+  holderName: z
+    .string()
+    .min(2, 'Enter the account holder’s name exactly as it appears at the bank')
+    .max(200, 'Account holder name cannot exceed 200 characters'),
 });
 export type OnboardingStep3 = z.infer<typeof OnboardingStep3Schema>;
 
@@ -104,7 +167,7 @@ export const OnboardingStep4Schema = z.object({
 export type OnboardingStep4 = z.infer<typeof OnboardingStep4Schema>;
 
 export const OnboardingStep5Schema = z.object({
-  categoryTags: z.array(z.string()).min(1),
+  categoryTags: z.array(z.string()).min(1, 'Add at least one category'),
   capabilityTags: z.array(z.string()).default([]),
   facilities: z.array(z.string()).default([]),
   employeeCountBracket: z.enum(EMPLOYEE_COUNT_BRACKET),
@@ -112,21 +175,33 @@ export const OnboardingStep5Schema = z.object({
   references: z
     .array(
       z.object({
-        name: z.string().min(1).max(120),
-        contact: z.string().max(120).nullish(),
-        productSupplied: z.string().max(200).nullish(),
+        name: z
+          .string()
+          .min(1, 'Enter the reference’s name')
+          .max(120, 'Reference name cannot exceed 120 characters'),
+        contact: z.string().max(120, 'Contact cannot exceed 120 characters').nullish(),
+        productSupplied: z
+          .string()
+          .max(200, 'Product supplied cannot exceed 200 characters')
+          .nullish(),
       }),
     )
-    .max(3)
+    .max(3, 'You can add at most 3 references')
     .default([]),
 });
 export type OnboardingStep5 = z.infer<typeof OnboardingStep5Schema>;
 
 export const BeneficialOwnerInputSchema = z.object({
-  ownerName: z.string().min(2).max(120),
-  ownerPan: z.string().regex(panRegex, 'invalid PAN'),
+  ownerName: z
+    .string()
+    .min(2, 'Enter the owner’s full name')
+    .max(120, 'Owner name cannot exceed 120 characters'),
+  ownerPan: z.string().regex(panRegex, PAN_MESSAGE),
   ownerDob: z.string().datetime().nullish(),
-  ownershipPct: z.number().min(0).max(100),
+  ownershipPct: z
+    .number()
+    .min(0, 'Ownership must be between 0 and 100%')
+    .max(100, 'Ownership must be between 0 and 100%'),
   ownershipType: z.enum(OWNERSHIP_TYPE).default('DIRECT'),
   countryOfResidence: z.string().default('IN'),
   isPep: z.boolean().default(false),
