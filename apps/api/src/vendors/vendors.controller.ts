@@ -74,7 +74,7 @@ export class VendorsController {
     return this.query.listOnboardings(
       q,
       user.userId,
-      user.perms.includes(PERMISSIONS.VENDOR_INVITE),
+      user.perms.includes(PERMISSIONS.VENDOR_ONBOARDING_CANCEL),
     );
   }
 
@@ -113,13 +113,13 @@ export class VendorsController {
   }
 
   /**
-   * Withdraw an invitation the vendor never submitted. Gated on VENDOR_INVITE —
-   * whoever can create the invite is who fixes a mistaken one — but once the
-   * vendor has set a password the service additionally requires VENDOR_SUSPEND,
-   * because by then it is a live login being taken away.
+   * Withdraw an invitation the vendor never submitted. Admin-only
+   * (VENDOR_ONBOARDING_CANCEL): the onboarding queue is shared across all
+   * procurement officers, so a permission every inviter held would let one
+   * officer cancel another's vendor.
    */
   @Post('onboarding/:id/cancel')
-  @RequirePermission(PERMISSIONS.VENDOR_INVITE)
+  @RequirePermission(PERMISSIONS.VENDOR_ONBOARDING_CANCEL)
   async cancelOnboarding(
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,

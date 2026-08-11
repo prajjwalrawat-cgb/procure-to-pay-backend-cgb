@@ -144,8 +144,9 @@ export class VendorQueryService {
   async listOnboardings(
     query: OnboardingListQuery,
     viewerId: string,
-    /** Whether the viewer may withdraw invitations at all (VENDOR_INVITE). */
-    viewerCanInvite = false,
+    /** Whether the viewer may withdraw invitations at all — admin-only, since
+     *  the queue is shared across every procurement officer. */
+    viewerCanCancel = false,
   ): Promise<{ items: OnboardingListItem[] }> {
     let where: Prisma.VendorOnboardingWhereInput =
       query.tab === 'in_progress'
@@ -218,7 +219,7 @@ export class VendorQueryService {
         // they submit and you approve or reject — so the queue does not offer
         // to pull the rug out mid-application.
         canCancel:
-          !ob.submittedAt && !ob.reviewDecision && !ob.emailVerifiedAt && viewerCanInvite,
+          !ob.submittedAt && !ob.reviewDecision && !ob.emailVerifiedAt && viewerCanCancel,
       };
     });
     return { items };

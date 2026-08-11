@@ -86,6 +86,10 @@ export const PERMISSIONS = {
   VENDOR_INVITE: 'vendor:invite',
   VENDOR_UPDATE: 'vendor:update',
   VENDOR_ONBOARDING_REVIEW: 'vendor:onboarding_review',
+  /** Withdraw someone else's in-flight invitation. Deliberately NOT in
+   *  VENDOR_MASTER: every procurement officer sees the whole onboarding queue,
+   *  so a shared cancel would let one officer undo another's work. Admin only. */
+  VENDOR_ONBOARDING_CANCEL: 'vendor:onboarding_cancel',
   VENDOR_DOC_VERIFY: 'vendor:doc_verify',
   VENDOR_SCREENING_REVIEW: 'vendor:screening_review',
   VENDOR_SUSPEND: 'vendor:suspend',
@@ -291,6 +295,7 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     PERMISSIONS.USER_UPDATE,
     ...PURCHASING,
     ...VENDOR_MASTER,
+    PERMISSIONS.VENDOR_ONBOARDING_CANCEL,
     PERMISSIONS.VENDOR_SUSPEND,
     PERMISSIONS.VENDOR_BLACKLIST,
     PERMISSIONS.REQUISITION_UPDATE,
