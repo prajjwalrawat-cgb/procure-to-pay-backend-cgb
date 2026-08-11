@@ -8,6 +8,7 @@ import type {
   ChangeRequestType,
   DocVerificationStatus,
   OnboardingInvitationSource,
+  OnboardingReviewDecision,
   SanctionsScreeningStatus,
   ScreeningStatus,
   ScreeningType,
@@ -54,6 +55,13 @@ export interface OnboardingListItem {
   lifecycleStatus: VendorLifecycleStatus;
   slaTargetHours: number;
   slaBreachAt: string | null;
+  reviewDecision: OnboardingReviewDecision | null;
+  /** The vendor has set a password from the invitation link — from here on the
+   *  invite is a working login, so withdrawing it needs VENDOR_SUSPEND. */
+  inviteAccepted: boolean;
+  /** True while *this viewer* can withdraw the invitation: nothing submitted, no
+   *  decision recorded, and they hold the authority the stage requires. */
+  canCancel: boolean;
 }
 
 export interface OnboardingListResponse {

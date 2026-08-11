@@ -62,6 +62,9 @@ export const ONBOARDING_REVIEW_DECISION = [
   'APPROVED',
   'REJECTED',
   'RETURNED_FOR_INFO',
+  /** Buyer withdrew the invitation before the vendor submitted — distinct from
+   *  REJECTED, which is a reviewer's verdict on a submitted application. */
+  'CANCELLED',
 ] as const;
 export type OnboardingReviewDecision = (typeof ONBOARDING_REVIEW_DECISION)[number];
 

@@ -144,14 +144,20 @@ export class VendorQueryService {
   async listOnboardings(
     query: OnboardingListQuery,
     viewerId: string,
+    /** Whether the viewer may withdraw invitations at all (VENDOR_INVITE). */
+    viewerCanInvite = false,
   ): Promise<{ items: OnboardingListItem[] }> {
     let where: Prisma.VendorOnboardingWhereInput =
       query.tab === 'in_progress'
-        ? { submittedAt: null }
+        ? // A withdrawn invitation is not in progress — it must drop out of this
+          // tab, which is the whole point of cancelling it.
+          { submittedAt: null, reviewDecision: null }
         : query.tab === 'approved'
           ? { reviewDecision: 'APPROVED' }
           : query.tab === 'rejected'
-            ? { reviewDecision: 'REJECTED' }
+            ? // Cancelled invites live here too: "not proceeding" is where an
+              // officer looks for an invite that has disappeared from the queue.
+              { reviewDecision: { in: ['REJECTED', 'CANCELLED'] } }
             : {};
     if (query.tab === 'my_review') {
       // Approvals are a generic table (documentType/documentId), not a relation.
@@ -185,7 +191,10 @@ export class VendorQueryService {
       ).length;
       const daysOpen = Math.floor((now - ob.startedAt.getTime()) / 86_400_000);
       const lastActivity = ob.submittedAt ?? ob.startedAt;
-      const stalled = !ob.submittedAt && now - lastActivity.getTime() > 7 * 86_400_000;
+      const stalled =
+        !ob.submittedAt &&
+        !ob.reviewDecision &&
+        now - lastActivity.getTime() > 7 * 86_400_000;
       return {
         id: ob.id,
         vendorId: ob.vendorId,
@@ -202,6 +211,14 @@ export class VendorQueryService {
         lifecycleStatus: ob.vendor.lifecycleStatus,
         slaTargetHours: ob.slaTargetHours,
         slaBreachAt: ob.slaBreachAt?.toISOString() ?? null,
+        reviewDecision: ob.reviewDecision,
+        inviteAccepted: !!ob.emailVerifiedAt,
+        // Only ever offered for an invitation the vendor never accepted. Once
+        // they have a working login there is a review path for them instead —
+        // they submit and you approve or reject — so the queue does not offer
+        // to pull the rug out mid-application.
+        canCancel:
+          !ob.submittedAt && !ob.reviewDecision && !ob.emailVerifiedAt && viewerCanInvite,
       };
     });
     return { items };

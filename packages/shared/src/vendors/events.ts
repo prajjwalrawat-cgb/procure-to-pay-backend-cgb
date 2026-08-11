@@ -15,6 +15,13 @@ export interface VendorSelfRegisteredEvent {
   email: string;
 }
 
+export interface OnboardingCancelledEvent {
+  vendorId: string;
+  onboardingId: string;
+  cancelledBy: string;
+  reason: string;
+}
+
 export interface VendorActivatedEvent {
   vendorId: string;
   activatedBy: string;
@@ -71,6 +78,7 @@ export interface VendorScorecardComputedEvent {
 export const VENDOR_EVENTS = {
   VENDOR_INVITED: 'VendorInvited',
   VENDOR_SELF_REGISTERED: 'VendorSelfRegistered',
+  ONBOARDING_CANCELLED: 'OnboardingCancelled',
   VENDOR_ACTIVATED: 'VendorActivated',
   VENDOR_SUSPENDED: 'VendorSuspended',
   VENDOR_BLACKLISTED: 'VendorBlacklisted',

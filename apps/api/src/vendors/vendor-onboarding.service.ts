@@ -14,13 +14,16 @@ import {
   VENDOR_EVENTS,
   assessAcceptance,
   categoryConfig,
+  compare as compareNames,
   type AcknowledgeCocInput,
+  type CancelOnboardingInput,
   type InviteVendorInput,
   type OnboardingStep1,
   type OnboardingStep2,
   type OnboardingStep3,
   type OnboardingStep5,
   type OnboardingStep6,
+  type RenameVendorInput,
   type ReturnForInfoInput,
   type SaveStepInput,
   type SelfRegistrationInput,
@@ -42,6 +45,7 @@ import {
 } from './verification/penny-drop.provider';
 import { CAPTCHA_PROVIDER, type ICaptchaProvider } from './verification/captcha.provider';
 import {
+  DuplicateVendorError,
   InvalidTokenError,
   VendorStateError,
   VendorValidationError,
@@ -49,11 +53,39 @@ import {
 
 const TOKEN_TTL_DAYS = 14;
 const VENDOR_DEFAULT_PASSWORD = 'Slice0!Vendor';
+/** Lifecycle states a vendor can be re-invited from. Everything else means a
+ *  live record already exists (or is deliberately barred, for BLACKLISTED). */
+const REINVITABLE_STATUSES = new Set<string>(['ARCHIVED']);
+/** Legal-entity-name similarity above which an invite is treated as a probable
+ *  duplicate. Deliberately above assessAcceptance's 0.85 default: a false block
+ *  here costs the officer a second click, but the whole point is to catch the
+ *  "Lohith" / "Lohith Enterprises" re-type, not to flag every shared word. */
+const NAME_DUPLICATE_THRESHOLD = 0.88;
+/** Cap on the name-similarity sweep. Ordered newest-first, so the realistic
+ *  duplicate — an invite sent minutes ago — is always in the window. */
+const NAME_SCAN_LIMIT = 2000;
 
 interface WizardState {
   currentStep: number;
   completionPct: number;
   steps: Record<string, { done: boolean; data: Record<string, unknown> }>;
+}
+
+/** The columns the duplicate-invite guard needs to explain itself to the user. */
+const DUPLICATE_CANDIDATE_SELECT = {
+  id: true,
+  code: true,
+  name: true,
+  legalEntityName: true,
+  lifecycleStatus: true,
+} satisfies Prisma.VendorSelect;
+
+interface DuplicateCandidate {
+  id: string;
+  code: string;
+  name: string;
+  legalEntityName: string | null;
+  lifecycleStatus: string;
 }
 
 /** A document the vendor has already uploaded, as shown in their own wizard. */
@@ -110,6 +142,7 @@ export class VendorOnboardingService implements OnModuleInit {
       throw new VendorValidationError('Unknown vendor category.', {
         key: input.categoryKey,
       });
+    await this.assertNoDuplicateInvite(input);
 
     const created = await this.createVendorShell(tenantId, {
       legalEntityName: input.legalEntityName,
@@ -487,6 +520,186 @@ export class VendorOnboardingService implements OnModuleInit {
     return { ok: true };
   }
 
+  /**
+   * Withdraw an invitation the vendor has not submitted yet — the way out of a
+   * mistaken or duplicate invite. The vendor record is archived, never deleted
+   * (§3 rule #10), and the magic link is burned: an accepted-but-duplicate
+   * invitation must stop being able to reset the password on the login it
+   * shares with the vendor's real record.
+   *
+   * `canRevokeAccess` is the caller's VENDOR_SUSPEND permission. Once the vendor
+   * has set a password the invitation is no longer just a pending email — it is
+   * a working login, and taking it away is revoking access, not undoing a typo.
+   * So a Procurement Officer can clear up an unaccepted invite on their own, but
+   * an accepted one needs an Admin / Procurement Head / MD.
+   */
+  async cancelOnboarding(
+    onboardingId: string,
+    input: CancelOnboardingInput,
+    actorId: string,
+    canRevokeAccess: boolean,
+  ): Promise<{ ok: true }> {
+    const onboarding = await this.prisma.client.vendorOnboarding.findUnique({
+      where: { id: onboardingId },
+      include: { vendor: { select: { id: true, name: true, lifecycleStatus: true } } },
+    });
+    if (!onboarding) throw new NotFoundException('Onboarding not found');
+    if (onboarding.emailVerifiedAt && !canRevokeAccess) {
+      throw new ForbiddenException(
+        `${onboarding.vendor.name} has already set a password and can sign in, so this ` +
+          'is a revocation of access rather than a cancelled invite. Ask an admin ' +
+          '(or the procurement head) to do it.',
+      );
+    }
+    if (onboarding.reviewDecision) {
+      throw new VendorStateError(
+        `This onboarding was already ${onboarding.reviewDecision.toLowerCase().replace(/_/g, ' ')}.`,
+        { onboardingId, reviewDecision: onboarding.reviewDecision },
+      );
+    }
+    if (onboarding.submittedAt) {
+      throw new VendorStateError(
+        'This application has already been submitted for review — reject it from the ' +
+          'review screen instead of cancelling the invitation.',
+        { onboardingId, submittedAt: onboarding.submittedAt.toISOString() },
+      );
+    }
+    if (onboarding.vendor.lifecycleStatus === 'ACTIVE') {
+      throw new VendorStateError(
+        `${onboarding.vendor.name} is already an active vendor — suspend the vendor instead.`,
+        { vendorId: onboarding.vendorId },
+      );
+    }
+
+    await this.prisma.client.vendorOnboarding.update({
+      where: { id: onboardingId },
+      data: {
+        reviewDecision: 'CANCELLED',
+        reviewedBy: actorId,
+        reviewNotes: input.reason,
+        decisionAt: new Date(),
+        // Burn the link and stop the clock — a withdrawn invite must not keep
+        // ageing towards an SLA breach in the queue.
+        selfRegistrationToken: null,
+        tokenExpiresAt: new Date(),
+        slaBreachAt: null,
+        vendor: { update: { lifecycleStatus: 'ARCHIVED' } },
+      },
+    });
+    await this.deactivateOrphanedVendorUser(onboarding.vendorId);
+    await this.audit.record({
+      action: 'ONBOARDING_CANCELLED',
+      entityType: 'Vendor',
+      entityId: onboarding.vendorId,
+      actorId,
+      before: { lifecycleStatus: onboarding.vendor.lifecycleStatus },
+      after: { onboardingId, reason: input.reason, lifecycleStatus: 'ARCHIVED' },
+    });
+    await this.events.emit(VENDOR_EVENTS.ONBOARDING_CANCELLED, {
+      vendorId: onboarding.vendorId,
+      onboardingId,
+      cancelledBy: actorId,
+      reason: input.reason,
+    });
+    return { ok: true };
+  }
+
+  /**
+   * Deactivate the auto-created login of a cancelled vendor — but only if no
+   * other live vendor still uses that email. A duplicate invite reuses the
+   * existing user (ensureVendorUser), so blindly deactivating here would lock
+   * the vendor out of the record we actually want them to complete.
+   */
+  private async deactivateOrphanedVendorUser(vendorId: string): Promise<void> {
+    const contact = await this.prisma.client.vendorContact.findFirst({
+      where: { vendorId, isPrimary: true },
+      select: { email: true },
+    });
+    if (!contact?.email) return;
+    const stillInUse = await this.prisma.client.vendorContact.count({
+      where: {
+        email: { equals: contact.email, mode: 'insensitive' },
+        vendorId: { not: vendorId },
+        vendor: { lifecycleStatus: { not: 'ARCHIVED' } },
+      },
+    });
+    if (stillInUse > 0) return;
+    const user = await this.prisma.client.user.findFirst({
+      where: { email: contact.email, isActive: true },
+      select: { id: true, userRoles: { select: { role: { select: { name: true } } } } },
+    });
+    if (!user) return;
+    // Only ever touch a pure vendor login. If the invite was addressed to an
+    // email that also belongs to a staff account, deactivating it would lock a
+    // colleague out of the buyer console.
+    const vendorLoginOnly =
+      user.userRoles.length > 0 &&
+      user.userRoles.every((r) => r.role.name === 'VENDOR_USER');
+    if (!vendorLoginOnly) return;
+    await this.prisma.client.user.update({
+      where: { id: user.id },
+      data: { isActive: false },
+    });
+  }
+
+  /**
+   * Correct a vendor's name. The display name is a label and stays editable for
+   * the life of the record; the legal entity name is what the PAN/GST checks
+   * matched against, so once the vendor is activated it is frozen here and has
+   * to move through the change-request approval path instead.
+   */
+  async renameVendor(
+    vendorId: string,
+    input: RenameVendorInput,
+    actorId: string,
+  ): Promise<{ ok: true }> {
+    const vendor = await this.prisma.client.vendor.findUnique({
+      where: { id: vendorId },
+      select: {
+        id: true,
+        name: true,
+        legalEntityName: true,
+        activatedAt: true,
+        lifecycleStatus: true,
+      },
+    });
+    if (!vendor) throw new NotFoundException('Vendor not found');
+    if (input.legalEntityName != null && vendor.activatedAt) {
+      throw new VendorStateError(
+        `${vendor.name} is already activated, so its registered legal name can only be ` +
+          'changed through an approved change request. The display name can still be ' +
+          'corrected here.',
+        { vendorId, activatedAt: vendor.activatedAt.toISOString() },
+      );
+    }
+
+    const name = input.name?.trim();
+    const legalEntityName = input.legalEntityName?.trim();
+    if (name === vendor.name && legalEntityName === vendor.legalEntityName) {
+      return { ok: true };
+    }
+    await this.prisma.client.vendor.update({
+      where: { id: vendorId },
+      data: {
+        ...(name == null ? {} : { name }),
+        ...(legalEntityName == null ? {} : { legalEntityName }),
+      },
+    });
+    await this.audit.record({
+      action: 'VENDOR_RENAMED',
+      entityType: 'Vendor',
+      entityId: vendorId,
+      actorId,
+      before: { name: vendor.name, legalEntityName: vendor.legalEntityName },
+      after: {
+        name: name ?? vendor.name,
+        legalEntityName: legalEntityName ?? vendor.legalEntityName,
+        reason: input.reason ?? null,
+      },
+    });
+    return { ok: true };
+  }
+
   /** Fired by the approval engine when onboarding is fully approved. */
   async onOnboardingApproved(onboardingId: string, actorId: string): Promise<void> {
     const onboarding = await this.prisma.client.vendorOnboarding.findUnique({
@@ -665,6 +878,92 @@ export class VendorOnboardingService implements OnModuleInit {
     }
   }
 
+  /**
+   * Stops the same vendor being invited twice. The two checks fail differently,
+   * so they are enforced differently:
+   *
+   *  - **Contact email already on a live vendor → hard block.** `ensureVendorUser`
+   *    reuses an existing login, so a second vendor record would share one
+   *    account: `resolveVendorId` then picks between them arbitrarily, the vendor
+   *    can only ever fill in whichever it picked, and the second invitation link
+   *    resets the password they already set from the first. Never overridable.
+   *  - **Legal entity name closely matching a live vendor → soft block.** That
+   *    can legitimately be a different entity sharing a shopfront name, so the
+   *    officer can confirm and re-send with `allowDuplicate`.
+   */
+  private async assertNoDuplicateInvite(input: InviteVendorInput): Promise<void> {
+    const contacts = await this.prisma.client.vendorContact.findMany({
+      where: { email: { equals: input.email.trim(), mode: 'insensitive' } },
+      select: { vendor: { select: DUPLICATE_CANDIDATE_SELECT } },
+    });
+    const byEmail = contacts
+      .map((c) => c.vendor)
+      .find((v) => !REINVITABLE_STATUSES.has(v.lifecycleStatus));
+    if (byEmail) {
+      throw new DuplicateVendorError(
+        byEmail.lifecycleStatus === 'BLACKLISTED'
+          ? `${byEmail.name} (${byEmail.code}) is blacklisted — this contact cannot be invited.`
+          : `${input.email} is already the contact for ${byEmail.name} (${byEmail.code}). ` +
+            'Resend that invitation or add the category to the existing vendor — a second ' +
+            'record would share the same vendor login.',
+        await this.duplicateContext(byEmail, 'EMAIL', false),
+      );
+    }
+
+    if (input.allowDuplicate) return;
+    const candidates = await this.prisma.client.vendor.findMany({
+      where: { lifecycleStatus: { not: 'ARCHIVED' } },
+      select: DUPLICATE_CANDIDATE_SELECT,
+      orderBy: { createdAt: 'desc' },
+      take: NAME_SCAN_LIMIT,
+    });
+    let best: { vendor: DuplicateCandidate; score: number } | null = null;
+    for (const v of candidates) {
+      // Compare against both the registered name and the display name: the
+      // duplicate is usually typed as whichever one the officer remembers.
+      const score = Math.max(
+        compareNames(input.legalEntityName, v.legalEntityName ?? v.name).score,
+        compareNames(input.legalEntityName, v.name).score,
+      );
+      if (score >= NAME_DUPLICATE_THRESHOLD && (!best || score > best.score)) {
+        best = { vendor: v, score };
+      }
+    }
+    if (best) {
+      throw new DuplicateVendorError(
+        `${best.vendor.name} (${best.vendor.code}) already exists with a very similar name. ` +
+          'Check it is not the same vendor — if it really is a different entity, confirm to invite anyway.',
+        await this.duplicateContext(best.vendor, 'NAME', true, best.score),
+      );
+    }
+  }
+
+  /** The existing record, shaped so the invite dialog can link to it and decide
+   *  whether to offer an "invite anyway" button. */
+  private async duplicateContext(
+    vendor: DuplicateCandidate,
+    matchType: 'EMAIL' | 'NAME',
+    overridable: boolean,
+    matchScore?: number,
+  ): Promise<Record<string, unknown>> {
+    const onboarding = await this.prisma.client.vendorOnboarding.findFirst({
+      where: { vendorId: vendor.id },
+      orderBy: { startedAt: 'desc' },
+      select: { id: true, submittedAt: true, reviewDecision: true },
+    });
+    return {
+      matchType,
+      overridable,
+      ...(matchScore == null ? {} : { matchScore }),
+      existingVendorId: vendor.id,
+      existingVendorCode: vendor.code,
+      existingVendorName: vendor.name,
+      existingLifecycleStatus: vendor.lifecycleStatus,
+      existingOnboardingId: onboarding?.id ?? null,
+      existingOnboardingSubmitted: !!onboarding?.submittedAt,
+    };
+  }
+
   private async createVendorShell(
     tenantId: string,
     input: {
@@ -787,11 +1086,22 @@ export class VendorOnboardingService implements OnModuleInit {
       select: { email: true },
     });
     if (!user) throw new ForbiddenException('Not a vendor account');
-    const contact = await this.prisma.client.vendorContact.findFirst({
-      where: { email: user.email },
-      orderBy: { isPrimary: 'desc' },
-      select: { vendorId: true },
-    });
+    // An email can end up on more than one vendor record (a duplicate invite
+    // that predates the invite guard). Skip archived records — that is what a
+    // cancelled duplicate becomes — and break any remaining tie on the oldest
+    // record, so the vendor lands on the same one on every request instead of
+    // whichever row the planner happened to return first.
+    const contact =
+      (await this.prisma.client.vendorContact.findFirst({
+        where: { email: user.email, vendor: { lifecycleStatus: { not: 'ARCHIVED' } } },
+        orderBy: [{ isPrimary: 'desc' }, { id: 'asc' }],
+        select: { vendorId: true },
+      })) ??
+      (await this.prisma.client.vendorContact.findFirst({
+        where: { email: user.email },
+        orderBy: [{ isPrimary: 'desc' }, { id: 'asc' }],
+        select: { vendorId: true },
+      }));
     if (!contact) throw new ForbiddenException('No vendor linked to this account');
     return contact.vendorId;
   }
@@ -816,6 +1126,11 @@ export class VendorOnboardingService implements OnModuleInit {
     if (!onboarding) throw new InvalidTokenError('Invalid registration token.');
     if (onboarding.tokenExpiresAt && onboarding.tokenExpiresAt.getTime() < Date.now()) {
       throw new InvalidTokenError('Registration token expired.');
+    }
+    // Cancellation nulls the token, so this is belt-and-braces: a withdrawn
+    // invitation must never be acceptable, however the link is replayed.
+    if (onboarding.reviewDecision === 'CANCELLED') {
+      throw new InvalidTokenError('This invitation was withdrawn.');
     }
     return onboarding;
   }

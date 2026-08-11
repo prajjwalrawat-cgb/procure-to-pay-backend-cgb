@@ -14,6 +14,18 @@ export class VendorStateError extends DomainError {
   readonly title = 'Invalid vendor state transition';
 }
 
+/**
+ * An invite that would create a second vendor record for someone already on the
+ * books. `context` carries the existing vendor so the UI can offer "open it"
+ * instead of a dead end, and `overridable` says whether re-sending with
+ * `allowDuplicate` is allowed (fuzzy name match: yes; email already in use: no).
+ */
+export class DuplicateVendorError extends DomainError {
+  readonly status = 409;
+  readonly type = 'https://procureflow.io/errors/duplicate-vendor';
+  readonly title = 'Vendor already exists';
+}
+
 /** A blacklist attempt without the required MD + LEGAL_OFFICER co-sign. */
 export class CosignRequiredError extends DomainError {
   readonly status = 409;

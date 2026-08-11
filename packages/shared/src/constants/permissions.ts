@@ -84,6 +84,7 @@ export const PERMISSIONS = {
   // Vendor master / onboarding (Slice 7, buyer side)
   VENDOR_READ: 'vendor:read',
   VENDOR_INVITE: 'vendor:invite',
+  VENDOR_UPDATE: 'vendor:update',
   VENDOR_ONBOARDING_REVIEW: 'vendor:onboarding_review',
   VENDOR_DOC_VERIFY: 'vendor:doc_verify',
   VENDOR_SCREENING_REVIEW: 'vendor:screening_review',
@@ -213,6 +214,7 @@ const VENDOR_READ_ONLY: Permission[] = [
 const VENDOR_MASTER: Permission[] = [
   PERMISSIONS.VENDOR_READ,
   PERMISSIONS.VENDOR_INVITE,
+  PERMISSIONS.VENDOR_UPDATE,
   PERMISSIONS.VENDOR_ONBOARDING_REVIEW,
   PERMISSIONS.VENDOR_DOC_VERIFY,
   PERMISSIONS.VENDOR_SCREENING_REVIEW,

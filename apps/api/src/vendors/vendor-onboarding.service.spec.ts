@@ -1,222 +1,394 @@
-import { categoryConfig } from '@procureflow/shared';
+import { ForbiddenException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ApprovalRoutingService } from '../approvals/approval-routing.service';
-import type { AuditLogService } from '../audit/audit.service';
-import type { DomainEventService } from '../common/events/domain-event.service';
 import type { NotificationService } from '../approvals/notification.service';
+import type { AuditLogService } from '../audit/audit.service';
+import type { MailService } from '../common/mail/mail.service';
+import type { DomainEventService } from '../common/events/domain-event.service';
+import type { StorageService } from '../common/storage/storage.service';
 import type { PrismaService } from '../prisma/prisma.service';
-import { VendorOnboardingService } from './vendor-onboarding.service';
 import type { VendorScorecardService } from './vendor-scorecard.service';
 import type { VendorVerificationService } from './vendor-verification.service';
-import { VendorValidationError } from './vendor.errors';
+import type { ICaptchaProvider } from './verification/captcha.provider';
+import type { IPennyDropProvider } from './verification/penny-drop.provider';
+import { DuplicateVendorError, VendorStateError } from './vendor.errors';
+import { VendorOnboardingService } from './vendor-onboarding.service';
 
-const CATEGORY = 'PROFESSIONAL_SERVICES';
-const REQUIRED_DOCS = categoryConfig(CATEGORY)?.requiredDocuments ?? [];
-
-function completeSteps(
-  steps: number[],
-): Record<string, { done: boolean; data: Record<string, unknown> }> {
-  const out: Record<string, { done: boolean; data: Record<string, unknown> }> = {};
-  for (const s of steps) out[`step${s}`] = { done: true, data: {} };
-  return out;
+interface VendorRow {
+  id: string;
+  code: string;
+  name: string;
+  legalEntityName: string | null;
+  lifecycleStatus: string;
 }
 
-function makeService(
-  vendor: Record<string, unknown>,
-  wizardSteps: number[],
-): VendorOnboardingService {
-  const submit = vi.fn().mockResolvedValue(undefined);
+interface OnboardingRow {
+  id: string;
+  vendorId: string;
+  submittedAt: Date | null;
+  reviewDecision: string | null;
+  /** Set when the vendor used the invitation link to set a password. */
+  emailVerifiedAt: Date | null;
+  vendor: { id: string; name: string; lifecycleStatus: string };
+}
+
+interface Fixture {
+  /** Vendors reachable by the contact-email lookup, i.e. same email. */
+  contactMatches?: VendorRow[];
+  /** Live vendors the name-similarity sweep will see. */
+  nameCandidates?: VendorRow[];
+  onboarding?: OnboardingRow | null;
+  /** The vendor row renameVendor will load. */
+  vendorRecord?: {
+    id: string;
+    name: string;
+    legalEntityName: string | null;
+    activatedAt: Date | null;
+    lifecycleStatus: string;
+  } | null;
+  /** Other contacts sharing the cancelled vendor's email, on live vendors. */
+  sharedContactCount?: number;
+  userRoles?: string[];
+}
+
+function makeService(fixture: Fixture = {}): {
+  svc: VendorOnboardingService;
+  vendorUpdate: ReturnType<typeof vi.fn>;
+  vendorCreate: ReturnType<typeof vi.fn>;
+  onboardingUpdate: ReturnType<typeof vi.fn>;
+  userUpdate: ReturnType<typeof vi.fn>;
+  audit: ReturnType<typeof vi.fn>;
+} {
+  const vendorCreate = vi.fn().mockResolvedValue({});
+  const vendorUpdate = vi.fn().mockResolvedValue({});
+  const onboardingUpdate = vi.fn().mockResolvedValue({});
+  const userUpdate = vi.fn().mockResolvedValue({});
+  const auditRecord = vi.fn().mockResolvedValue(undefined);
   const prisma = {
     currentTenantId: 'ten_1',
     client: {
-      user: { findUnique: vi.fn().mockResolvedValue({ email: 'v@example.com' }) },
-      vendorContact: { findFirst: vi.fn().mockResolvedValue({ vendorId: 'ven_1' }) },
-      vendorOnboarding: {
-        findFirst: vi.fn().mockResolvedValue({
-          id: 'vob_1',
-          vendorId: 'ven_1',
-          categoryConfigKey: CATEGORY,
-          slaTargetHours: 48,
-          wizardState: {
-            currentStep: 6,
-            completionPct: 100,
-            steps: completeSteps(wizardSteps),
-          },
-        }),
-        update: vi.fn().mockResolvedValue({}),
+      vendorContact: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue((fixture.contactMatches ?? []).map((v) => ({ vendor: v }))),
+        findFirst: vi.fn().mockResolvedValue({ email: 'ops@vendor.example' }),
+        count: vi.fn().mockResolvedValue(fixture.sharedContactCount ?? 0),
+        create: vi.fn().mockResolvedValue({}),
       },
-      vendor: { findUniqueOrThrow: vi.fn().mockResolvedValue(vendor) },
+      vendor: {
+        findMany: vi.fn().mockResolvedValue(fixture.nameCandidates ?? []),
+        create: vendorCreate,
+        update: vendorUpdate,
+        // renameVendor asks for the record; createOnboarding asks for the
+        // category — both land here, so serve whichever the fixture implies.
+        findUnique: vi
+          .fn()
+          .mockResolvedValue(
+            fixture.vendorRecord ?? { categoryConfigKey: 'RAW_MATERIALS' },
+          ),
+      },
+      vendorOnboarding: {
+        findUnique: vi.fn().mockResolvedValue(fixture.onboarding ?? null),
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({}),
+        update: onboardingUpdate,
+      },
+      user: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'usr_vendor',
+          userRoles: (fixture.userRoles ?? ['VENDOR_USER']).map((name) => ({
+            role: { name },
+          })),
+        }),
+        create: vi.fn().mockResolvedValue({ id: 'usr_vendor' }),
+        update: userUpdate,
+      },
+      userRole: { create: vi.fn().mockResolvedValue({}) },
+      role: { findUniqueOrThrow: vi.fn().mockResolvedValue({ id: 'rol_vendor' }) },
+      tenant: { findUnique: vi.fn().mockResolvedValue({ name: 'Artbox' }) },
     },
   } as unknown as PrismaService;
 
-  const audit = {
-    record: vi.fn().mockResolvedValue(undefined),
-  } as unknown as AuditLogService;
-  const events = {
-    emit: vi.fn().mockResolvedValue(undefined),
-  } as unknown as DomainEventService;
-  const notifications = {
-    notify: vi.fn().mockResolvedValue(undefined),
-  } as unknown as NotificationService;
-  const routing = { submit, onApproved: vi.fn() } as unknown as ApprovalRoutingService;
-  const verification = {} as unknown as VendorVerificationService;
-  const scorecard = {} as unknown as VendorScorecardService;
-  const mail = { send: vi.fn().mockResolvedValue(undefined) } as never;
-  const storage = {
-    presignedGetUrl: vi.fn().mockResolvedValue('https://signed.example/doc'),
-    put: vi.fn().mockResolvedValue(''),
-  } as never;
-  const config = { get: vi.fn().mockReturnValue('http://localhost:3000') } as never;
-  const pennyDrop = {
-    verify: vi.fn().mockResolvedValue({ registeredName: 'x', matchScore: 1 }),
-  } as never;
-  const captcha = {
-    verify: vi.fn(async (t: string) => ({
-      ok: Boolean(t),
-      reason: t ? undefined : 'Captcha required.',
-    })),
-  } as never;
-  return new VendorOnboardingService(
+  const svc = new VendorOnboardingService(
     prisma,
-    audit,
-    events,
-    notifications,
-    routing,
-    verification,
-    scorecard,
-    mail,
-    storage,
-    config,
-    pennyDrop,
-    captcha,
+    { record: auditRecord } as unknown as AuditLogService,
+    { emit: vi.fn().mockResolvedValue(undefined) } as unknown as DomainEventService,
+    { notify: vi.fn() } as unknown as NotificationService,
+    { onApproved: vi.fn(), submit: vi.fn() } as unknown as ApprovalRoutingService,
+    {} as unknown as VendorVerificationService,
+    {} as unknown as VendorScorecardService,
+    { send: vi.fn().mockResolvedValue(undefined) } as unknown as MailService,
+    {} as unknown as StorageService,
+    { get: vi.fn().mockReturnValue('http://localhost:3000') } as never,
+    {} as unknown as IPennyDropProvider,
+    {} as unknown as ICaptchaProvider,
   );
+  return {
+    svc,
+    vendorCreate,
+    vendorUpdate,
+    onboardingUpdate,
+    userUpdate,
+    audit: auditRecord,
+  };
 }
 
-describe('VendorOnboardingService.submitOnboarding guards', () => {
-  const fullDocs = REQUIRED_DOCS.map((d) => ({ docType: d }));
+const INVITE = {
+  legalEntityName: 'Lohith Enterprises Pvt Ltd',
+  name: 'Lohith',
+  email: 'lohith@example.com',
+  categoryKey: 'RAW_MATERIALS',
+  source: 'BUYER_INVITE_SPOT' as const,
+  allowDuplicate: false,
+};
 
-  it('rejects when a required wizard step is incomplete', async () => {
-    const svc = makeService(
-      {
-        id: 'ven_1',
-        tenantId: 'ten_1',
-        isMsme: false,
-        cocAcknowledgedAt: new Date(),
-        dataProcessingConsentAt: new Date(),
-        documents: fullDocs,
-      },
-      [1, 2, 3, 5], // step 6 missing
+const LIVE_VENDOR: VendorRow = {
+  id: 'ven_1',
+  code: 'VN-ABC123',
+  name: 'Lohith',
+  legalEntityName: 'Lohith Enterprises Pvt Ltd',
+  lifecycleStatus: 'INVITED',
+};
+
+describe('VendorOnboardingService.inviteVendor duplicate guard', () => {
+  it('blocks a second invite to an email already on a live vendor', async () => {
+    const { svc, vendorCreate } = makeService({ contactMatches: [LIVE_VENDOR] });
+    await expect(svc.inviteVendor(INVITE, 'usr_officer')).rejects.toBeInstanceOf(
+      DuplicateVendorError,
     );
-    await expect(svc.submitOnboarding('usr_v')).rejects.toBeInstanceOf(
-      VendorValidationError,
-    );
+    expect(vendorCreate).not.toHaveBeenCalled();
   });
 
-  it('rejects when mandatory documents are missing', async () => {
-    const svc = makeService(
-      {
-        id: 'ven_1',
-        tenantId: 'ten_1',
-        isMsme: false,
-        cocAcknowledgedAt: new Date(),
-        dataProcessingConsentAt: new Date(),
-        documents: [],
-      },
-      [1, 2, 3, 5, 6],
-    );
-    await expect(svc.submitOnboarding('usr_v')).rejects.toBeInstanceOf(
-      VendorValidationError,
-    );
+  it('does not let allowDuplicate override an email collision', async () => {
+    // Both records would share one vendor login, so this override never applies.
+    const { svc } = makeService({ contactMatches: [LIVE_VENDOR] });
+    await expect(
+      svc.inviteVendor({ ...INVITE, allowDuplicate: true }, 'usr_officer'),
+    ).rejects.toBeInstanceOf(DuplicateVendorError);
   });
 
-  it('rejects when the code of conduct is not acknowledged', async () => {
-    const svc = makeService(
-      {
-        id: 'ven_1',
-        tenantId: 'ten_1',
-        isMsme: false,
-        cocAcknowledgedAt: null,
-        dataProcessingConsentAt: new Date(),
-        documents: fullDocs,
-      },
-      [1, 2, 3, 5, 6],
-    );
-    await expect(svc.submitOnboarding('usr_v')).rejects.toBeInstanceOf(
-      VendorValidationError,
-    );
+  it('allows re-inviting an archived vendor on the same email', async () => {
+    const { svc, vendorCreate } = makeService({
+      contactMatches: [{ ...LIVE_VENDOR, lifecycleStatus: 'ARCHIVED' }],
+    });
+    await expect(svc.inviteVendor(INVITE, 'usr_officer')).resolves.toMatchObject({
+      vendorId: expect.any(String),
+    });
+    expect(vendorCreate).toHaveBeenCalledOnce();
   });
 
-  it('routes through the approval engine when all guards pass', async () => {
-    const svc = makeService(
-      {
-        id: 'ven_1',
-        tenantId: 'ten_1',
-        isMsme: false,
-        cocAcknowledgedAt: new Date(),
-        dataProcessingConsentAt: new Date(),
-        documents: fullDocs,
-      },
-      [1, 2, 3, 5, 6],
+  it('blocks a near-identical legal name on a different email', async () => {
+    const { svc } = makeService({ nameCandidates: [LIVE_VENDOR] });
+    await expect(
+      svc.inviteVendor({ ...INVITE, email: 'accounts@example.com' }, 'usr_officer'),
+    ).rejects.toBeInstanceOf(DuplicateVendorError);
+  });
+
+  it('lets the officer confirm a name match with allowDuplicate', async () => {
+    const { svc, vendorCreate } = makeService({ nameCandidates: [LIVE_VENDOR] });
+    await svc.inviteVendor(
+      { ...INVITE, email: 'accounts@example.com', allowDuplicate: true },
+      'usr_officer',
     );
-    await expect(svc.submitOnboarding('usr_v')).resolves.toEqual({ ok: true });
+    expect(vendorCreate).toHaveBeenCalledOnce();
+  });
+
+  it('leaves an unrelated vendor alone', async () => {
+    const { svc, vendorCreate } = makeService({
+      nameCandidates: [
+        {
+          id: 'ven_2',
+          code: 'VN-ZZZ999',
+          name: 'Sabitha Chemicals',
+          legalEntityName: 'Sabitha Chemicals LLP',
+          lifecycleStatus: 'ACTIVE',
+        },
+      ],
+    });
+    await svc.inviteVendor(INVITE, 'usr_officer');
+    expect(vendorCreate).toHaveBeenCalledOnce();
   });
 });
 
-describe('VendorOnboardingService.startSelfRegistration — tenant scoping', () => {
-  function makeSvc(tenant: unknown): VendorOnboardingService {
-    const prisma = {
-      currentTenantId: null,
-      tenant: { findUnique: vi.fn().mockResolvedValue(tenant) },
-    } as unknown as PrismaService;
-    const noop = {
-      record: vi.fn(),
-      emit: vi.fn(),
-      notify: vi.fn(),
-      onApproved: vi.fn(),
-    } as never;
-    const captcha = {
-      verify: vi.fn(async (t: string) => ({
-        ok: Boolean(t),
-        reason: t ? undefined : 'Captcha required.',
-      })),
-    } as never;
-    return new VendorOnboardingService(
-      prisma,
-      noop,
-      noop,
-      noop,
-      noop,
-      noop,
-      noop,
-      noop, // mail
-      noop, // storage
-      noop, // config
-      noop, // pennyDrop
-      captcha,
+/** Invited, never opened the link — an officer can clear this up alone. */
+const OPEN_ONBOARDING: OnboardingRow = {
+  id: 'vob_1',
+  vendorId: 'ven_1',
+  submittedAt: null,
+  reviewDecision: null,
+  emailVerifiedAt: null,
+  vendor: { id: 'ven_1', name: 'Lohith', lifecycleStatus: 'INVITED' },
+};
+
+/** Password already set — now a working login, so this is a revocation. */
+const ACCEPTED_ONBOARDING: OnboardingRow = {
+  ...OPEN_ONBOARDING,
+  emailVerifiedAt: new Date('2026-08-11T09:58:46Z'),
+};
+
+const OFFICER = false;
+const ADMIN = true;
+
+describe('VendorOnboardingService.cancelOnboarding', () => {
+  it('archives the vendor and burns the invitation link', async () => {
+    const { svc, onboardingUpdate, audit } = makeService({
+      onboarding: OPEN_ONBOARDING,
+    });
+    await expect(
+      svc.cancelOnboarding('vob_1', { reason: 'Duplicate invite' }, 'usr_officer', OFFICER),
+    ).resolves.toEqual({ ok: true });
+    expect(onboardingUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          reviewDecision: 'CANCELLED',
+          selfRegistrationToken: null,
+          slaBreachAt: null,
+          vendor: { update: { lifecycleStatus: 'ARCHIVED' } },
+        }),
+      }),
     );
-  }
-
-  const input = {
-    tenantId: '00000000-0000-0000-0000-000000000000',
-    legalEntityName: 'Acme Pumps',
-    email: 'ap@example.com',
-    phone: '9999999999',
-    categoryKey: CATEGORY,
-    captchaResponse: 'demo-captcha',
-  } as never;
-
-  it('rejects a registration whose tenantId matches no tenant (never a defaulted tenant)', async () => {
-    const svc = makeSvc(null); // tenant.findUnique → null
-    await expect(svc.startSelfRegistration(input)).rejects.toBeInstanceOf(
-      VendorValidationError,
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'ONBOARDING_CANCELLED' }),
     );
   });
 
-  it('rejects when the captcha is missing (before any tenant write)', async () => {
-    const svc = makeSvc({ id: 'ten_x' });
+  it('deactivates the vendor login once nothing else uses it', async () => {
+    const { svc, userUpdate } = makeService({
+      onboarding: OPEN_ONBOARDING,
+      sharedContactCount: 0,
+    });
+    await svc.cancelOnboarding('vob_1', { reason: 'Duplicate' }, 'usr_officer', OFFICER);
+    expect(userUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { isActive: false } }),
+    );
+  });
+
+  it('keeps the login active when the vendor’s real record shares it', async () => {
+    // The exact case this feature exists for: the duplicate is cancelled, the
+    // record the vendor actually accepted must stay usable.
+    const { svc, userUpdate } = makeService({
+      onboarding: OPEN_ONBOARDING,
+      sharedContactCount: 1,
+    });
+    await svc.cancelOnboarding('vob_1', { reason: 'Duplicate' }, 'usr_officer', OFFICER);
+    expect(userUpdate).not.toHaveBeenCalled();
+  });
+
+  it('never disables a login that is also a staff account', async () => {
+    const { svc, userUpdate } = makeService({
+      onboarding: OPEN_ONBOARDING,
+      userRoles: ['VENDOR_USER', 'BUYER_ADMIN'],
+    });
+    await svc.cancelOnboarding('vob_1', { reason: 'Duplicate' }, 'usr_officer', OFFICER);
+    expect(userUpdate).not.toHaveBeenCalled();
+  });
+
+  it('lets an officer cancel an invite the vendor never accepted', async () => {
+    const { svc } = makeService({ onboarding: OPEN_ONBOARDING });
     await expect(
-      svc.startSelfRegistration({ ...input, captchaResponse: '' }),
-    ).rejects.toBeInstanceOf(VendorValidationError);
+      svc.cancelOnboarding('vob_1', { reason: 'Wrong vendor' }, 'usr_officer', OFFICER),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it('stops an officer revoking a vendor who has already set a password', async () => {
+    const { svc, onboardingUpdate } = makeService({ onboarding: ACCEPTED_ONBOARDING });
+    await expect(
+      svc.cancelOnboarding('vob_1', { reason: 'Duplicate' }, 'usr_officer', OFFICER),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(onboardingUpdate).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin revoke a vendor who has already set a password', async () => {
+    const { svc, onboardingUpdate } = makeService({ onboarding: ACCEPTED_ONBOARDING });
+    await expect(
+      svc.cancelOnboarding('vob_1', { reason: 'Duplicate' }, 'usr_admin', ADMIN),
+    ).resolves.toEqual({ ok: true });
+    expect(onboardingUpdate).toHaveBeenCalledOnce();
+  });
+
+  it('refuses to cancel a submitted application', async () => {
+    const { svc } = makeService({
+      onboarding: { ...OPEN_ONBOARDING, submittedAt: new Date('2026-08-01') },
+    });
+    await expect(
+      svc.cancelOnboarding('vob_1', { reason: 'Oops' }, 'usr_officer', OFFICER),
+    ).rejects.toBeInstanceOf(VendorStateError);
+  });
+
+  it('refuses to cancel twice', async () => {
+    const { svc } = makeService({
+      onboarding: { ...OPEN_ONBOARDING, reviewDecision: 'CANCELLED' },
+    });
+    await expect(
+      svc.cancelOnboarding('vob_1', { reason: 'Again' }, 'usr_officer', OFFICER),
+    ).rejects.toBeInstanceOf(VendorStateError);
+  });
+});
+
+const ONBOARDING_VENDOR = {
+  id: 'ven_1',
+  name: 'Lohith',
+  legalEntityName: 'Lohith',
+  activatedAt: null,
+  lifecycleStatus: 'INVITED',
+};
+
+describe('VendorOnboardingService.renameVendor', () => {
+  it('corrects both names while the vendor is still onboarding', async () => {
+    const { svc, vendorUpdate, audit } = makeService({ vendorRecord: ONBOARDING_VENDOR });
+    await expect(
+      svc.renameVendor(
+        'ven_1',
+        { name: 'Lohith Material', legalEntityName: 'Lohith Material Pvt Ltd' },
+        'usr_officer',
+      ),
+    ).resolves.toEqual({ ok: true });
+    expect(vendorUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { name: 'Lohith Material', legalEntityName: 'Lohith Material Pvt Ltd' },
+      }),
+    );
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'VENDOR_RENAMED',
+        before: { name: 'Lohith', legalEntityName: 'Lohith' },
+      }),
+    );
+  });
+
+  it('leaves the legal name untouched when only the display name is sent', async () => {
+    const { svc, vendorUpdate } = makeService({ vendorRecord: ONBOARDING_VENDOR });
+    await svc.renameVendor('ven_1', { name: 'Lohith Material' }, 'usr_officer');
+    expect(vendorUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { name: 'Lohith Material' } }),
+    );
+  });
+
+  it('freezes the legal name once the vendor is activated', async () => {
+    const { svc, vendorUpdate } = makeService({
+      vendorRecord: {
+        ...ONBOARDING_VENDOR,
+        activatedAt: new Date('2026-07-01'),
+        lifecycleStatus: 'ACTIVE',
+      },
+    });
+    await expect(
+      svc.renameVendor('ven_1', { legalEntityName: 'Something Else Ltd' }, 'usr_officer'),
+    ).rejects.toBeInstanceOf(VendorStateError);
+    expect(vendorUpdate).not.toHaveBeenCalled();
+  });
+
+  it('still allows a display-name fix on an activated vendor', async () => {
+    const { svc, vendorUpdate } = makeService({
+      vendorRecord: {
+        ...ONBOARDING_VENDOR,
+        activatedAt: new Date('2026-07-01'),
+        lifecycleStatus: 'ACTIVE',
+      },
+    });
+    await svc.renameVendor('ven_1', { name: 'Lohith Material' }, 'usr_officer');
+    expect(vendorUpdate).toHaveBeenCalledOnce();
   });
 });

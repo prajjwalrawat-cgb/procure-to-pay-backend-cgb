@@ -54,8 +54,52 @@ export const InviteVendorInputSchema = z.object({
   categoryKey: z.string().min(1, 'Select a category'),
   source: z.enum(ONBOARDING_INVITATION_SOURCE).default('BUYER_INVITE_SPOT'),
   rfqId: z.string().nullish(),
+  /** Set after the officer has seen a "looks like an existing vendor" warning and
+   *  confirmed it really is a different entity. Only overrides the fuzzy
+   *  legal-name match — an email already in use is never overridable, because
+   *  both vendor records would share one login (see assertNoDuplicateInvite). */
+  allowDuplicate: z.boolean().default(false),
 });
 export type InviteVendorInput = z.infer<typeof InviteVendorInputSchema>;
+
+/** Why an in-flight invitation is being withdrawn. Kept on the onboarding as
+ *  review notes and in the audit log — invitations are never hard-deleted. */
+export const CancelOnboardingInputSchema = z.object({
+  reason: z
+    .string()
+    .min(3, 'Give a reason (at least 3 characters) — it is recorded in the audit log')
+    .max(500, 'Reason cannot exceed 500 characters'),
+});
+export type CancelOnboardingInput = z.infer<typeof CancelOnboardingInputSchema>;
+
+/**
+ * Buyer-side correction of a vendor's name. Both fields are optional so the
+ * caller can fix one without restating the other, but at least one must be
+ * present — an empty PATCH is a mistake, not a no-op worth a 200.
+ *
+ * `legalEntityName` is only accepted while the vendor is still onboarding: once
+ * activated it is the name PAN/GST verification matched against, and changing it
+ * is a material change that belongs in the change-request approval path.
+ */
+export const RenameVendorInputSchema = z
+  .object({
+    name: z
+      .string()
+      .min(2, 'Display name must be at least 2 characters')
+      .max(200, 'Display name cannot exceed 200 characters')
+      .optional(),
+    legalEntityName: z
+      .string()
+      .min(2, 'Legal entity name must be at least 2 characters')
+      .max(200, 'Legal entity name cannot exceed 200 characters')
+      .optional(),
+    reason: z.string().max(500, 'Reason cannot exceed 500 characters').nullish(),
+  })
+  .refine((v) => v.name != null || v.legalEntityName != null, {
+    message: 'Give a new display name or legal entity name',
+    path: ['name'],
+  });
+export type RenameVendorInput = z.infer<typeof RenameVendorInputSchema>;
 
 // ── Public self-registration ─────────────────────────────────────────────────
 

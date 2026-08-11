@@ -1,11 +1,13 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import {
   BlacklistVendorInputSchema,
+  CancelOnboardingInputSchema,
   InviteVendorInputSchema,
   LiftSuspensionInputSchema,
   OnboardingDecisionInputSchema,
   OnboardingListQuerySchema,
   PERMISSIONS,
+  RenameVendorInputSchema,
   ReturnForInfoInputSchema,
   ReviewScreeningInputSchema,
   ScorecardQuerySchema,
@@ -15,12 +17,14 @@ import {
   VerifyDocumentInputSchema,
   type ApprovalDecisionAction,
   type BlacklistVendorInput,
+  type CancelOnboardingInput,
   type InviteVendorInput,
   type LiftSuspensionInput,
   type OnboardingDecisionInput,
   type OnboardingDetailResponse,
   type OnboardingListQuery,
   type OnboardingListResponse,
+  type RenameVendorInput,
   type ReturnForInfoInput,
   type ReviewScreeningInput,
   type ScorecardQuery,
@@ -67,7 +71,11 @@ export class VendorsController {
     @CurrentUser() user: AuthUser,
     @Query(new ZodValidationPipe(OnboardingListQuerySchema)) q: OnboardingListQuery,
   ): Promise<OnboardingListResponse> {
-    return this.query.listOnboardings(q, user.userId);
+    return this.query.listOnboardings(
+      q,
+      user.userId,
+      user.perms.includes(PERMISSIONS.VENDOR_INVITE),
+    );
   }
 
   @Get('onboarding/:id')
@@ -102,6 +110,27 @@ export class VendorsController {
       user.userId,
     );
     return { ok: true };
+  }
+
+  /**
+   * Withdraw an invitation the vendor never submitted. Gated on VENDOR_INVITE —
+   * whoever can create the invite is who fixes a mistaken one — but once the
+   * vendor has set a password the service additionally requires VENDOR_SUSPEND,
+   * because by then it is a live login being taken away.
+   */
+  @Post('onboarding/:id/cancel')
+  @RequirePermission(PERMISSIONS.VENDOR_INVITE)
+  async cancelOnboarding(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(CancelOnboardingInputSchema)) dto: CancelOnboardingInput,
+  ): Promise<{ ok: true }> {
+    return this.onboarding.cancelOnboarding(
+      id,
+      dto,
+      user.userId,
+      user.perms.includes(PERMISSIONS.VENDOR_SUSPEND),
+    );
   }
 
   @Post('onboarding/:id/return')
@@ -251,6 +280,18 @@ export class VendorsController {
   @RequirePermission(PERMISSIONS.VENDOR_READ)
   async vendor360(@Param('id') id: string): Promise<Vendor360Response> {
     return this.query.vendor360(id);
+  }
+
+  /** Correct a vendor's display and/or legal name (the legal one only while the
+   *  vendor is still onboarding — see renameVendor). */
+  @Patch(':id')
+  @RequirePermission(PERMISSIONS.VENDOR_UPDATE)
+  async rename(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(RenameVendorInputSchema)) dto: RenameVendorInput,
+  ): Promise<{ ok: true }> {
+    return this.onboarding.renameVendor(id, dto, user.userId);
   }
 }
 
