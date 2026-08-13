@@ -1,12 +1,27 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   PERMISSIONS,
+  RequisitionAttachmentUploadMetaSchema,
   RequisitionCancelInputSchema,
   RequisitionCommentInputSchema,
   RequisitionCreateInputSchema,
   RequisitionDecisionInputSchema,
   RequisitionListQuerySchema,
   RequisitionUpdateInputSchema,
+  type RequisitionAttachmentUploadMeta,
+  type RequisitionAttachmentView,
   type RequisitionCancelInput,
   type RequisitionCommentInput,
   type RequisitionCreateInput,
@@ -20,7 +35,14 @@ import {
 
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser, RequirePermission } from '../auth/decorators';
+import { ZodValidationError } from '../common/errors/domain-error';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
+import {
+  DOCUMENT_UPLOAD_OPTIONS,
+  assertUploadSize,
+  safeFilename,
+} from '../common/upload/upload-options';
+import { RequisitionAttachmentService } from './requisition-attachment.service';
 import { RequisitionQueryService } from './requisition-query.service';
 import { RequisitionService } from './requisition.service';
 
@@ -29,6 +51,7 @@ export class RequisitionsController {
   constructor(
     private readonly requisitions: RequisitionService,
     private readonly query: RequisitionQueryService,
+    private readonly attachments: RequisitionAttachmentService,
   ) {}
 
   @Get('board')
@@ -121,6 +144,70 @@ export class RequisitionsController {
       dto.comment ?? null,
       user.userId,
     );
+  }
+
+  // ── Attachments ────────────────────────────────────────────────────────────
+
+  @Get(':id/attachments')
+  @RequirePermission(PERMISSIONS.REQUISITION_READ_TENANT)
+  async listAttachments(@Param('id') id: string): Promise<RequisitionAttachmentView[]> {
+    return this.attachments.list(id);
+  }
+
+  /**
+   * Multipart upload of a single supporting document (quote, vendor proforma
+   * invoice, spec, drawing). Size cap and MIME allow-list are enforced by the
+   * interceptor before this handler runs, same as the invoice upload path.
+   *
+   * One file per request — the shared DOCUMENT_UPLOAD_OPTIONS caps `files: 1`,
+   * so the client posts a multi-file selection as parallel requests.
+   */
+  // Gated on read, not update: PROCUREMENT_OFFICER can raise a PR but has no
+  // `requisition:update`, and would otherwise be blocked from attaching the
+  // quote or PI to their own requisition. The real authorization — requester vs
+  // approver vs post-approval lockout — lives in the service, same split as the
+  // comments endpoint below.
+  @Post(':id/attachments/upload')
+  @RequirePermission(PERMISSIONS.REQUISITION_READ_TENANT)
+  @UseInterceptors(FileInterceptor('file', DOCUMENT_UPLOAD_OPTIONS))
+  async uploadAttachment(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @UploadedFile()
+    file:
+      | { originalname: string; buffer: Buffer; mimetype: string; size?: number }
+      | undefined,
+    @Body(new ZodValidationPipe(RequisitionAttachmentUploadMetaSchema))
+    meta: RequisitionAttachmentUploadMeta,
+  ): Promise<RequisitionAttachmentView> {
+    assertUploadSize(file);
+    if (!file?.buffer) {
+      throw new ZodValidationError('No file was uploaded.', {
+        issues: [{ path: 'file', message: 'A file is required.' }],
+      });
+    }
+    return this.attachments.upload(
+      id,
+      {
+        filename: safeFilename(file.originalname),
+        buffer: file.buffer,
+        mimeType: file.mimetype,
+        sizeBytes: file.size ?? file.buffer.byteLength,
+        docType: meta.docType,
+        note: meta.note ?? null,
+      },
+      user.userId,
+    );
+  }
+
+  @Delete(':id/attachments/:attachmentId')
+  @RequirePermission(PERMISSIONS.REQUISITION_READ_TENANT)
+  async removeAttachment(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Param('attachmentId') attachmentId: string,
+  ): Promise<{ ok: true }> {
+    return this.attachments.remove(id, attachmentId, user.userId);
   }
 
   @Post(':id/comments')

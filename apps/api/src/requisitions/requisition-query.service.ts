@@ -16,6 +16,7 @@ import Decimal from 'decimal.js';
 import { ApprovalRoutingService } from '../approvals/approval-routing.service';
 import { BudgetService } from '../budgets/budget.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { RequisitionAttachmentService } from './requisition-attachment.service';
 
 const KANBAN_COLUMNS: RequisitionKanbanColumn[] = [
   'DRAFT',
@@ -40,6 +41,7 @@ export class RequisitionQueryService {
     private readonly prisma: PrismaService,
     private readonly routing: ApprovalRoutingService,
     private readonly budgets: BudgetService,
+    private readonly attachments: RequisitionAttachmentService,
   ) {}
 
   async board(_userId: string): Promise<RequisitionKanbanResponse> {
@@ -210,6 +212,11 @@ export class RequisitionQueryService {
     const myStep = chain.find((s) => s.approverId === userId && s.decision === 'PENDING');
     const activity = await this.activity(id);
     const commentAuthors = await this.userNames(pr.comments.map((c) => c.authorId));
+    const attachments = await this.attachments.list(id);
+    const canAttach = await this.attachments.canAttach(
+      { id: pr.id, status: pr.status, requesterId: pr.requesterId },
+      userId,
+    );
 
     return {
       id: pr.id,
@@ -251,7 +258,7 @@ export class RequisitionQueryService {
         status: po.status,
         totalAmount: po.totalAmount.toString(),
       })),
-      attachments: [],
+      attachments,
       comments: pr.comments.map((c) => ({
         id: c.id,
         authorId: c.authorId,
@@ -266,6 +273,7 @@ export class RequisitionQueryService {
       canCreatePo: pr.status === 'APPROVED' || pr.status === 'PARTIALLY_ISSUED',
       canWithdraw: pr.status === 'AWAITING_APPROVAL' && pr.requesterId === userId,
       canCancel: !['FULLY_ISSUED', 'CANCELLED', 'CLOSED', 'REJECTED'].includes(pr.status),
+      canAttach,
       budgetBreachDetail:
         pr.status === 'BUDGET_BREACH_HELD'
           ? (pr.budgetBreachDetail as unknown as RequisitionDetailResponse['budgetBreachDetail'])

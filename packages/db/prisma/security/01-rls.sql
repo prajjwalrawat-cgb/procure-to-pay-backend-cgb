@@ -18,7 +18,7 @@ DECLARE
   tenanted_tables text[] := ARRAY[
     'User', 'UserRole', 'Plant', 'Department', 'CostCenter',
     'Vendor', 'VendorBank', 'VendorContact', 'VendorDocument',
-    'Requisition', 'RequisitionLine', 'RequisitionComment',
+    'Requisition', 'RequisitionLine', 'RequisitionComment', 'RequisitionAttachment',
     'PurchaseOrder', 'PurchaseOrderLine', 'PurchaseOrderComment',
     'Item', 'ItemUomConversion', 'ItemVendorPricing',
     'Budget', 'BudgetCommitment', 'BudgetAdjustment',

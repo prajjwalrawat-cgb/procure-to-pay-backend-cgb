@@ -5,6 +5,7 @@ import { BudgetsModule } from '../budgets/budgets.module';
 import { DomainEventsModule } from '../common/events/domain-event.service';
 import { ProcurementRefsController } from './procurement-refs.controller';
 import { RequisitionApprovalHooks } from './requisition-approval.hooks';
+import { RequisitionAttachmentService } from './requisition-attachment.service';
 import { RequisitionQueryService } from './requisition-query.service';
 import { RequisitionValidator } from './requisition-validator';
 import { RequisitionService } from './requisition.service';
@@ -23,6 +24,7 @@ import { RequisitionsController } from './requisitions.controller';
     RequisitionQueryService,
     RequisitionValidator,
     RequisitionApprovalHooks,
+    RequisitionAttachmentService,
   ],
   exports: [RequisitionService, RequisitionValidator],
 })

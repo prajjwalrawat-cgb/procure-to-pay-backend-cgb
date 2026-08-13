@@ -70,6 +70,18 @@ enum RequisitionPriority {
   CRITICAL
 }
 
+// Supporting documents a requester attaches while raising a PR.
+// PROFORMA_INVOICE covers the common SME case where the vendor sends a PI over
+// WhatsApp/email and it becomes the price evidence behind the PR lines. A PI is
+// NOT a tax invoice — it never enters the Invoice / 3-way-match / payment path.
+enum RequisitionAttachmentType {
+  QUOTE
+  PROFORMA_INVOICE
+  SPECIFICATION
+  DRAWING
+  OTHER
+}
+
 enum BudgetPeriodType {
   ANNUAL
   QUARTERLY
@@ -822,6 +834,7 @@ model Requisition {
   purchaseOrders    PurchaseOrder[]
   comments          RequisitionComment[]
   budgetCommitments BudgetCommitment[]
+  attachments       RequisitionAttachment[]
 
   @@unique([tenantId, number])
   @@index([tenantId])
@@ -872,6 +885,32 @@ model RequisitionComment {
   authorId      String   @map("author_id")
   body          String
   createdAt     DateTime @default(now()) @db.Timestamptz(6)
+
+  requisition Requisition @relation(fields: [requisitionId], references: [id])
+
+  @@index([tenantId])
+  @@index([requisitionId])
+}
+
+// Quotes, proforma invoices, specs and drawings backing a PR. `fileHash` is the
+// sha256 of the stored bytes — the integrity anchor an approver relies on when
+// the PI is the only evidence for the price on the line items.
+model RequisitionAttachment {
+  id            String                    @id
+  tenantId      String                    @map("tenant_id") @db.Uuid
+  requisitionId String                    @map("requisition_id")
+  s3Key         String                    @map("s3_key")
+  filename      String
+  mimeType      String                    @map("mime_type")
+  sizeBytes     Int                       @map("size_bytes")
+  fileHash      String                    @map("file_hash")
+  docType       RequisitionAttachmentType @default(OTHER) @map("doc_type")
+  note          String?
+  // True when the PR was already APPROVED (or beyond) at upload time — the
+  // approver never saw this document, so the UI and audit trail must say so.
+  addedAfterApproval Boolean              @default(false) @map("added_after_approval")
+  uploadedAt    DateTime                  @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  uploadedBy    String                    @map("uploaded_by")
 
   requisition Requisition @relation(fields: [requisitionId], references: [id])
 
