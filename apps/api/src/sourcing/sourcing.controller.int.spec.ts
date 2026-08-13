@@ -5,6 +5,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { ProblemExceptionFilter } from '../common/filters/problem.filter';
+import { StorageService } from '../common/storage/storage.service';
 import { AwardJustificationService } from './award-justification.service';
 import { AwardService } from './award.service';
 import { QuoteEvaluationService } from './quote-evaluation.service';
@@ -65,6 +66,8 @@ describe('Sourcing controllers (integration)', () => {
         { provide: AwardJustificationService, useValue: noop },
         { provide: VendorRfqService, useValue: vendorRfq },
         { provide: QuoteService, useValue: quotes },
+        // The vendor controller streams quote attachments to storage on upload.
+        { provide: StorageService, useValue: { put: vi.fn().mockResolvedValue(undefined) } },
         { provide: APP_FILTER, useClass: ProblemExceptionFilter },
         {
           provide: APP_GUARD,

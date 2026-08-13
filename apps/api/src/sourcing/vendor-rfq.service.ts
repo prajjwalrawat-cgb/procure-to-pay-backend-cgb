@@ -101,7 +101,11 @@ export class VendorRfqService {
     const vendorId = await this.vendors.resolveVendorId(userId);
     const quotes = await this.prisma.client.quote.findMany({
       where: { vendorId, status: { not: 'REVISED_SUPERSEDED' } },
-      include: { lines: true, vendor: { select: { name: true, isMsme: true } } },
+      include: {
+        lines: true,
+        attachments: { orderBy: { uploadedAt: 'desc' } },
+        vendor: { select: { name: true, isMsme: true } },
+      },
       orderBy: { createdAt: 'desc' },
     });
     return quotes.map((q) => this.toQuoteView(q, true));
@@ -111,7 +115,11 @@ export class VendorRfqService {
     const vendorId = await this.vendors.resolveVendorId(userId);
     const quote = await this.prisma.client.quote.findUnique({
       where: { id: quoteId },
-      include: { lines: true, vendor: { select: { name: true, isMsme: true } } },
+      include: {
+        lines: true,
+        attachments: { orderBy: { uploadedAt: 'desc' } },
+        vendor: { select: { name: true, isMsme: true } },
+      },
     });
     if (!quote) throw new NotFoundException('Quote not found');
     if (quote.vendorId !== vendorId) throw new ForbiddenException('Not your quote.');
@@ -121,7 +129,11 @@ export class VendorRfqService {
   /** A vendor sees their OWN quote content in full; buyers are masked elsewhere. */
   private toQuoteView(
     q: Prisma.QuoteGetPayload<{
-      include: { lines: true; vendor: { select: { name: true; isMsme: true } } };
+      include: {
+        lines: true;
+        attachments: true;
+        vendor: { select: { name: true; isMsme: true } };
+      };
     }>,
     ownView: boolean,
   ): QuoteView {
@@ -144,6 +156,14 @@ export class VendorRfqService {
       revisionNo: q.revisionNo,
       deviationSummary: q.deviationSummary as Record<string, unknown> | null,
       isMsme: q.vendor.isMsme,
+      attachments: q.attachments.map((a) => ({
+        id: a.id,
+        docType: a.docType,
+        envelope: a.envelope,
+        filename: a.filename,
+        sizeBytes: a.sizeBytes,
+        uploadedAt: a.uploadedAt.toISOString(),
+      })),
       lines: q.lines.map((l) => ({
         id: l.id,
         rfqLineId: l.rfqLineId,
