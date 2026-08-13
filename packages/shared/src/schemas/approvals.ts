@@ -289,13 +289,115 @@ const PAYMENT_RUN_FIELDS: ApprovalFieldDef[] = [
   { field: 'item_count', label: 'Item count', type: 'number', ops: NUMBER_OPS },
 ];
 
+/** Fields mirror `ApprovalContextService.buildRequisition`. */
+const REQUISITION_FIELDS: ApprovalFieldDef[] = [
+  { field: 'total_amount', label: 'Total amount', type: 'money', ops: MONEY_OPS },
+  { field: 'tax_amount', label: 'Tax amount', type: 'money', ops: MONEY_OPS },
+  { field: 'line_count', label: 'Line count', type: 'number', ops: NUMBER_OPS },
+  { field: 'priority', label: 'Priority', type: 'enum', ops: ENUM_OPS },
+  { field: 'dept_id', label: 'Department', type: 'string', ops: STRING_OPS },
+  { field: 'plant_id', label: 'Plant', type: 'string', ops: STRING_OPS },
+  { field: 'cost_center_id', label: 'Cost center', type: 'string', ops: STRING_OPS },
+  { field: 'currency', label: 'Currency', type: 'enum', ops: ENUM_OPS },
+];
+
+/** Fields mirror `ApprovalContextService.buildPurchaseOrder`. */
+const PURCHASE_ORDER_FIELDS: ApprovalFieldDef[] = [
+  { field: 'total_amount', label: 'Total amount', type: 'money', ops: MONEY_OPS },
+  { field: 'tax_amount', label: 'Tax amount', type: 'money', ops: MONEY_OPS },
+  { field: 'po_type', label: 'PO type', type: 'enum', ops: ENUM_OPS },
+  { field: 'is_spot_buy', label: 'Is spot buy', type: 'boolean', ops: BOOL_OPS },
+  { field: 'line_count', label: 'Line count', type: 'number', ops: NUMBER_OPS },
+  { field: 'vendor.is_msme', label: 'Vendor is MSME', type: 'boolean', ops: BOOL_OPS },
+  { field: 'currency', label: 'Currency', type: 'enum', ops: ENUM_OPS },
+];
+
+/** Fields mirror `ApprovalContextService.buildVendorOnboarding`. */
+const VENDOR_ONBOARDING_FIELDS: ApprovalFieldDef[] = [
+  { field: 'category', label: 'Vendor category', type: 'string', ops: STRING_OPS },
+  {
+    field: 'annual_turnover',
+    label: 'Declared turnover',
+    type: 'money',
+    ops: MONEY_OPS,
+  },
+  {
+    field: 'is_related_party',
+    label: 'Is related party',
+    type: 'boolean',
+    ops: BOOL_OPS,
+  },
+  { field: 'is_msme', label: 'Is MSME', type: 'boolean', ops: BOOL_OPS },
+  { field: 'risk_grade', label: 'Risk grade', type: 'enum', ops: ENUM_OPS },
+  {
+    field: 'has_flagged_screening',
+    label: 'Has flagged screening',
+    type: 'boolean',
+    ops: BOOL_OPS,
+  },
+  { field: 'source', label: 'Invitation source', type: 'enum', ops: ENUM_OPS },
+];
+
+/** Fields mirror `ApprovalContextService.buildVendorChange`. */
+const VENDOR_CHANGE_FIELDS: ApprovalFieldDef[] = [
+  { field: 'request_type', label: 'Change type', type: 'enum', ops: ENUM_OPS },
+  {
+    field: 'requires_reverification',
+    label: 'Needs re-verification',
+    type: 'boolean',
+    ops: BOOL_OPS,
+  },
+  { field: 'category', label: 'Vendor category', type: 'string', ops: STRING_OPS },
+];
+
+/** Fields mirror `ApprovalContextService.buildContract`. */
+const CONTRACT_FIELDS: ApprovalFieldDef[] = [
+  { field: 'total_amount', label: 'Contract value', type: 'money', ops: MONEY_OPS },
+  { field: 'contract_type', label: 'Contract type', type: 'enum', ops: ENUM_OPS },
+  { field: 'category', label: 'Category', type: 'string', ops: STRING_OPS },
+  { field: 'vendor.is_msme', label: 'Vendor is MSME', type: 'boolean', ops: BOOL_OPS },
+  { field: 'currency', label: 'Currency', type: 'enum', ops: ENUM_OPS },
+];
+
+/** Amendments route on the value of the CHANGE, not the whole contract. */
+const CONTRACT_AMENDMENT_FIELDS: ApprovalFieldDef[] = [
+  { field: 'total_amount', label: 'Change value', type: 'money', ops: MONEY_OPS },
+  { field: 'category', label: 'Category', type: 'string', ops: STRING_OPS },
+  { field: 'currency', label: 'Currency', type: 'enum', ops: ENUM_OPS },
+];
+
+/** Fields mirror `ApprovalContextService.buildAward`. */
+const RFQ_AWARD_FIELDS: ApprovalFieldDef[] = [
+  { field: 'total_amount', label: 'Award value', type: 'money', ops: MONEY_OPS },
+  { field: 'category', label: 'Category', type: 'string', ops: STRING_OPS },
+  { field: 'currency', label: 'Currency', type: 'enum', ops: ENUM_OPS },
+];
+
 export const APPROVAL_FIELDS: Partial<Record<DocumentType, ApprovalFieldDef[]>> = {
   INVOICE: INVOICE_FIELDS,
   PAYMENT_RUN: PAYMENT_RUN_FIELDS,
+  REQUISITION: REQUISITION_FIELDS,
+  PURCHASE_ORDER: PURCHASE_ORDER_FIELDS,
+  VENDOR_ONBOARDING: VENDOR_ONBOARDING_FIELDS,
+  VENDOR_CHANGE: VENDOR_CHANGE_FIELDS,
+  CONTRACT: CONTRACT_FIELDS,
+  CONTRACT_AMENDMENT: CONTRACT_AMENDMENT_FIELDS,
+  RFQ_AWARD: RFQ_AWARD_FIELDS,
 };
 
-/** Document types with a live approval engine in Slice 2. */
-export const LIVE_APPROVAL_DOC_TYPES: DocumentType[] = ['INVOICE', 'PAYMENT_RUN'];
+/** Document types the approval engine routes end-to-end. GRN is the only
+ *  member of `DOCUMENT_TYPE` with no context builder, so it is not routable. */
+export const LIVE_APPROVAL_DOC_TYPES: DocumentType[] = [
+  'REQUISITION',
+  'PURCHASE_ORDER',
+  'INVOICE',
+  'PAYMENT_RUN',
+  'RFQ_AWARD',
+  'VENDOR_ONBOARDING',
+  'VENDOR_CHANGE',
+  'CONTRACT',
+  'CONTRACT_AMENDMENT',
+];
 
 /** Roles selectable as approval step approvers in the builder. */
 export const APPROVER_ROLES: RoleName[] = [
