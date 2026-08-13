@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common
 import {
   ApprovalMatrixCreateInputSchema,
   ApprovalMatrixUpdateInputSchema,
+  DOCUMENT_TYPE,
   PERMISSIONS,
   SimulateInputSchema,
   type ApprovalMatrixCreateInput,
@@ -19,15 +20,10 @@ import { CurrentUser, RequirePermission } from '../auth/decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { ApprovalMatrixService } from './approval-matrix.service';
 
+/** Every routed document type is configurable — the matrix page has a tab per
+ *  type (vendor onboarding, vendor change, awards and amendments included). */
 const DocTypeQuerySchema = z.object({
-  documentType: z.enum([
-    'REQUISITION',
-    'PURCHASE_ORDER',
-    'GRN',
-    'INVOICE',
-    'PAYMENT_RUN',
-    'CONTRACT',
-  ]),
+  documentType: z.enum(DOCUMENT_TYPE as unknown as [DocumentType, ...DocumentType[]]),
 });
 
 @Controller('approvals/matrices')
