@@ -1,8 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@procureflow/db';
 import {
+  PERMISSIONS,
+  ROLE_PERMISSIONS,
   computeDocTax,
   taxKindLabel,
+  type RoleName,
   type RequisitionCardView,
   type RequisitionDetailResponse,
   type RequisitionKanbanColumn,
@@ -218,6 +221,12 @@ export class RequisitionQueryService {
       userId,
     );
 
+    // Action flags fold state together with the viewer's permissions so the UI
+    // never offers a control that is guaranteed to 403.
+    const { roles, perms } = await this.rolesAndPerms(userId);
+    const isAdmin = roles.has('TENANT_ADMIN');
+    const isRequester = pr.requesterId === userId;
+
     return {
       id: pr.id,
       number: pr.number,
@@ -271,8 +280,23 @@ export class RequisitionQueryService {
       myApprovalId: myStep?.approvalId ?? null,
       canDecide: !!myStep,
       canCreatePo: pr.status === 'APPROVED' || pr.status === 'PARTIALLY_ISSUED',
-      canWithdraw: pr.status === 'AWAITING_APPROVAL' && pr.requesterId === userId,
-      canCancel: !['FULLY_ISSUED', 'CANCELLED', 'CLOSED', 'REJECTED'].includes(pr.status),
+      // Submit and cancel carry no ownership check in the service — permission
+      // and document state are the whole rule. Edit additionally requires the
+      // requester or a tenant admin, mirroring updateDraft().
+      canSubmit:
+        ['DRAFT', 'BUDGET_BREACH_HELD'].includes(pr.status) &&
+        perms.has(PERMISSIONS.REQUISITION_SUBMIT),
+      canEdit:
+        pr.status === 'DRAFT' &&
+        perms.has(PERMISSIONS.REQUISITION_UPDATE) &&
+        (isRequester || isAdmin),
+      canWithdraw:
+        pr.status === 'AWAITING_APPROVAL' &&
+        isRequester &&
+        perms.has(PERMISSIONS.REQUISITION_SUBMIT),
+      canCancel:
+        !['FULLY_ISSUED', 'CANCELLED', 'CLOSED', 'REJECTED'].includes(pr.status) &&
+        perms.has(PERMISSIONS.REQUISITION_CANCEL),
       canAttach,
       budgetBreachDetail:
         pr.status === 'BUDGET_BREACH_HELD'
@@ -282,6 +306,26 @@ export class RequisitionQueryService {
   }
 
   // ── internals ──────────────────────────────────────────────────────────────
+
+  /**
+   * Effective roles and permissions for a user, resolved from the DB rather
+   * than the JWT: the read model is also reached by paths that do not carry the
+   * caller's token claims. Mirrors AuthService.loadRolesAndPerms.
+   */
+  private async rolesAndPerms(
+    userId: string,
+  ): Promise<{ roles: Set<string>; perms: Set<string> }> {
+    const userRoles = await this.prisma.client.userRole.findMany({
+      where: { userId },
+      include: { role: true },
+    });
+    const roles = new Set(userRoles.map((ur) => ur.role.name));
+    const perms = new Set<string>();
+    for (const role of roles) {
+      for (const p of ROLE_PERMISSIONS[role as RoleName] ?? []) perms.add(p);
+    }
+    return { roles, perms };
+  }
 
   private columnFor(pr: PrWithRels): RequisitionKanbanColumn | null {
     const s = pr.status;
