@@ -261,13 +261,18 @@ export interface RequisitionDetailResponse {
   myApprovalId: string | null;
   canDecide: boolean;
   canCreatePo: boolean;
+  /**
+   * Action flags for *this* viewer. Each folds the document's state together
+   * with the viewer's permissions, so the UI can hide a control instead of
+   * offering one that always 403s — PROCUREMENT_OFFICER, for instance, can
+   * raise a PR but holds neither requisition:submit nor requisition:update.
+   * Server-computed; the client must not re-derive them.
+   */
+  canSubmit: boolean;
+  canEdit: boolean;
   canWithdraw: boolean;
   canCancel: boolean;
-  /**
-   * Whether *this* viewer may attach a document right now. Server-computed
-   * because the rule depends on PR state, who raised it, and who its approvers
-   * are — the client must not re-derive it.
-   */
+  /** Depends on PR state, who raised it, and who its approvers are. */
   canAttach: boolean;
   budgetBreachDetail: BudgetCheckResult | null;
 }
