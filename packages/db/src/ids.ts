@@ -18,6 +18,7 @@ export const ID_PREFIX = {
   requisition: 'pr',
   requisitionLine: 'prl',
   requisitionComment: 'prc',
+  requisitionAttachment: 'pra',
   item: 'item',
   itemUomConversion: 'uomc',
   itemVendorPricing: 'ivp',

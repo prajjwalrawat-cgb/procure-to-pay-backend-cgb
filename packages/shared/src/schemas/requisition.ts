@@ -86,6 +86,50 @@ export const RequisitionCommentInputSchema = z.object({
 });
 export type RequisitionCommentInput = z.infer<typeof RequisitionCommentInputSchema>;
 
+/**
+ * Supporting documents on a PR. PROFORMA_INVOICE is the vendor's PI — the price
+ * offer that usually arrives on WhatsApp or email before any PO exists. It is
+ * evidence for the PR lines only; the vendor's actual tax invoice is a separate
+ * document that goes through the Invoices module and 3-way match.
+ */
+export const REQUISITION_ATTACHMENT_TYPE = [
+  'QUOTE',
+  'PROFORMA_INVOICE',
+  'SPECIFICATION',
+  'DRAWING',
+  'OTHER',
+] as const;
+export type RequisitionAttachmentType = (typeof REQUISITION_ATTACHMENT_TYPE)[number];
+
+/** Multipart side-fields that accompany the uploaded `file` part. */
+export const RequisitionAttachmentUploadMetaSchema = z.object({
+  docType: z.enum(REQUISITION_ATTACHMENT_TYPE).default('OTHER'),
+  note: z.string().max(500).nullish(),
+});
+export type RequisitionAttachmentUploadMeta = z.infer<
+  typeof RequisitionAttachmentUploadMetaSchema
+>;
+
+export interface RequisitionAttachmentView {
+  id: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  docType: RequisitionAttachmentType;
+  note: string | null;
+  /**
+   * The PR was already approved when this was uploaded, so the approver never
+   * saw it. Surfaced in the UI so a late document is never mistaken for the
+   * evidence the approval rested on.
+   */
+  addedAfterApproval: boolean;
+  uploadedAt: string;
+  uploadedBy: string;
+  uploadedByName: string | null;
+  /** Presigned GET, valid ~10 minutes. Empty string if signing failed. */
+  url: string;
+}
+
 // ── Procurement reference lists (Slice 4 — for wizard pickers) ───────────────
 
 export interface CostCenterRef {
@@ -204,7 +248,7 @@ export interface RequisitionDetailResponse {
   budget: BudgetCheckResult | null;
   committedAmount: string | null;
   poConversions: RequisitionPoConversionView[];
-  attachments: { id: string; url: string; mimeType: string }[];
+  attachments: RequisitionAttachmentView[];
   comments: {
     id: string;
     authorId: string;
@@ -219,5 +263,11 @@ export interface RequisitionDetailResponse {
   canCreatePo: boolean;
   canWithdraw: boolean;
   canCancel: boolean;
+  /**
+   * Whether *this* viewer may attach a document right now. Server-computed
+   * because the rule depends on PR state, who raised it, and who its approvers
+   * are — the client must not re-derive it.
+   */
+  canAttach: boolean;
   budgetBreachDetail: BudgetCheckResult | null;
 }
