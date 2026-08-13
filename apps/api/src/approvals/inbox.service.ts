@@ -8,6 +8,7 @@ import type {
 } from '@procureflow/shared';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { documentHref } from './document-href';
 
 type ApprovalRow = Prisma.ApprovalGetPayload<Record<string, never>>;
 
@@ -195,16 +196,7 @@ export class InboxService {
         delegatedFromName: a.delegatedFromId
           ? (nameById.get(a.delegatedFromId) ?? null)
           : null,
-        href:
-          a.documentType === 'INVOICE'
-            ? `/invoices/${a.documentId}`
-            : a.documentType === 'PAYMENT_RUN'
-              ? `/payment-runs/${a.documentId}`
-              : a.documentType === 'REQUISITION'
-                ? `/requisitions/${a.documentId}`
-                : a.documentType === 'PURCHASE_ORDER'
-                  ? `/purchase-orders/${a.documentId}`
-                  : `/${a.documentType.toLowerCase()}/${a.documentId}`,
+        href: documentHref(a.documentType, a.documentId),
       };
     });
   }
