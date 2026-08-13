@@ -178,6 +178,17 @@ export interface QuoteView {
   deviationSummary: Record<string, unknown> | null;
   lines: QuoteLineView[];
   isMsme: boolean;
+  /** Files the vendor attached — their own quotation PDF, specs, certificates. */
+  attachments: QuoteAttachmentView[];
+}
+
+export interface QuoteAttachmentView {
+  id: string;
+  docType: string;
+  envelope: string;
+  filename: string;
+  sizeBytes: number;
+  uploadedAt: string;
 }
 
 export interface ComparisonRowScore {

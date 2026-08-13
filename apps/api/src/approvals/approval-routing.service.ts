@@ -20,6 +20,7 @@ import {
   NotAssignedApproverError,
 } from './approval.errors';
 import { ApproverResolver } from './approver-resolver.service';
+import { documentHref } from './document-href';
 import { docMeta, type ApprovalOutcome } from './document-status';
 import { NotificationService } from './notification.service';
 
@@ -904,15 +905,6 @@ function entityType(documentType: DocumentType): string {
   }
 }
 
-function hrefFor(documentType: DocumentType, documentId: string): string {
-  if (documentType === 'INVOICE') return `/invoices/${documentId}`;
-  if (documentType === 'PAYMENT_RUN') return `/payment-runs/${documentId}`;
-  if (documentType === 'REQUISITION') return `/requisitions/${documentId}`;
-  if (documentType === 'PURCHASE_ORDER') return `/purchase-orders/${documentId}`;
-  if (documentType === 'CONTRACT') return `/contracts/${documentId}`;
-  if (documentType === 'CONTRACT_AMENDMENT') return `/contracts/${documentId}`;
-  if (documentType === 'RFQ_AWARD') return `/sourcing/awards/${documentId}`;
-  if (documentType === 'VENDOR_ONBOARDING') return `/vendors/onboarding/${documentId}`;
-  if (documentType === 'VENDOR_CHANGE') return `/vendors/changes/${documentId}`;
-  return `/${documentType.toLowerCase()}/${documentId}`;
-}
+/** Kept as a local alias so the many call sites below stay unchanged; the
+ *  mapping itself is shared with the inbox (see document-href.ts). */
+const hrefFor = documentHref;
