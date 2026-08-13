@@ -14,6 +14,16 @@ import Decimal from 'decimal.js';
 
 import { AuditLogService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { DuplicateSkuError } from './item.errors';
+
+function isUniqueViolationOn(err: unknown, column: string): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== 'P2002') {
+    return false;
+  }
+  const target = err.meta?.target;
+  const fields = Array.isArray(target) ? target.map(String) : [String(target ?? '')];
+  return fields.some((f) => f.includes(column));
+}
 
 /**
  * ItemService (Slice 4). The item master backs PR line autocomplete: search,
@@ -135,7 +145,38 @@ export class ItemService {
   }
 
   async create(input: ItemCreateInput, actorId: string): Promise<{ id: string }> {
+    // Checked up front so the common case gets a useful message; the P2002 catch
+    // below still covers two buyers submitting the same code concurrently.
+    const clash = await this.prisma.client.item.findFirst({
+      where: { skuCode: input.skuCode },
+      select: { id: true },
+    });
+    if (clash) throw new DuplicateSkuError(input.skuCode, clash.id);
+
     const id = newId('item');
+    await this.createRow(id, input);
+    await this.audit.record({
+      action: 'ITEM_CREATED',
+      entityType: 'Item',
+      entityId: id,
+      actorId,
+      after: { skuCode: input.skuCode, name: input.name },
+    });
+    return { id };
+  }
+
+  private async createRow(id: string, input: ItemCreateInput): Promise<void> {
+    try {
+      await this.writeItem(id, input);
+    } catch (err) {
+      if (isUniqueViolationOn(err, 'sku_code')) {
+        throw new DuplicateSkuError(input.skuCode);
+      }
+      throw err;
+    }
+  }
+
+  private async writeItem(id: string, input: ItemCreateInput): Promise<void> {
     await this.prisma.client.item.create({
       data: {
         id,
@@ -161,14 +202,6 @@ export class ItemService {
         },
       },
     });
-    await this.audit.record({
-      action: 'ITEM_CREATED',
-      entityType: 'Item',
-      entityId: id,
-      actorId,
-      after: { skuCode: input.skuCode, name: input.name },
-    });
-    return { id };
   }
 
   async update(
