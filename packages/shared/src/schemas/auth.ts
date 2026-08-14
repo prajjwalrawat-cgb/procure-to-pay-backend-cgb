@@ -49,6 +49,25 @@ export const MfaVerifyInputSchema = z.object({
 });
 export type MfaVerifyInput = z.infer<typeof MfaVerifyInputSchema>;
 
+/** "I forgot my password" — the address to send a reset link to. The response
+ *  is deliberately identical whether or not an account exists, so this can
+ *  never be used to discover who has one. */
+export const ForgotPasswordInputSchema = z.object({
+  email: z.string().trim().toLowerCase().email('Enter a valid email address'),
+});
+export type ForgotPasswordInput = z.infer<typeof ForgotPasswordInputSchema>;
+
+/** Setting the new password from the emailed link. Same password rule as the
+ *  invite flow, so a user meets one standard wherever they set a password. */
+export const ResetPasswordInputSchema = z.object({
+  token: z.string().min(10, 'This reset link is invalid or incomplete'),
+  password: z
+    .string()
+    .min(8, 'Password must be at least 8 characters')
+    .max(200, 'Password cannot exceed 200 characters'),
+});
+export type ResetPasswordInput = z.infer<typeof ResetPasswordInputSchema>;
+
 export const MfaSetupResponseSchema = z.object({
   provisioningUri: z.string(),
   qrSvg: z.string(),
