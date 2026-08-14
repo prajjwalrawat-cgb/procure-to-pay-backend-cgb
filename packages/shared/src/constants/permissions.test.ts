@@ -34,3 +34,30 @@ describe('vendor onboarding cancel authority', () => {
     expect(rolesWith(PERMISSIONS.VENDOR_UPDATE)).toContain(ROLES.PROCUREMENT_OFFICER);
   });
 });
+
+describe('vendor onboarding queue visibility', () => {
+  /**
+   * GET /vendors/onboarding is gated on VENDOR_ONBOARDING_READ, so a reviewer
+   * without it would be able to decide on an onboarding it cannot open.
+   */
+  it('is held by every role that can review an onboarding', () => {
+    for (const role of rolesWith(PERMISSIONS.VENDOR_ONBOARDING_REVIEW)) {
+      expect(ROLE_PERMISSIONS[role]).toContain(PERMISSIONS.VENDOR_ONBOARDING_READ);
+    }
+  });
+
+  /**
+   * Finance reads the vendor master and watches the onboarding pipeline because
+   * it pays these vendors — it must not pick up authority over them on the way.
+   */
+  it('gives finance the vendor master and the queue, read-only', () => {
+    for (const role of [ROLES.FINANCE_OFFICER, ROLES.FINANCE_HEAD] as const) {
+      expect(ROLE_PERMISSIONS[role]).toContain(PERMISSIONS.VENDOR_READ);
+      expect(ROLE_PERMISSIONS[role]).toContain(PERMISSIONS.VENDOR_ONBOARDING_READ);
+      expect(ROLE_PERMISSIONS[role]).not.toContain(PERMISSIONS.VENDOR_ONBOARDING_REVIEW);
+      expect(ROLE_PERMISSIONS[role]).not.toContain(PERMISSIONS.VENDOR_INVITE);
+      expect(ROLE_PERMISSIONS[role]).not.toContain(PERMISSIONS.VENDOR_UPDATE);
+      expect(ROLE_PERMISSIONS[role]).not.toContain(PERMISSIONS.VENDOR_DOC_VERIFY);
+    }
+  });
+});

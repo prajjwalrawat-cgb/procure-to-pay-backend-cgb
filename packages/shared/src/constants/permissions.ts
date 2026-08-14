@@ -86,6 +86,11 @@ export const PERMISSIONS = {
   VENDOR_INVITE: 'vendor:invite',
   VENDOR_UPDATE: 'vendor:update',
   VENDOR_ONBOARDING_REVIEW: 'vendor:onboarding_review',
+  /** Read-only view of the onboarding queue and a single vendor's dossier.
+   *  Split out of VENDOR_ONBOARDING_REVIEW so finance can watch the pipeline —
+   *  how many vendors are queued, approved, breaching SLA — without inheriting
+   *  the approve / reject / return-for-info authority that permission carries. */
+  VENDOR_ONBOARDING_READ: 'vendor:onboarding_read',
   /** Withdraw someone else's in-flight invitation. Deliberately NOT in
    *  VENDOR_MASTER: every procurement officer sees the whole onboarding queue,
    *  so a shared cancel would let one officer undo another's work. Admin only. */
@@ -219,6 +224,7 @@ const VENDOR_MASTER: Permission[] = [
   PERMISSIONS.VENDOR_READ,
   PERMISSIONS.VENDOR_INVITE,
   PERMISSIONS.VENDOR_UPDATE,
+  PERMISSIONS.VENDOR_ONBOARDING_READ,
   PERMISSIONS.VENDOR_ONBOARDING_REVIEW,
   PERMISSIONS.VENDOR_DOC_VERIFY,
   PERMISSIONS.VENDOR_SCREENING_REVIEW,
@@ -391,6 +397,11 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     PERMISSIONS.INVOICE_INTAKE_MANAGE,
     PERMISSIONS.COMPLIANCE_RUN,
     PERMISSIONS.INTEGRATION_READ,
+    // AP pays these vendors, so it reads the master and watches the onboarding
+    // pipeline. Strictly read-only: no invite, no lifecycle action, and the
+    // queue view without VENDOR_ONBOARDING_REVIEW's approve/reject authority.
+    ...VENDOR_READ_ONLY,
+    PERMISSIONS.VENDOR_ONBOARDING_READ,
     ...PROCURE_READ,
     ...CONTRACT_READ_ONLY,
   ],
@@ -413,6 +424,7 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     PERMISSIONS.COMPLIANCE_RUN,
     PERMISSIONS.INTEGRATION_READ,
     ...VENDOR_READ_ONLY,
+    PERMISSIONS.VENDOR_ONBOARDING_READ,
     ...PROCURE_READ,
     ...CONTRACT_READ_ONLY,
   ],

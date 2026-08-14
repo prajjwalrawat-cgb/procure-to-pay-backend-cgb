@@ -65,8 +65,11 @@ export class VendorsController {
 
   // ── Onboarding review queue (declared before /:id) ─────────────────────────
 
+  // Reading the queue is VENDOR_ONBOARDING_READ, not _REVIEW: finance watches
+  // the pipeline without holding the decision authority. The write routes below
+  // stay on _REVIEW.
   @Get('onboarding')
-  @RequirePermission(PERMISSIONS.VENDOR_ONBOARDING_REVIEW)
+  @RequirePermission(PERMISSIONS.VENDOR_ONBOARDING_READ)
   async onboardingQueue(
     @CurrentUser() user: AuthUser,
     @Query(new ZodValidationPipe(OnboardingListQuerySchema)) q: OnboardingListQuery,
@@ -79,7 +82,7 @@ export class VendorsController {
   }
 
   @Get('onboarding/:id')
-  @RequirePermission(PERMISSIONS.VENDOR_ONBOARDING_REVIEW)
+  @RequirePermission(PERMISSIONS.VENDOR_ONBOARDING_READ)
   async onboardingDetail(
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,
