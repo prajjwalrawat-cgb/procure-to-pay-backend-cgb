@@ -218,6 +218,7 @@ export class UsersService {
     if (existing) {
       throw new BadRequestException('A user with this email already exists.');
     }
+    await this.assertRoleIsGrantable(tenantId, input.roles, null);
 
     // Random, never-disclosed password — the emailed link is the only way in.
     const argon = await argonHash(randomBytes(24).toString('hex'), { type: 2 });
@@ -308,6 +309,56 @@ export class UsersService {
   }
 
   /**
+   * A role an active approval rule routes to at *tenant* scope must have exactly
+   * one holder: `ApproverResolver` refuses to pick between candidates, so a
+   * second holder would break every submission of that document type with
+   * "N candidates". Reject the grant here, where the admin can still understand
+   * why — rather than at submit time, on someone else's requisition.
+   *
+   * Dept- and plant-scoped steps are exempt: the resolver narrows those by the
+   * document's own department/plant, so one head per department is expected.
+   */
+  private async assertRoleIsGrantable(
+    tenantId: string,
+    roles: RoleName[],
+    exceptUserId: string | null,
+  ): Promise<void> {
+    const matrices = await this.prisma.client.approvalMatrix.findMany({
+      where: { tenantId, isActive: true },
+      select: { name: true, steps: true },
+    });
+    const routedBy = new Map<string, string>();
+    for (const m of matrices) {
+      const steps = (m.steps ?? []) as unknown as { role?: string; scope?: string }[];
+      for (const step of steps) {
+        if (step.scope === 'tenant' && step.role && !routedBy.has(step.role)) {
+          routedBy.set(step.role, m.name);
+        }
+      }
+    }
+
+    for (const roleName of roles) {
+      const rule = routedBy.get(roleName);
+      if (!rule) continue;
+      const others = await this.prisma.client.userRole.count({
+        where: {
+          tenantId,
+          role: { name: roleName },
+          ...(exceptUserId ? { userId: { not: exceptUserId } } : {}),
+        },
+      });
+      if (others > 0) {
+        throw new BadRequestException(
+          `Someone already holds ${roleName}, and the approval rule “${rule}” routes to it. ` +
+            'A role used by an approval rule must have exactly one holder, otherwise ' +
+            'approvals cannot be assigned. Point that rule at a different role first, ' +
+            'or move this role off the current holder.',
+        );
+      }
+    }
+  }
+
+  /**
    * Replace a user's roles (inline role change from the Team page). Rejects
    * non-internal roles and refuses to strip the last active admin of admin.
    */
@@ -344,6 +395,8 @@ export class UsersService {
         throw new ForbiddenException('Cannot remove admin from the last active admin.');
       }
     }
+
+    await this.assertRoleIsGrantable(tenantId, roles, targetUserId);
 
     await this.prisma.client.userRole.deleteMany({ where: { userId: targetUserId } });
     for (const roleName of roles) {
