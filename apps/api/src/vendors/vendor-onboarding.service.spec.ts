@@ -13,7 +13,10 @@ import type { VendorVerificationService } from './vendor-verification.service';
 import type { ICaptchaProvider } from './verification/captcha.provider';
 import type { IPennyDropProvider } from './verification/penny-drop.provider';
 import { DuplicateVendorError, VendorStateError } from './vendor.errors';
-import { VendorOnboardingService } from './vendor-onboarding.service';
+import {
+  VendorOnboardingService,
+  isOnboardingEditable,
+} from './vendor-onboarding.service';
 
 interface VendorRow {
   id: string;
@@ -390,5 +393,50 @@ describe('VendorOnboardingService.renameVendor', () => {
     });
     await svc.renameVendor('ven_1', { name: 'Lohith Material' }, 'usr_officer');
     expect(vendorUpdate).toHaveBeenCalledOnce();
+  });
+});
+
+/**
+ * The rule behind both the portal's read-only state and the server-side guards
+ * on saveStep/submitOnboarding. Re-submitting an approved vendor used to drop
+ * lifecycle_status back to UNDER_REVIEW, which disqualified them from new POs
+ * while the picker (reading the legacy `status`) still offered them.
+ */
+describe('isOnboardingEditable', () => {
+  const draft = { submittedAt: null, reviewDecision: null };
+
+  it('allows an unsubmitted onboarding', () => {
+    expect(isOnboardingEditable('DRAFT', draft)).toBe(true);
+  });
+
+  it('locks an approved, active vendor out of re-submitting', () => {
+    expect(isOnboardingEditable('ACTIVE', draft)).toBe(false);
+  });
+
+  it('locks a submission that is awaiting a decision', () => {
+    expect(
+      isOnboardingEditable('UNDER_REVIEW', {
+        submittedAt: new Date('2026-08-01'),
+        reviewDecision: null,
+      }),
+    ).toBe(false);
+  });
+
+  it('reopens the wizard when the buyer returns it for more information', () => {
+    expect(
+      isOnboardingEditable('UNDER_REVIEW', {
+        submittedAt: new Date('2026-08-01'),
+        reviewDecision: 'RETURNED_FOR_INFO',
+      }),
+    ).toBe(true);
+  });
+
+  it('stays locked on a decided onboarding that is not returned for info', () => {
+    expect(
+      isOnboardingEditable('UNDER_REVIEW', {
+        submittedAt: new Date('2026-08-01'),
+        reviewDecision: 'APPROVED',
+      }),
+    ).toBe(false);
   });
 });

@@ -56,7 +56,11 @@ export class ProcurementRefsController {
   @RequirePermission(PERMISSIONS.PURCHASE_ORDER_READ_TENANT)
   async vendors(): Promise<{ items: VendorRef[] }> {
     const rows = await this.prisma.client.vendor.findMany({
-      where: { status: 'ACTIVE' },
+      // Gate on lifecycle_status, the same field `requireEligibleVendor` uses at
+      // submit time. The legacy `status` can drift from it — a vendor put back
+      // under review keeps status ACTIVE — and picking one of those let a buyer
+      // build an entire PO that could never be submitted.
+      where: { lifecycleStatus: 'ACTIVE' },
       orderBy: { name: 'asc' },
       include: { banks: true },
     });
