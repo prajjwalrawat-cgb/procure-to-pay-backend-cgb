@@ -346,9 +346,21 @@ export class VendorOnboardingService implements OnModuleInit {
     categoryKey: string;
     wizardState: WizardState;
     documents: UploadedDocumentView[];
+    /** Where this onboarding stands, so the portal can show the wizard, a
+     *  "waiting on review" notice, or the approved state — rather than
+     *  offering Submit again to a vendor who is already through. */
+    lifecycleStatus: string;
+    submittedAt: string | null;
+    reviewDecision: string | null;
+    reviewNotes: string | null;
+    editable: boolean;
   }> {
     const vendorId = await this.resolveVendorId(userId);
     const onboarding = await this.requireActiveOnboarding(vendorId);
+    const vendorRow = await this.prisma.client.vendor.findUniqueOrThrow({
+      where: { id: vendorId },
+      select: { lifecycleStatus: true },
+    });
     // Documents come back with the wizard so an uploaded file is still shown
     // (and openable) after a refresh — the ticks are not just client state.
     const docs = await this.prisma.client.vendorDocument.findMany({
@@ -360,6 +372,11 @@ export class VendorOnboardingService implements OnModuleInit {
       onboardingId: onboarding.id,
       categoryKey: onboarding.categoryConfigKey,
       wizardState: onboarding.wizardState as unknown as WizardState,
+      lifecycleStatus: vendorRow.lifecycleStatus,
+      submittedAt: onboarding.submittedAt?.toISOString() ?? null,
+      reviewDecision: onboarding.reviewDecision,
+      reviewNotes: onboarding.reviewNotes,
+      editable: isOnboardingEditable(vendorRow.lifecycleStatus, onboarding),
       documents: await Promise.all(
         docs.map(async (d) => ({
           id: d.id,
@@ -384,6 +401,16 @@ export class VendorOnboardingService implements OnModuleInit {
     const vendor = await this.prisma.client.vendor.findUniqueOrThrow({
       where: { id: vendorId },
     });
+    // Wizard steps write straight onto the vendor master, so an approved vendor
+    // editing here would change their own record with nobody reviewing it.
+    if (!isOnboardingEditable(vendor.lifecycleStatus, onboarding)) {
+      throw new VendorStateError(
+        vendor.lifecycleStatus === 'ACTIVE'
+          ? 'This vendor is already approved. Raise a change request to update the details.'
+          : 'This onboarding is awaiting review and cannot be edited.',
+        { lifecycleStatus: vendor.lifecycleStatus },
+      );
+    }
 
     await this.persistStep(vendorId, vendor.tenantId, stepNumber, stepData);
 
@@ -450,6 +477,17 @@ export class VendorOnboardingService implements OnModuleInit {
     });
     const state = onboarding.wizardState as unknown as WizardState;
     const config = categoryConfig(onboarding.categoryConfigKey);
+
+    // The portal hides Submit once a vendor is through or waiting on a review;
+    // this is the same rule enforced server-side, for stale tabs and direct calls.
+    if (!isOnboardingEditable(vendor.lifecycleStatus, onboarding)) {
+      throw new VendorStateError(
+        vendor.lifecycleStatus === 'ACTIVE'
+          ? 'This vendor is already approved and active. Raise a change request to update the details.'
+          : 'This onboarding has already been submitted and is awaiting review.',
+        { lifecycleStatus: vendor.lifecycleStatus },
+      );
+    }
 
     // Guards.
     const requiredSteps = [1, 2, 3, 5, 6];
@@ -1165,6 +1203,26 @@ export class VendorOnboardingService implements OnModuleInit {
     if (!tid) throw new Error('No tenant context');
     return tid;
   }
+}
+
+/**
+ * May the vendor still change this onboarding and submit it?
+ *
+ * No once they are ACTIVE — a re-submission would drop lifecycle_status back to
+ * UNDER_REVIEW and silently disqualify an approved vendor from new POs, while
+ * their legacy `status` still read ACTIVE. Approved vendors change their record
+ * through the change-request flow instead.
+ *
+ * No while a submission is awaiting a decision. RETURNED_FOR_INFO is the one
+ * decision that deliberately hands the wizard back, so that reopens editing.
+ */
+export function isOnboardingEditable(
+  lifecycleStatus: string,
+  onboarding: { submittedAt: Date | null; reviewDecision: string | null },
+): boolean {
+  if (lifecycleStatus === 'ACTIVE') return false;
+  if (!onboarding.submittedAt) return true;
+  return onboarding.reviewDecision === 'RETURNED_FOR_INFO';
 }
 
 /** Minimal HTML-escaping for interpolated names in outbound email bodies. */
