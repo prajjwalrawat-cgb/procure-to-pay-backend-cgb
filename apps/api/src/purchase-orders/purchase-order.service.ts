@@ -19,11 +19,11 @@ import { DomainEventService } from '../common/events/domain-event.service';
 import { StorageService } from '../common/storage/storage.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PoDocumentService } from './po-document.service';
+import { PoTermsService } from './po-terms.service';
 import {
   NotImplementedError,
   PurchaseOrderStateError,
   PurchaseOrderValidationError,
-  SpotBuyCeilingError,
   VendorNotEligibleError,
 } from './purchase-order.errors';
 
@@ -53,6 +53,7 @@ export class PurchaseOrderService {
     private readonly storage: StorageService,
     private readonly pdf: PoDocumentService,
     private readonly notifications: NotificationService,
+    private readonly terms: PoTermsService,
   ) {}
 
   /** Dispatch the union create schema (from-PR, spot-buy, or contract call-off). */
@@ -319,6 +320,7 @@ export class PurchaseOrderService {
       });
     }
     await this.recomputePrStatus(input.requisitionId);
+    await this.terms.applyLibraryDefaults(id, actorId);
 
     await this.audit.record({
       action: 'PO_CREATED_FROM_PR',
@@ -342,9 +344,6 @@ export class PurchaseOrderService {
     const vendor = await this.requireEligibleVendor(input.vendorId);
     const plant = await this.prisma.client.plant.findFirst({
       where: { tenantId: this.tenantId() },
-    });
-    const tenant = await this.prisma.client.tenant.findUniqueOrThrow({
-      where: { id: this.tenantId() },
     });
 
     const lines = input.lines.map((line, idx) => ({
@@ -371,13 +370,10 @@ export class PurchaseOrderService {
       { plantStateCode: plant?.stateCode ?? '17', vendorGstin: vendor.gstin },
     );
 
-    const ceiling = new Decimal(tenant.spotBuyCeiling.toString());
-    if (new Decimal(tax.total).greaterThan(ceiling)) {
-      throw new SpotBuyCeilingError(
-        `Spot buy total exceeds the ₹${ceiling.toFixed(0)} ceiling. Raise a PR instead.`,
-        { total: tax.total, ceiling: ceiling.toFixed(4) },
-      );
-    }
+    // No value ceiling on a spot buy: procurement raises these against an
+    // offline quote from a registered vendor, and the approval matrix already
+    // gates by value exactly as it does for a PR-based PO. `tenant.spotBuyCeiling`
+    // is retained on the model but no longer enforced here.
 
     const id = newId('purchaseOrder');
     const number = await this.nextNumber();
@@ -404,6 +400,9 @@ export class PurchaseOrderService {
     });
     // Reserve budget immediately (no PR to transfer from).
     await this.budgets.commitSpotBuy(input.costCenterId, id, tax.total, actorId);
+    // Pre-tick the clauses legal marked as default, so the common order needs no
+    // term selection at all; the buyer can still edit the set before issuing.
+    await this.terms.applyLibraryDefaults(id, actorId);
     await this.audit.record({
       action: 'SPOT_BUY_CREATED',
       entityType: 'PurchaseOrder',

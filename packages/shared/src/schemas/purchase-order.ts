@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import type { LiveApprovalStep } from './approvals';
+import { CONTRACT_CLAUSE_TYPE } from '../constants/contract-status';
 import { INCOTERMS, PO_TYPE } from '../constants/status';
 
 const decimalString = z.string().regex(/^-?\d+(\.\d+)?$/, 'must be a decimal string');
@@ -160,6 +161,84 @@ export const VendorPoQueryInputSchema = z.object({
 });
 export type VendorPoQueryInput = z.infer<typeof VendorPoQueryInputSchema>;
 
+// ── Attachments ────────────────────────────────────────────────────────────
+
+/**
+ * Supporting documents on a PO. QUOTE carries the weight here: a spot buy is
+ * raised straight off an offline vendor quote with no PR behind it, so this is
+ * the only place the evidence for the price can live.
+ *
+ * Buyer-side only — these are never listed on the vendor portal.
+ */
+export const PO_ATTACHMENT_TYPE = [
+  'QUOTE',
+  'PROFORMA_INVOICE',
+  'EMAIL_APPROVAL',
+  'SPECIFICATION',
+  'DRAWING',
+  'OTHER',
+] as const;
+export type PoAttachmentType = (typeof PO_ATTACHMENT_TYPE)[number];
+
+/** Multipart side-fields that accompany the uploaded `file` part. */
+export const PoAttachmentUploadMetaSchema = z.object({
+  docType: z.enum(PO_ATTACHMENT_TYPE).default('OTHER'),
+  note: z.string().max(500).nullish(),
+});
+export type PoAttachmentUploadMeta = z.infer<typeof PoAttachmentUploadMetaSchema>;
+
+export interface PoAttachmentView {
+  id: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  docType: PoAttachmentType;
+  note: string | null;
+  /**
+   * The PO was already issued when this was uploaded, so neither the approver
+   * nor the vendor saw it. Surfaced so a late document is never mistaken for
+   * the evidence the order rested on.
+   */
+  addedAfterIssue: boolean;
+  uploadedAt: string;
+  uploadedBy: string;
+  uploadedByName: string | null;
+  url: string;
+}
+
+// ── Terms & conditions ─────────────────────────────────────────────────────
+
+/**
+ * One term printed on the PO PDF. Library clauses are *copied* in at selection
+ * time rather than referenced, so re-issuing an old PO reproduces the wording
+ * that was actually agreed; `libraryClauseId` is provenance only.
+ */
+export const PoTermInputSchema = z.object({
+  clauseType: z.enum(CONTRACT_CLAUSE_TYPE),
+  title: z.string().min(1).max(200),
+  contentText: z.string().min(1).max(4000),
+  /** Set when the row came from ClauseLibrary; false for a typed special condition. */
+  isFromLibrary: z.boolean().default(false),
+  libraryClauseId: z.string().nullish(),
+});
+export type PoTermInput = z.infer<typeof PoTermInputSchema>;
+
+/** Replaces the PO's whole term set; array order becomes the printed order. */
+export const PoTermsSetInputSchema = z.object({
+  terms: z.array(PoTermInputSchema).max(50),
+});
+export type PoTermsSetInput = z.infer<typeof PoTermsSetInputSchema>;
+
+export interface PoTermView {
+  id: string;
+  clauseType: string;
+  title: string;
+  contentText: string;
+  isFromLibrary: boolean;
+  libraryClauseId: string | null;
+  orderNo: number;
+}
+
 // ── Read models ────────────────────────────────────────────────────────────
 
 export interface PoLineView {
@@ -242,7 +321,12 @@ export interface PoDetailResponse {
   budgetCommitment: { budgetId: string; amount: string } | null;
   grnLinks: { id: string; number: string; qcStatus: string }[];
   invoiceLinks: { id: string; number: string; status: string }[];
+  /** The generated PO PDF, not user uploads — see `supportingDocuments`. */
   attachments: { id: string; url: string; mimeType: string }[];
+  /** Buyer-uploaded evidence (above all the offline quote). Never sent to the vendor. */
+  supportingDocuments: PoAttachmentView[];
+  /** Terms printed on the PDF. Also returned to the vendor, who signs against them. */
+  terms: PoTermView[];
   comments: {
     id: string;
     authorId: string;
@@ -311,6 +395,12 @@ export interface VendorPoDetailResponse {
   };
   acknowledgedAt: string | null;
   pdfAvailable: boolean;
+  /**
+   * The same terms printed on the PDF. The vendor acknowledges against these,
+   * so they must be readable on screen and not only inside the attachment.
+   * Buyer-side supporting documents are deliberately absent from this view.
+   */
+  terms: PoTermView[];
   queries: {
     id: string;
     body: string;

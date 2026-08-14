@@ -208,7 +208,18 @@ export class PoDocumentService {
       doc.moveDown(0.5);
       doc.font('Helvetica-Bold').fontSize(10).text('Terms & conditions');
       doc.font('Helvetica').fontSize(8).fillColor('#333');
-      DEFAULT_TERMS.forEach((t, i) => doc.text(`${i + 1}. ${t}`));
+      // Terms chosen for this order (library clauses + any special conditions),
+      // already ordered. DEFAULT_TERMS is the floor for POs raised before terms
+      // selection existed, or where the clause library is still empty — a PO
+      // must never go out to a vendor with no conditions on it at all.
+      if (po.terms.length > 0) {
+        po.terms.forEach((t, i) => {
+          doc.font('Helvetica-Bold').text(`${i + 1}. ${t.title}`);
+          doc.font('Helvetica').text(t.contentText, { indent: 10 });
+        });
+      } else {
+        DEFAULT_TERMS.forEach((t, i) => doc.text(`${i + 1}. ${t}`));
+      }
       doc.moveDown(1.5);
 
       // Signature block
@@ -240,6 +251,7 @@ export class PoDocumentService {
       include: {
         vendor: true,
         lines: { orderBy: { lineNo: 'asc' } },
+        terms: { orderBy: { orderNo: 'asc' } },
         requisition: { include: { plant: true } },
         tenant: true,
       },

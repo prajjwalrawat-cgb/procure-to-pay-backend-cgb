@@ -20,6 +20,7 @@ DECLARE
     'Vendor', 'VendorBank', 'VendorContact', 'VendorDocument',
     'Requisition', 'RequisitionLine', 'RequisitionComment', 'RequisitionAttachment',
     'PurchaseOrder', 'PurchaseOrderLine', 'PurchaseOrderComment',
+    'PurchaseOrderAttachment', 'PurchaseOrderTerm',
     'Item', 'ItemUomConversion', 'ItemVendorPricing',
     'Budget', 'BudgetCommitment', 'BudgetAdjustment',
     'GoodsReceiptNote', 'GrnLine', 'GrnQcSample', 'GrnAttachment',

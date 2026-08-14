@@ -17,6 +17,7 @@ import {
 import { NotificationService } from '../approvals/notification.service';
 import { AuditLogService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { PoTermsService } from './po-terms.service';
 
 /** Statuses a vendor is allowed to see (issued and beyond). */
 const VENDOR_VISIBLE: PoStatus[] = [
@@ -42,6 +43,7 @@ export class VendorPoService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
     private readonly notifications: NotificationService,
+    private readonly terms: PoTermsService,
   ) {}
 
   async resolveVendorId(userId: string): Promise<string> {
@@ -128,6 +130,9 @@ export class VendorPoService {
       },
       acknowledgedAt: po.acknowledgedAt?.toISOString() ?? null,
       pdfAvailable: !!po.pdfS3Key,
+      // The conditions the vendor is acknowledging against — same rows the PDF
+      // prints. Supporting documents are NOT exposed here.
+      terms: await this.terms.list(poId),
       queries: po.comments
         .filter((c) => c.isQuery)
         .map((c) => ({

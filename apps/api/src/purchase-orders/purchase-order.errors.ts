@@ -21,13 +21,6 @@ export class VendorNotEligibleError extends DomainError {
   readonly title = 'Vendor not eligible';
 }
 
-/** Spot-buy total above the tenant ceiling — raise a PR instead. */
-export class SpotBuyCeilingError extends DomainError {
-  readonly status = 422;
-  readonly type = 'https://procureflow.io/errors/spot-buy-ceiling';
-  readonly title = 'Spot buy exceeds ceiling';
-}
-
 /** PO amendment is stubbed in Slice 4 (create an amendment PO — Slice 5.5). */
 export class NotImplementedError extends DomainError {
   readonly status = 501;

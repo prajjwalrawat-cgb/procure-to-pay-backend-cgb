@@ -28,6 +28,8 @@ export const ID_PREFIX = {
   purchaseOrder: 'po',
   purchaseOrderLine: 'pol',
   purchaseOrderComment: 'poc',
+  purchaseOrderAttachment: 'poa',
+  purchaseOrderTerm: 'pot',
   grn: 'grn',
   grnLine: 'grnl',
   grnQcSample: 'qcs',
