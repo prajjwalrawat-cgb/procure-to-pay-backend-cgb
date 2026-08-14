@@ -399,8 +399,10 @@ export const LIVE_APPROVAL_DOC_TYPES: DocumentType[] = [
   'CONTRACT_AMENDMENT',
 ];
 
-/** Roles selectable as approval step approvers in the builder. */
+/** Roles selectable as approval step approvers in the builder. TENANT_ADMIN is
+ *  included so a small org can route everything to the workspace owner. */
 export const APPROVER_ROLES: RoleName[] = [
+  'TENANT_ADMIN',
   'DEPT_HEAD',
   'PROCUREMENT_OFFICER',
   'PROCUREMENT_HEAD',
