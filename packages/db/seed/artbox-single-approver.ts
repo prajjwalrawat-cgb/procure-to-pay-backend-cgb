@@ -28,6 +28,8 @@ const TENANT_NAME = 'Artbox Solutions';
 const ADMIN_EMAIL = 'info@artboxsolutions.com';
 /** Procurement head who becomes an officer; skipped if the user is absent. */
 const DEMOTE_EMAIL = 'shivam.dubey@artboxsolutions.com';
+/** What they become — the same pair every other officer in this tenant holds. */
+const DEMOTE_TO_ROLES = ['PROCUREMENT_OFFICER', 'REQUESTER'];
 
 /** Every document type the approval engine routes (GRN has no context builder). */
 const DOC_TYPES: { documentType: DocumentType; label: string }[] = [
@@ -114,26 +116,29 @@ async function main(): Promise<void> {
     }
   }
 
-  // 3. Procurement head → procurement officer.
+  // 3. Procurement head → procurement officer, with the same pair of roles the
+  //    tenant's other officers hold (they raise their own requisitions too).
   const demote = await prisma.user.findFirst({
     where: { tenantId: tenant.id, email: DEMOTE_EMAIL },
   });
   if (!demote) {
     console.log(`No user ${DEMOTE_EMAIL} — role change skipped.`);
   } else {
-    const officer = await prisma.role.findUniqueOrThrow({
-      where: { name: 'PROCUREMENT_OFFICER' },
+    const roles = await prisma.role.findMany({
+      where: { name: { in: DEMOTE_TO_ROLES } },
     });
     await prisma.userRole.deleteMany({ where: { userId: demote.id } });
-    await prisma.userRole.create({
-      data: {
-        id: newId('userRole'),
-        tenantId: tenant.id,
-        userId: demote.id,
-        roleId: officer.id,
-      },
-    });
-    console.log(`${demote.name} is now PROCUREMENT_OFFICER.`);
+    for (const role of roles) {
+      await prisma.userRole.create({
+        data: {
+          id: newId('userRole'),
+          tenantId: tenant.id,
+          userId: demote.id,
+          roleId: role.id,
+        },
+      });
+    }
+    console.log(`${demote.name} is now ${roles.map((r) => r.name).join(' + ')}.`);
   }
 
   // 4. In-flight documents kept the chain they snapshotted at submit time, so
