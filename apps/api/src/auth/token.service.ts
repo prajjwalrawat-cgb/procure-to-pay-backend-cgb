@@ -1,9 +1,22 @@
+import { createHash } from 'node:crypto';
+
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { TokenPayloadSchema, type Portal, type TokenPayload } from '@procureflow/shared';
+import {
+  PortalSchema,
+  TokenPayloadSchema,
+  type Portal,
+  type TokenPayload,
+} from '@procureflow/shared';
 
 import { decodePem, type Env } from '../config/env';
+
+/** Short digest of the stored password hash. Not a secret (the token is signed
+ *  and the digest is one-way) — it only has to change when the password does. */
+export function passwordFingerprint(argonHash: string): string {
+  return createHash('sha256').update(argonHash).digest('hex').slice(0, 16);
+}
 
 type TokenType = 'access' | 'refresh';
 
@@ -91,6 +104,66 @@ export class TokenService {
       throw new Error('Not a user invite token');
     }
     return { userId: raw.sub, tenantId: raw.tid };
+  }
+
+  /**
+   * Password-reset link token. Short-lived (1 hour) and effectively single-use:
+   * `pv` fingerprints the password hash it was issued against, so the moment the
+   * password changes every outstanding link for that user stops verifying — a
+   * reset link that has been used, or superseded by a newer request, is dead.
+   * Its own `reset` audience and `purpose` claim keep it useless as an access
+   * token. `portal` decides which sign-in page the user lands back on.
+   */
+  async issuePasswordReset(input: {
+    userId: string;
+    tenantId: string;
+    portal: Portal;
+    passwordHash: string;
+  }): Promise<string> {
+    return this.jwt.signAsync(
+      {
+        sub: input.userId,
+        tid: input.tenantId,
+        portal: input.portal,
+        pv: passwordFingerprint(input.passwordHash),
+        purpose: 'password_reset',
+      },
+      {
+        privateKey: this.privateKey,
+        algorithm: 'RS256',
+        issuer: this.config.get('JWT_ISSUER', { infer: true }),
+        audience: 'reset',
+        expiresIn: '1h',
+      },
+    );
+  }
+
+  async verifyPasswordReset(token: string): Promise<{
+    userId: string;
+    tenantId: string;
+    portal: Portal;
+    passwordFingerprint: string;
+  }> {
+    const raw = await this.jwt.verifyAsync<Record<string, unknown>>(token, {
+      publicKey: this.publicKey,
+      algorithms: ['RS256'],
+      issuer: this.config.get('JWT_ISSUER', { infer: true }),
+      audience: 'reset',
+    });
+    if (
+      raw.purpose !== 'password_reset' ||
+      typeof raw.sub !== 'string' ||
+      typeof raw.tid !== 'string' ||
+      typeof raw.pv !== 'string'
+    ) {
+      throw new Error('Not a password reset token');
+    }
+    return {
+      userId: raw.sub,
+      tenantId: raw.tid,
+      portal: PortalSchema.catch('buyer').parse(raw.portal),
+      passwordFingerprint: raw.pv,
+    };
   }
 
   private async sign(input: IssueInput, type: TokenType, ttl: string): Promise<string> {

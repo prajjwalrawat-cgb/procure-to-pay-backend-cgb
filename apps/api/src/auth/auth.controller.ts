@@ -1,14 +1,19 @@
 import { Body, Controller, Headers, Ip, Post, Req } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import {
+  ForgotPasswordInputSchema,
   LoginInputSchema,
   MfaVerifyInputSchema,
   PortalSchema,
   RefreshInputSchema,
+  ResetPasswordInputSchema,
+  type ForgotPasswordInput,
   type LoginInput,
   type LoginResponse,
   type MfaVerifyInput,
   type Portal,
   type RefreshInput,
+  type ResetPasswordInput,
 } from '@procureflow/shared';
 import type { Request } from 'express';
 
@@ -51,6 +56,38 @@ export class AuthController {
   ): Promise<{ ok: true }> {
     await this.auth.logout(dto.refreshToken);
     return { ok: true };
+  }
+
+  /**
+   * Public: email me a reset link. Always `{ ok: true }` — a different answer
+   * for a known address would turn this into an account-enumeration oracle.
+   * Rate-limited per IP because it is unauthenticated and sends mail.
+   */
+  @Public()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('forgot-password')
+  async forgotPassword(
+    @Body(new ZodValidationPipe(ForgotPasswordInputSchema)) dto: ForgotPasswordInput,
+    @Headers('x-portal') portalHeader: string | undefined,
+    @Ip() ip: string,
+    @Req() req: Request,
+  ): Promise<{ ok: true }> {
+    const portal: Portal = PortalSchema.catch('buyer').parse(portalHeader);
+    await this.auth.requestPasswordReset(dto.email, portal, {
+      ipAddress: ip,
+      userAgent: req.headers['user-agent'],
+    });
+    return { ok: true };
+  }
+
+  /** Public: set the new password using the emailed link. */
+  @Public()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('reset-password')
+  async resetPassword(
+    @Body(new ZodValidationPipe(ResetPasswordInputSchema)) dto: ResetPasswordInput,
+  ): Promise<{ email: string }> {
+    return this.auth.resetPassword(dto.token, dto.password);
   }
 
   @Post('mfa/setup')

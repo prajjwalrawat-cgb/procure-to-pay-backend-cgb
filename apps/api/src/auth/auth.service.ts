@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto';
 
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma, newId } from '@procureflow/db';
 import {
@@ -12,14 +17,15 @@ import {
   type Portal,
   type RoleName,
 } from '@procureflow/shared';
-import { verify as argonVerify } from 'argon2';
+import { hash as argonHash, verify as argonVerify } from 'argon2';
 import { authenticator } from 'otplib';
 import { toString as qrToString } from 'qrcode';
 
 import { AuditLogService } from '../audit/audit.service';
+import { MailService } from '../common/mail/mail.service';
 import type { Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
-import { TokenService } from './token.service';
+import { TokenService, passwordFingerprint } from './token.service';
 
 interface AuthRow {
   id: string;
@@ -39,11 +45,14 @@ interface RequestMeta {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly tokens: TokenService,
     private readonly audit: AuditLogService,
     private readonly config: ConfigService<Env, true>,
+    private readonly mail: MailService,
   ) {}
 
   async login(
@@ -180,6 +189,115 @@ export class AuthService {
     });
   }
 
+  /**
+   * Start a password reset. Resolves the same way for every address — sent,
+   * unknown, inactive, or wrong portal — so this cannot be used to find out who
+   * holds an account. The mail goes out unawaited (an SMTP round-trip takes
+   * seconds and must not hold the request open, exactly as invites do).
+   */
+  async requestPasswordReset(
+    email: string,
+    portal: Portal,
+    meta: RequestMeta,
+  ): Promise<void> {
+    const user = await this.findUserForAuth(email);
+    if (!user || !user.is_active) return;
+
+    // A vendor asking on the buyer page (or vice versa) gets no link: the reset
+    // would land them on a portal their account cannot sign in to.
+    const { roles } = await this.loadRolesAndPerms(user.tenant_id, user.id);
+    if (!AuthService.isPortalAllowed(portal, roles)) return;
+
+    const token = await this.tokens.issuePasswordReset({
+      userId: user.id,
+      tenantId: user.tenant_id,
+      portal,
+      passwordHash: user.argon_hash,
+    });
+    await this.auditAuth(user.tenant_id, user.id, 'auth.password_reset_requested', meta);
+    this.dispatchResetEmail(user.email, user.name, portal, token);
+  }
+
+  /**
+   * Finish a password reset. The token's fingerprint must still match the stored
+   * hash, which makes a link single-use and kills any older outstanding links.
+   * Every existing session is revoked: if the reset was prompted by someone else
+   * having the old password, this is what actually removes their access.
+   */
+  async resetPassword(token: string, password: string): Promise<{ email: string }> {
+    let claims;
+    try {
+      claims = await this.tokens.verifyPasswordReset(token);
+    } catch {
+      throw new BadRequestException('This reset link is invalid or has expired.');
+    }
+
+    // Reads of User are RLS-scoped, so open the tenant context the token names —
+    // the same shape the public accept-invite endpoint uses.
+    return this.prisma.runInTenantContext(claims.tenantId, async (tx) => {
+      const user = await tx.user.findUnique({ where: { id: claims.userId } });
+      if (!user || user.tenantId !== claims.tenantId || !user.isActive) {
+        throw new BadRequestException('This reset link is invalid or has expired.');
+      }
+      if (passwordFingerprint(user.argonHash) !== claims.passwordFingerprint) {
+        throw new BadRequestException(
+          'This reset link has already been used. Request a new one.',
+        );
+      }
+
+      const argon = await argonHash(password, { type: 2 /* argon2id */ });
+      await tx.user.update({ where: { id: user.id }, data: { argonHash: argon } });
+      await tx.session.updateMany({
+        where: { userId: user.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      await this.audit.record({
+        action: 'auth.password_reset',
+        entityType: 'User',
+        entityId: user.id,
+        actorId: user.id,
+        tenantId: user.tenantId,
+      });
+      return { email: user.email };
+    });
+  }
+
+  /** Build the reset link and send it WITHOUT awaiting — the SMTP round-trip
+   *  must not hold the request open, and a mail failure must not turn into a
+   *  response that reveals whether the address exists. */
+  private dispatchResetEmail(
+    email: string,
+    name: string,
+    portal: Portal,
+    token: string,
+  ): void {
+    const base = this.config.get('APP_BASE_URL', { infer: true });
+    // The vendor portal is the same app under /vendor (one Next.js deployment).
+    const path = portal === 'vendor' ? '/vendor/reset-password' : '/reset-password';
+    const link = `${base}${path}?token=${encodeURIComponent(token)}`;
+    const subject = 'Reset your ProcureFlow password';
+    const text =
+      `Hello ${name},\n\n` +
+      `We received a request to reset your ProcureFlow password.\n\n` +
+      `Choose a new password (link valid for 1 hour):\n${link}\n\n` +
+      `If you didn't ask for this, ignore this email — your password stays as it is.`;
+    const html =
+      `<p>Hello ${escapeHtml(name)},</p>` +
+      `<p>We received a request to reset your ProcureFlow password.</p>` +
+      `<p><a href="${link}">Choose a new password</a> (link valid for 1 hour).</p>` +
+      `<p>If you didn't ask for this, ignore this email — your password stays as ` +
+      `it is.</p>`;
+    void this.mail
+      .send({ to: email, subject, html, text })
+      .catch((err: unknown) =>
+        this.logger.warn(
+          `Password reset email to ${email} failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        ),
+      );
+  }
+
   // MFA routes are guarded, so the TenantInterceptor has already opened the
   // tenant transaction — use the ambient client (never nest $transaction).
   async setupMfa(
@@ -310,4 +428,13 @@ export class AuthService {
 /** Refresh tokens are stored only as a SHA-256 digest (never in plaintext). */
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
+}
+
+/** The recipient's own name goes into the reset email's HTML body. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
