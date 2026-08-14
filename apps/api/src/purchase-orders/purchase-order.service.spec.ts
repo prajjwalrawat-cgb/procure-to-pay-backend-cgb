@@ -9,11 +9,11 @@ import { DomainEventService } from '../common/events/domain-event.service';
 import { StorageService } from '../common/storage/storage.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PoDocumentService } from './po-document.service';
+import { PoTermsService } from './po-terms.service';
 import { PurchaseOrderService } from './purchase-order.service';
 import {
   PurchaseOrderStateError,
   PurchaseOrderValidationError,
-  SpotBuyCeilingError,
   VendorNotEligibleError,
 } from './purchase-order.errors';
 
@@ -89,6 +89,7 @@ function build(
     { put: vi.fn() } as unknown as StorageService,
     { generate: vi.fn() } as unknown as PoDocumentService,
     { notify: vi.fn() } as unknown as NotificationService,
+    { applyLibraryDefaults: vi.fn() } as unknown as PoTermsService,
   );
   return { service, client };
 }
@@ -257,32 +258,34 @@ describe('PurchaseOrderService.createFromRequisition', () => {
 });
 
 describe('PurchaseOrderService.createSpotBuy', () => {
-  it('rejects a spot buy above the tenant ceiling', async () => {
-    const { service } = build();
-    await expect(
-      service.createSpotBuy(
-        {
-          kind: 'SPOT_BUY',
-          vendorId: 'ven_patel',
-          costCenterId: 'cc_1',
-          ...terms,
-          lines: [
-            {
-              itemDesc: 'Big buy',
-              uom: 'nos',
-              qtyOrdered: '1',
-              unitPrice: '60000',
-              discountPct: '0',
-              taxRate: '0.18',
-            },
-          ],
-        },
-        'usr_1',
-      ),
-    ).rejects.toBeInstanceOf(SpotBuyCeilingError);
+  // The tenant ceiling used to hard-block here; spot buys are now gated only by
+  // the approval matrix, the same as a PR-based PO.
+  it('accepts a spot buy well above the old tenant ceiling', async () => {
+    const { service, client } = build();
+    const r = await service.createSpotBuy(
+      {
+        kind: 'SPOT_BUY',
+        vendorId: 'ven_patel',
+        costCenterId: 'cc_1',
+        ...terms,
+        lines: [
+          {
+            itemDesc: 'Big buy',
+            uom: 'nos',
+            qtyOrdered: '1',
+            unitPrice: '600000',
+            discountPct: '0',
+            taxRate: '0.18',
+          },
+        ],
+      },
+      'usr_1',
+    );
+    expect(r.id).toMatch(/^po_/);
+    expect(client.purchaseOrder.create).toHaveBeenCalledOnce();
   });
 
-  it('accepts a spot buy under the ceiling and commits budget', async () => {
+  it('creates a spot buy and commits budget', async () => {
     const { service, client } = build();
     const r = await service.createSpotBuy(
       {

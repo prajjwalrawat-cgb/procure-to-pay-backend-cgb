@@ -57,6 +57,8 @@ function po0481() {
       udyamNumber: 'UDYAM-GJ-04-0089123',
     },
     tenant: { name: 'Star Cement Ltd', gstin: '17AAACS1234M1Z9' },
+    // Empty: this fixture exercises the DEFAULT_TERMS fallback path.
+    terms: [],
     requisition: {
       number: 'PR-1124',
       plant: {

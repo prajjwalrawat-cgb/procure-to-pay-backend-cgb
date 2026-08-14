@@ -4,7 +4,9 @@ import { ApprovalsModule } from '../approvals/approvals.module';
 import { BudgetsModule } from '../budgets/budgets.module';
 import { DomainEventsModule } from '../common/events/domain-event.service';
 import { StorageModule } from '../common/storage/storage.service';
+import { PoAttachmentService } from './po-attachment.service';
 import { PoDocumentService } from './po-document.service';
+import { PoTermsService } from './po-terms.service';
 import { PurchaseOrderQueryService } from './purchase-order-query.service';
 import { PurchaseOrderService } from './purchase-order.service';
 import { PurchaseOrdersController } from './purchase-orders.controller';
@@ -23,6 +25,8 @@ import { VendorPoService } from './vendor-po.service';
     PurchaseOrderService,
     PurchaseOrderQueryService,
     PoDocumentService,
+    PoAttachmentService,
+    PoTermsService,
     VendorPoService,
   ],
   exports: [PurchaseOrderService, PoDocumentService],

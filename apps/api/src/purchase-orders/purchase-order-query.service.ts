@@ -15,6 +15,8 @@ import Decimal from 'decimal.js';
 
 import { ApprovalRoutingService } from '../approvals/approval-routing.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { PoAttachmentService } from './po-attachment.service';
+import { PoTermsService } from './po-terms.service';
 
 type PoWithRels = Prisma.PurchaseOrderGetPayload<{
   include: {
@@ -39,6 +41,8 @@ export class PurchaseOrderQueryService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly routing: ApprovalRoutingService,
+    private readonly poAttachments: PoAttachmentService,
+    private readonly terms: PoTermsService,
   ) {}
 
   async list(query: PoListQuery): Promise<PoListResponse> {
@@ -176,6 +180,8 @@ export class PurchaseOrderQueryService {
             },
           ]
         : [],
+      supportingDocuments: await this.poAttachments.list(id),
+      terms: await this.terms.list(id),
       comments: po.comments.map((c) => ({
         id: c.id,
         authorId: c.authorId,

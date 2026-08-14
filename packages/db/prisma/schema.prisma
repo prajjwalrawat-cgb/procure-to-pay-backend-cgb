@@ -8,8 +8,8 @@
 // Tenant.id is a real uuid so `tenant_id = current_setting(...)::uuid` works.
 
 generator client {
-  provider   = "prisma-client-js"
-  engineType = "library"
+  provider      = "prisma-client-js"
+  engineType    = "library"
   // "native" covers local dev; "debian-openssl-3.0.x" is the query-engine target
   // for the node:20-slim (Debian bookworm / OpenSSL 3) Docker runtime on Railway.
   binaryTargets = ["native", "debian-openssl-3.0.x"]
@@ -77,6 +77,18 @@ enum RequisitionPriority {
 enum RequisitionAttachmentType {
   QUOTE
   PROFORMA_INVOICE
+  SPECIFICATION
+  DRAWING
+  OTHER
+}
+
+// Supporting documents on a PO. QUOTE is the one that matters: a spot buy is
+// raised straight off an offline vendor quote, with no PR behind it to hold the
+// evidence.
+enum PoAttachmentType {
+  QUOTE
+  PROFORMA_INVOICE
+  EMAIL_APPROVAL
   SPECIFICATION
   DRAWING
   OTHER
@@ -437,73 +449,73 @@ enum ActorType {
 // ─────────────────────────── Tenancy & identity ───────────────────────────
 
 model Tenant {
-  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name               String
-  gstin              String?
-  msmePaymentCapDays Int      @default(45)
-  tdsRate            Decimal  @default("0.001") @db.Decimal(6, 4)
-  currency           String   @default("INR")
-  spotBuyCeiling     Decimal  @default("50000") @map("spot_buy_ceiling") @db.Decimal(18, 4)
-  enforceItemMaster  Boolean  @default(false) @map("enforce_item_master")
+  id                          String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                        String
+  gstin                       String?
+  msmePaymentCapDays          Int                      @default(45)
+  tdsRate                     Decimal                  @default("0.001") @db.Decimal(6, 4)
+  currency                    String                   @default("INR")
+  spotBuyCeiling              Decimal                  @default("50000") @map("spot_buy_ceiling") @db.Decimal(18, 4)
+  enforceItemMaster           Boolean                  @default(false) @map("enforce_item_master")
   // Slice 5 — goods-receipt tolerances & inventory valuation policy (ADR-013/015).
-  overReceiptTolerancePct  Decimal                  @default("0.02") @map("over_receipt_tolerance_pct") @db.Decimal(6, 4)
-  inventoryValuationMethod InventoryValuationMethod @default(WEIGHTED_AVERAGE) @map("inventory_valuation_method")
+  overReceiptTolerancePct     Decimal                  @default("0.02") @map("over_receipt_tolerance_pct") @db.Decimal(6, 4)
+  inventoryValuationMethod    InventoryValuationMethod @default(WEIGHTED_AVERAGE) @map("inventory_valuation_method")
   // Slice 6 — sourcing policy knobs.
-  rfqMinNoticeDays              Int     @default(3) @map("rfq_min_notice_days")
-  rfqMultiPartyOpenThreshold   Decimal @default("2500000") @map("rfq_multi_party_open_threshold") @db.Decimal(18, 4)
-  msmePreferencePct            Decimal @default("15") @map("msme_preference_pct") @db.Decimal(6, 2)
-  newVendorDefaultScore        Decimal @default("70") @map("new_vendor_default_score") @db.Decimal(6, 2)
+  rfqMinNoticeDays            Int                      @default(3) @map("rfq_min_notice_days")
+  rfqMultiPartyOpenThreshold  Decimal                  @default("2500000") @map("rfq_multi_party_open_threshold") @db.Decimal(18, 4)
+  msmePreferencePct           Decimal                  @default("15") @map("msme_preference_pct") @db.Decimal(6, 2)
+  newVendorDefaultScore       Decimal                  @default("70") @map("new_vendor_default_score") @db.Decimal(6, 2)
   // Slice 10a — integration policy knobs (Master Context §9).
-  ocrConfidenceFloorPct      Decimal @default("80") @map("ocr_confidence_floor_pct") @db.Decimal(5, 2)
-  einvoiceTurnoverThreshold  Decimal @default("50000000") @map("einvoice_turnover_threshold") @db.Decimal(18, 4)
+  ocrConfidenceFloorPct       Decimal                  @default("80") @map("ocr_confidence_floor_pct") @db.Decimal(5, 2)
+  einvoiceTurnoverThreshold   Decimal                  @default("50000000") @map("einvoice_turnover_threshold") @db.Decimal(18, 4)
   // Slice 12 — inventory policy knobs. An internal issue at or above either
   // threshold requires an approver (business rule 3).
-  inventoryIssueApprovalQty      Int     @default(50) @map("inventory_issue_approval_qty")
-  inventoryIssueApprovalValue    Decimal @default("25000") @map("inventory_issue_approval_value") @db.Decimal(18, 4)
-  plants             Plant[]
-  createdAt          DateTime @default(now()) @db.Timestamptz(6)
+  inventoryIssueApprovalQty   Int                      @default(50) @map("inventory_issue_approval_qty")
+  inventoryIssueApprovalValue Decimal                  @default("25000") @map("inventory_issue_approval_value") @db.Decimal(18, 4)
+  plants                      Plant[]
+  createdAt                   DateTime                 @default(now()) @db.Timestamptz(6)
 
-  users             User[]
-  departments       Department[]
-  costCenters       CostCenter[]
-  vendors           Vendor[]
-  items             Item[]
-  budgets           Budget[]
-  budgetCommitments BudgetCommitment[]
-  budgetAdjustments BudgetAdjustment[]
-  requisitions      Requisition[]
-  purchaseOrders    PurchaseOrder[]
-  grns              GoodsReceiptNote[]
-  returnMaterialAuths ReturnMaterialAuth[]
-  stockLedger       StockLedger[]
-  invoices          Invoice[]
-  paymentRuns       PaymentRun[]
-  bankAccounts      BankAccount[]
-  paymentRecords    PaymentRecord[]
-  approvalMatrices  ApprovalMatrix[]
-  approvals         Approval[]
-  delegations       Delegation[]
-  notifications     Notification[]
-  auditLogs         AuditLog[]
-  domainEvents      DomainEvent[]
-  matchConfig       TenantMatchConfig?
-  rfqs              Rfq[]
-  quotes            Quote[]
-  awards            Award[]
-  vendorOnboardings VendorOnboarding[]
+  users                  User[]
+  departments            Department[]
+  costCenters            CostCenter[]
+  vendors                Vendor[]
+  items                  Item[]
+  budgets                Budget[]
+  budgetCommitments      BudgetCommitment[]
+  budgetAdjustments      BudgetAdjustment[]
+  requisitions           Requisition[]
+  purchaseOrders         PurchaseOrder[]
+  grns                   GoodsReceiptNote[]
+  returnMaterialAuths    ReturnMaterialAuth[]
+  stockLedger            StockLedger[]
+  invoices               Invoice[]
+  paymentRuns            PaymentRun[]
+  bankAccounts           BankAccount[]
+  paymentRecords         PaymentRecord[]
+  approvalMatrices       ApprovalMatrix[]
+  approvals              Approval[]
+  delegations            Delegation[]
+  notifications          Notification[]
+  auditLogs              AuditLog[]
+  domainEvents           DomainEvent[]
+  matchConfig            TenantMatchConfig?
+  rfqs                   Rfq[]
+  quotes                 Quote[]
+  awards                 Award[]
+  vendorOnboardings      VendorOnboarding[]
   vendorBeneficialOwners VendorBeneficialOwner[]
-  vendorScreenings  VendorScreening[]
-  vendorCategoryConfigs VendorCategoryConfig[]
-  vendorScorecards  VendorScorecard[]
-  vendorSuspensions VendorSuspension[]
-  vendorChangeRequests VendorChangeRequest[]
-  contracts         Contract[]
+  vendorScreenings       VendorScreening[]
+  vendorCategoryConfigs  VendorCategoryConfig[]
+  vendorScorecards       VendorScorecard[]
+  vendorSuspensions      VendorSuspension[]
+  vendorChangeRequests   VendorChangeRequest[]
+  contracts              Contract[]
   // Slice 12 inventory
-  products             Product[]
-  locations            Location[]
-  stockLedgerEntries   StockLedgerEntry[]
-  importBatches        ImportBatch[]
-  importRows           ImportRow[]
+  products               Product[]
+  locations              Location[]
+  stockLedgerEntries     StockLedgerEntry[]
+  importBatches          ImportBatch[]
+  importRows             ImportRow[]
 }
 
 // Per-tenant 3-way match tolerances (Master Context §9 defaults, overridable).
@@ -529,19 +541,19 @@ model Role {
 }
 
 model User {
-  id        String     @id
-  tenantId  String     @map("tenant_id") @db.Uuid
-  email     String
-  name      String
-  argonHash String
-  mfaSecret String?
+  id         String    @id
+  tenantId   String    @map("tenant_id") @db.Uuid
+  email      String
+  name       String
+  argonHash  String
+  mfaSecret  String?
   mfaEnabled Boolean   @default(false)
-  isActive  Boolean    @default(true)
+  isActive   Boolean   @default(true)
   // Set when an admin invites this user; cleared when they accept and activate.
   // A row with invitedAt != null && isActive = false is a PENDING invitation.
-  invitedAt DateTime?  @map("invited_at") @db.Timestamptz(6)
-  createdAt DateTime   @default(now()) @db.Timestamptz(6)
-  updatedAt DateTime   @updatedAt @db.Timestamptz(6)
+  invitedAt  DateTime? @map("invited_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(6)
 
   tenant       Tenant        @relation(fields: [tenantId], references: [id])
   userRoles    UserRole[]
@@ -644,26 +656,26 @@ model CostCenter {
 // ─────────────────────────── Vendors ───────────────────────────
 
 model Vendor {
-  id           String       @id
-  tenantId     String       @map("tenant_id") @db.Uuid
-  code         String
-  name         String
-  gstin        String?
-  pan          String?
-  isMsme       Boolean      @default(false)
-  udyamNumber  String?
-  msmeCategory String?
-  categoryTags String[]
+  id                      String                @id
+  tenantId                String                @map("tenant_id") @db.Uuid
+  code                    String
+  name                    String
+  gstin                   String?
+  pan                     String?
+  isMsme                  Boolean               @default(false)
+  udyamNumber             String?
+  msmeCategory            String?
+  categoryTags            String[]
   // Slice 6 — sourcing directory + scorecard.
-  capabilityTags       String[] @map("capability_tags")
-  preliminaryStatus    Boolean  @default(false) @map("preliminary_status")
-  historicalOtif       Decimal? @map("historical_otif") @db.Decimal(6, 2)
-  historicalQuality    Decimal? @map("historical_quality") @db.Decimal(6, 2)
-  avgResponseTimeHours Decimal? @map("avg_response_time_hours") @db.Decimal(10, 2)
-  status       VendorStatus @default(DRAFT)
-  riskScore    Decimal?     @db.Decimal(6, 2)
-  onTimePct    Decimal?     @db.Decimal(6, 2)
-  qualityPct   Decimal?     @db.Decimal(6, 2)
+  capabilityTags          String[]              @map("capability_tags")
+  preliminaryStatus       Boolean               @default(false) @map("preliminary_status")
+  historicalOtif          Decimal?              @map("historical_otif") @db.Decimal(6, 2)
+  historicalQuality       Decimal?              @map("historical_quality") @db.Decimal(6, 2)
+  avgResponseTimeHours    Decimal?              @map("avg_response_time_hours") @db.Decimal(10, 2)
+  status                  VendorStatus          @default(DRAFT)
+  riskScore               Decimal?              @db.Decimal(6, 2)
+  onTimePct               Decimal?              @db.Decimal(6, 2)
+  qualityPct              Decimal?              @db.Decimal(6, 2)
   // Slice 7 — vendor lifecycle + onboarding + risk.
   lifecycleStatus         VendorLifecycleStatus @default(ACTIVE) @map("lifecycle_status")
   legalEntityType         LegalEntityType?      @map("legal_entity_type")
@@ -693,28 +705,28 @@ model Vendor {
   blacklistReason         String?               @map("blacklist_reason")
   blacklistedBy           String?               @map("blacklisted_by")
   blacklistedAt           DateTime?             @map("blacklisted_at") @db.Timestamptz(6)
-  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
-  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+  createdAt               DateTime              @default(now()) @db.Timestamptz(6)
+  updatedAt               DateTime              @updatedAt @db.Timestamptz(6)
 
-  tenant    Tenant           @relation(fields: [tenantId], references: [id])
-  banks     VendorBank[]
-  contacts  VendorContact[]
-  documents VendorDocument[]
-  purchaseOrders PurchaseOrder[]
-  invoices  Invoice[]
-  itemPricing ItemVendorPricing[]
-  returnMaterialAuths ReturnMaterialAuth[]
-  preferredForLines RequisitionLine[] @relation("PreferredVendorLines")
-  rfqInvitations RfqInvitation[]
-  quotes    Quote[]
-  awardAllocations AwardAllocation[]
-  onboardings VendorOnboarding[]
-  beneficialOwners VendorBeneficialOwner[]
-  screenings VendorScreening[]
-  scorecards VendorScorecard[]
-  suspensions VendorSuspension[]
-  changeRequests VendorChangeRequest[]
-  contracts Contract[]
+  tenant                 Tenant                  @relation(fields: [tenantId], references: [id])
+  banks                  VendorBank[]
+  contacts               VendorContact[]
+  documents              VendorDocument[]
+  purchaseOrders         PurchaseOrder[]
+  invoices               Invoice[]
+  itemPricing            ItemVendorPricing[]
+  returnMaterialAuths    ReturnMaterialAuth[]
+  preferredForLines      RequisitionLine[]       @relation("PreferredVendorLines")
+  rfqInvitations         RfqInvitation[]
+  quotes                 Quote[]
+  awardAllocations       AwardAllocation[]
+  onboardings            VendorOnboarding[]
+  beneficialOwners       VendorBeneficialOwner[]
+  screenings             VendorScreening[]
+  scorecards             VendorScorecard[]
+  suspensions            VendorSuspension[]
+  changeRequests         VendorChangeRequest[]
+  contracts              Contract[]
   inventoryLedgerEntries StockLedgerEntry[]
 
   @@unique([tenantId, code])
@@ -724,16 +736,16 @@ model Vendor {
 }
 
 model VendorBank {
-  id                 String    @id
-  tenantId           String    @map("tenant_id") @db.Uuid
-  vendorId           String    @map("vendor_id")
-  bankName           String
-  accountNoEncrypted String
-  ifsc               String
-  holderName         String
-  isVerified         Boolean   @default(false)
-  verifiedAt         DateTime? @db.Timestamptz(6)
-  pennyDropRef       String?
+  id                    String    @id
+  tenantId              String    @map("tenant_id") @db.Uuid
+  vendorId              String    @map("vendor_id")
+  bankName              String
+  accountNoEncrypted    String
+  ifsc                  String
+  holderName            String
+  isVerified            Boolean   @default(false)
+  verifiedAt            DateTime? @db.Timestamptz(6)
+  pennyDropRef          String?
   // Slice 7 — penny-drop verification.
   pennyDropCreditedAt   DateTime? @map("penny_drop_credited_at") @db.Timestamptz(6)
   pennyDropNameReturned String?   @map("penny_drop_name_returned")
@@ -750,14 +762,14 @@ model VendorBank {
 }
 
 model VendorContact {
-  id        String  @id
-  tenantId  String  @map("tenant_id") @db.Uuid
-  vendorId  String  @map("vendor_id")
-  name      String
-  role      String?
-  email     String?
-  phone     String?
-  isPrimary Boolean @default(false)
+  id                    String    @id
+  tenantId              String    @map("tenant_id") @db.Uuid
+  vendorId              String    @map("vendor_id")
+  name                  String
+  role                  String?
+  email                 String?
+  phone                 String?
+  isPrimary             Boolean   @default(false)
   // Slice 7.
   isAuthorizedSignatory Boolean   @default(false) @map("is_authorized_signatory")
   department            String?
@@ -771,29 +783,29 @@ model VendorContact {
 }
 
 model VendorDocument {
-  id         String    @id
-  tenantId   String    @map("tenant_id") @db.Uuid
-  vendorId   String    @map("vendor_id")
-  docType    String
-  s3Key      String
-  validFrom  DateTime? @db.Timestamptz(6)
-  validTo    DateTime? @db.Timestamptz(6)
-  verifiedAt DateTime? @db.Timestamptz(6)
+  id                 String                @id
+  tenantId           String                @map("tenant_id") @db.Uuid
+  vendorId           String                @map("vendor_id")
+  docType            String
+  s3Key              String
+  validFrom          DateTime?             @db.Timestamptz(6)
+  validTo            DateTime?             @db.Timestamptz(6)
+  verifiedAt         DateTime?             @db.Timestamptz(6)
   // Slice 7 — verification + expiry tracking.
-  filename           String?              @map("filename")
-  sizeBytes          Int?                 @map("size_bytes")
-  fileHash           String?              @map("file_hash")
-  mimeType           String?              @map("mime_type")
-  documentNumber     String?              @map("document_number")
-  issuedBy           String?              @map("issued_by")
-  uploadedBy         String?              @map("uploaded_by")
-  uploadedAt         DateTime?            @map("uploaded_at") @db.Timestamptz(6)
+  filename           String?               @map("filename")
+  sizeBytes          Int?                  @map("size_bytes")
+  fileHash           String?               @map("file_hash")
+  mimeType           String?               @map("mime_type")
+  documentNumber     String?               @map("document_number")
+  issuedBy           String?               @map("issued_by")
+  uploadedBy         String?               @map("uploaded_by")
+  uploadedAt         DateTime?             @map("uploaded_at") @db.Timestamptz(6)
   verificationStatus DocVerificationStatus @default(PENDING) @map("verification_status")
-  verificationSource String?              @map("verification_source")
-  verifiedBy         String?              @map("verified_by")
-  verificationRef    String?              @map("verification_ref")
-  rejectionReason    String?              @map("rejection_reason")
-  reminderSentAt     DateTime?            @map("reminder_sent_at") @db.Timestamptz(6)
+  verificationSource String?               @map("verification_source")
+  verifiedBy         String?               @map("verified_by")
+  verificationRef    String?               @map("verification_ref")
+  rejectionReason    String?               @map("rejection_reason")
+  reminderSentAt     DateTime?             @map("reminder_sent_at") @db.Timestamptz(6)
 
   vendor Vendor @relation(fields: [vendorId], references: [id])
 
@@ -826,10 +838,10 @@ model Requisition {
   createdAt              DateTime            @default(now()) @db.Timestamptz(6)
   updatedAt              DateTime            @updatedAt @db.Timestamptz(6)
 
-  tenant            Tenant               @relation(fields: [tenantId], references: [id])
-  costCenter        CostCenter           @relation(fields: [costCenterId], references: [id])
-  plant             Plant                @relation(fields: [plantId], references: [id])
-  requester         User                 @relation("RequisitionRequester", fields: [requesterId], references: [id])
+  tenant            Tenant                  @relation(fields: [tenantId], references: [id])
+  costCenter        CostCenter              @relation(fields: [costCenterId], references: [id])
+  plant             Plant                   @relation(fields: [plantId], references: [id])
+  requester         User                    @relation("RequisitionRequester", fields: [requesterId], references: [id])
   lines             RequisitionLine[]
   purchaseOrders    PurchaseOrder[]
   comments          RequisitionComment[]
@@ -896,21 +908,21 @@ model RequisitionComment {
 // sha256 of the stored bytes — the integrity anchor an approver relies on when
 // the PI is the only evidence for the price on the line items.
 model RequisitionAttachment {
-  id            String                    @id
-  tenantId      String                    @map("tenant_id") @db.Uuid
-  requisitionId String                    @map("requisition_id")
-  s3Key         String                    @map("s3_key")
-  filename      String
-  mimeType      String                    @map("mime_type")
-  sizeBytes     Int                       @map("size_bytes")
-  fileHash      String                    @map("file_hash")
-  docType       RequisitionAttachmentType @default(OTHER) @map("doc_type")
-  note          String?
+  id                 String                    @id
+  tenantId           String                    @map("tenant_id") @db.Uuid
+  requisitionId      String                    @map("requisition_id")
+  s3Key              String                    @map("s3_key")
+  filename           String
+  mimeType           String                    @map("mime_type")
+  sizeBytes          Int                       @map("size_bytes")
+  fileHash           String                    @map("file_hash")
+  docType            RequisitionAttachmentType @default(OTHER) @map("doc_type")
+  note               String?
   // True when the PR was already APPROVED (or beyond) at upload time — the
   // approver never saw this document, so the UI and audit trail must say so.
-  addedAfterApproval Boolean              @default(false) @map("added_after_approval")
-  uploadedAt    DateTime                  @default(now()) @map("uploaded_at") @db.Timestamptz(6)
-  uploadedBy    String                    @map("uploaded_by")
+  addedAfterApproval Boolean                   @default(false) @map("added_after_approval")
+  uploadedAt         DateTime                  @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  uploadedBy         String                    @map("uploaded_by")
 
   requisition Requisition @relation(fields: [requisitionId], references: [id])
 
@@ -956,15 +968,17 @@ model PurchaseOrder {
   createdAt              DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt              DateTime  @updatedAt @db.Timestamptz(6)
 
-  tenant            Tenant                @relation(fields: [tenantId], references: [id])
-  vendor            Vendor                @relation(fields: [vendorId], references: [id])
-  requisition       Requisition?          @relation(fields: [requisitionId], references: [id])
-  lines             PurchaseOrderLine[]
-  grns              GoodsReceiptNote[]
-  invoices          Invoice[]
-  comments          PurchaseOrderComment[]
-  budgetCommitments BudgetCommitment[]
+  tenant                 Tenant                    @relation(fields: [tenantId], references: [id])
+  vendor                 Vendor                    @relation(fields: [vendorId], references: [id])
+  requisition            Requisition?              @relation(fields: [requisitionId], references: [id])
+  lines                  PurchaseOrderLine[]
+  grns                   GoodsReceiptNote[]
+  invoices               Invoice[]
+  comments               PurchaseOrderComment[]
+  budgetCommitments      BudgetCommitment[]
   inventoryLedgerEntries StockLedgerEntry[]
+  attachments            PurchaseOrderAttachment[]
+  terms                  PurchaseOrderTerm[]
 
   @@unique([tenantId, number])
   @@index([tenantId])
@@ -975,35 +989,84 @@ model PurchaseOrder {
 }
 
 model PurchaseOrderLine {
-  id              String  @id
-  tenantId        String  @map("tenant_id") @db.Uuid
-  poId            String  @map("po_id")
-  lineNo          Int
-  prLineId        String? @map("pr_line_id")
-  contractLineId  String? @map("contract_line_id") // Slice 9 — the rate card row this line was called off against
-  itemId          String? @map("item_id")
-  itemDesc        String
-  hsnCode         String? @map("hsn_code")
-  uom             String
-  qtyOrdered      Decimal @db.Decimal(18, 4)
-  qtyReceived     Decimal @default("0") @db.Decimal(18, 4)
-  qtyInvoiced     Decimal @default("0") @map("qty_invoiced") @db.Decimal(18, 4)
-  qtyCancelled    Decimal @default("0") @map("qty_cancelled") @db.Decimal(18, 4)
-  unitPrice       Decimal @db.Decimal(18, 4)
-  discountPct     Decimal @default("0") @map("discount_pct") @db.Decimal(6, 4)
-  taxRate         Decimal @default("0") @db.Decimal(6, 4)
-  lineTotal       Decimal @default("0") @map("line_total") @db.Decimal(18, 4)
-  glAccount       String?
+  id               String    @id
+  tenantId         String    @map("tenant_id") @db.Uuid
+  poId             String    @map("po_id")
+  lineNo           Int
+  prLineId         String?   @map("pr_line_id")
+  contractLineId   String?   @map("contract_line_id") // Slice 9 — the rate card row this line was called off against
+  itemId           String?   @map("item_id")
+  itemDesc         String
+  hsnCode          String?   @map("hsn_code")
+  uom              String
+  qtyOrdered       Decimal   @db.Decimal(18, 4)
+  qtyReceived      Decimal   @default("0") @db.Decimal(18, 4)
+  qtyInvoiced      Decimal   @default("0") @map("qty_invoiced") @db.Decimal(18, 4)
+  qtyCancelled     Decimal   @default("0") @map("qty_cancelled") @db.Decimal(18, 4)
+  unitPrice        Decimal   @db.Decimal(18, 4)
+  discountPct      Decimal   @default("0") @map("discount_pct") @db.Decimal(6, 4)
+  taxRate          Decimal   @default("0") @db.Decimal(6, 4)
+  lineTotal        Decimal   @default("0") @map("line_total") @db.Decimal(18, 4)
+  glAccount        String?
   deliveryDateLine DateTime? @map("delivery_date_line") @db.Timestamptz(6)
 
-  po           PurchaseOrder      @relation(fields: [poId], references: [id])
-  item         Item?              @relation(fields: [itemId], references: [id])
+  po           PurchaseOrder @relation(fields: [poId], references: [id])
+  item         Item?         @relation(fields: [itemId], references: [id])
   grnLines     GrnLine[]
   invoiceLines InvoiceLine[]
 
   @@index([tenantId])
   @@index([poId])
   @@index([itemId])
+}
+
+/// Supporting documents on a PO — above all the offline vendor quote a spot buy
+/// is raised against, which is the only evidence that the price was competed.
+/// Buyer-side only: the vendor portal never lists these, since a quote comparison
+/// or an internal note must not leak back to the supplier.
+model PurchaseOrderAttachment {
+  id              String           @id
+  tenantId        String           @map("tenant_id") @db.Uuid
+  poId            String           @map("po_id")
+  s3Key           String           @map("s3_key")
+  filename        String
+  mimeType        String           @map("mime_type")
+  sizeBytes       Int              @map("size_bytes")
+  fileHash        String           @map("file_hash")
+  docType         PoAttachmentType @default(OTHER) @map("doc_type")
+  note            String?
+  /// True when the PO was already issued at upload time — the approver and the
+  /// vendor never saw this document, so the UI and audit trail must say so.
+  addedAfterIssue Boolean          @default(false) @map("added_after_issue")
+  uploadedAt      DateTime         @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  uploadedBy      String           @map("uploaded_by")
+
+  po PurchaseOrder @relation(fields: [poId], references: [id])
+
+  @@index([tenantId])
+  @@index([poId])
+}
+
+/// The terms & conditions printed on this PO's PDF. Rows are copied from
+/// ClauseLibrary at selection time rather than referenced live, so re-issuing an
+/// old PO reproduces the wording that was actually agreed — the same snapshot
+/// rule ContractClause follows. `libraryClauseId` is provenance only.
+model PurchaseOrderTerm {
+  id              String             @id
+  tenantId        String             @map("tenant_id") @db.Uuid
+  poId            String             @map("po_id")
+  clauseType      ContractClauseType @map("clause_type")
+  title           String
+  contentText     String             @map("content_text")
+  isFromLibrary   Boolean            @default(false) @map("is_from_library")
+  libraryClauseId String?            @map("library_clause_id")
+  orderNo         Int                @map("order_no")
+  createdAt       DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  po PurchaseOrder @relation(fields: [poId], references: [id])
+
+  @@index([tenantId])
+  @@index([poId, orderNo])
 }
 
 model PurchaseOrderComment {
@@ -1025,37 +1088,37 @@ model PurchaseOrderComment {
 // ─────────────────────────── Item master (Slice 4) ───────────────────────────
 
 model Item {
-  id                String   @id
-  tenantId          String   @map("tenant_id") @db.Uuid
-  skuCode           String   @map("sku_code")
-  name              String
-  description       String?
-  category          String
-  subcategory       String?
-  hsnCode           String   @map("hsn_code")
-  gstRate           Decimal  @map("gst_rate") @db.Decimal(6, 4)
-  primaryUom        String   @map("primary_uom")
-  isActive          Boolean  @default(true) @map("is_active")
-  isCapex           Boolean  @default(false) @map("is_capex")
-  defaultGlAccount  String?  @map("default_gl_account")
+  id               String   @id
+  tenantId         String   @map("tenant_id") @db.Uuid
+  skuCode          String   @map("sku_code")
+  name             String
+  description      String?
+  category         String
+  subcategory      String?
+  hsnCode          String   @map("hsn_code")
+  gstRate          Decimal  @map("gst_rate") @db.Decimal(6, 4)
+  primaryUom       String   @map("primary_uom")
+  isActive         Boolean  @default(true) @map("is_active")
+  isCapex          Boolean  @default(false) @map("is_capex")
+  defaultGlAccount String?  @map("default_gl_account")
   // Slice 5 — QC + receipt behaviour (item master QC extension, ADR-015).
-  requiresQc        Boolean  @default(false) @map("requires_qc")
-  requiresCoa       Boolean  @default(false) @map("requires_coa")
-  requiresBatch     Boolean  @default(false) @map("requires_batch")
-  requiresSerial    Boolean  @default(false) @map("requires_serial")
-  qcParameters      Json?    @map("qc_parameters")
-  samplingPlanRef   String?  @map("sampling_plan_ref")
-  aqlLevel          String?  @map("aql_level")
-  stockGlAccount    String?  @map("stock_gl_account")
-  createdAt         DateTime @default(now()) @db.Timestamptz(6)
-  updatedAt         DateTime @updatedAt @db.Timestamptz(6)
+  requiresQc       Boolean  @default(false) @map("requires_qc")
+  requiresCoa      Boolean  @default(false) @map("requires_coa")
+  requiresBatch    Boolean  @default(false) @map("requires_batch")
+  requiresSerial   Boolean  @default(false) @map("requires_serial")
+  qcParameters     Json?    @map("qc_parameters")
+  samplingPlanRef  String?  @map("sampling_plan_ref")
+  aqlLevel         String?  @map("aql_level")
+  stockGlAccount   String?  @map("stock_gl_account")
+  createdAt        DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @db.Timestamptz(6)
 
-  tenant           Tenant               @relation(fields: [tenantId], references: [id])
-  uomConversions   ItemUomConversion[]
-  vendorPricing    ItemVendorPricing[]
-  requisitionLines RequisitionLine[]
-  poLines          PurchaseOrderLine[]
-  stockLedger      StockLedger[]
+  tenant            Tenant              @relation(fields: [tenantId], references: [id])
+  uomConversions    ItemUomConversion[]
+  vendorPricing     ItemVendorPricing[]
+  requisitionLines  RequisitionLine[]
+  poLines           PurchaseOrderLine[]
+  stockLedger       StockLedger[]
   inventoryProducts Product[]
 
   @@unique([tenantId, skuCode])
@@ -1102,22 +1165,22 @@ model ItemVendorPricing {
 // ─────────────────────────── Budgets (Slice 4) ───────────────────────────
 
 model Budget {
-  id             String               @id
-  tenantId       String               @map("tenant_id") @db.Uuid
-  costCenterId   String               @map("cost_center_id")
-  periodType     BudgetPeriodType     @default(ANNUAL) @map("period_type")
-  periodStart    DateTime             @map("period_start") @db.Timestamptz(6)
-  periodEnd      DateTime             @map("period_end") @db.Timestamptz(6)
-  currency       String               @default("INR")
-  allocatedAmount Decimal             @map("allocated_amount") @db.Decimal(18, 4)
-  openingBalance Decimal              @default("0") @map("opening_balance") @db.Decimal(18, 4)
+  id              String               @id
+  tenantId        String               @map("tenant_id") @db.Uuid
+  costCenterId    String               @map("cost_center_id")
+  periodType      BudgetPeriodType     @default(ANNUAL) @map("period_type")
+  periodStart     DateTime             @map("period_start") @db.Timestamptz(6)
+  periodEnd       DateTime             @map("period_end") @db.Timestamptz(6)
+  currency        String               @default("INR")
+  allocatedAmount Decimal              @map("allocated_amount") @db.Decimal(18, 4)
+  openingBalance  Decimal              @default("0") @map("opening_balance") @db.Decimal(18, 4)
   // Denormalised snapshot for fast reads (recomputed on each commitment change).
-  committedAmount Decimal             @default("0") @map("committed_amount") @db.Decimal(18, 4)
-  consumedAmount Decimal              @default("0") @map("consumed_amount") @db.Decimal(18, 4)
-  rolloverPolicy BudgetRolloverPolicy @default(NONE) @map("rollover_policy")
-  isActive       Boolean              @default(true) @map("is_active")
-  createdAt      DateTime             @default(now()) @db.Timestamptz(6)
-  updatedBy      String?              @map("updated_by")
+  committedAmount Decimal              @default("0") @map("committed_amount") @db.Decimal(18, 4)
+  consumedAmount  Decimal              @default("0") @map("consumed_amount") @db.Decimal(18, 4)
+  rolloverPolicy  BudgetRolloverPolicy @default(NONE) @map("rollover_policy")
+  isActive        Boolean              @default(true) @map("is_active")
+  createdAt       DateTime             @default(now()) @db.Timestamptz(6)
+  updatedBy       String?              @map("updated_by")
 
   tenant      Tenant             @relation(fields: [tenantId], references: [id])
   commitments BudgetCommitment[]
@@ -1128,24 +1191,24 @@ model Budget {
 }
 
 model BudgetCommitment {
-  id           String                 @id
-  tenantId     String                 @map("tenant_id") @db.Uuid
-  budgetId     String                 @map("budget_id")
-  costCenterId String                 @map("cost_center_id")
-  sourceType   BudgetCommitmentSource @map("source_type")
-  sourceId     String                 @map("source_id")
-  requisitionId String?               @map("requisition_id")
-  poId         String?                @map("po_id")
-  amount       Decimal                @db.Decimal(18, 4)
-  status       BudgetCommitmentStatus @default(COMMITTED)
-  committedAt  DateTime               @default(now()) @map("committed_at") @db.Timestamptz(6)
-  committedBy  String                 @map("committed_by")
-  releasedAt   DateTime?              @map("released_at") @db.Timestamptz(6)
-  releaseReason String?               @map("release_reason")
+  id            String                 @id
+  tenantId      String                 @map("tenant_id") @db.Uuid
+  budgetId      String                 @map("budget_id")
+  costCenterId  String                 @map("cost_center_id")
+  sourceType    BudgetCommitmentSource @map("source_type")
+  sourceId      String                 @map("source_id")
+  requisitionId String?                @map("requisition_id")
+  poId          String?                @map("po_id")
+  amount        Decimal                @db.Decimal(18, 4)
+  status        BudgetCommitmentStatus @default(COMMITTED)
+  committedAt   DateTime               @default(now()) @map("committed_at") @db.Timestamptz(6)
+  committedBy   String                 @map("committed_by")
+  releasedAt    DateTime?              @map("released_at") @db.Timestamptz(6)
+  releaseReason String?                @map("release_reason")
 
-  tenant      Tenant        @relation(fields: [tenantId], references: [id])
-  budget      Budget        @relation(fields: [budgetId], references: [id])
-  requisition Requisition?  @relation(fields: [requisitionId], references: [id])
+  tenant      Tenant         @relation(fields: [tenantId], references: [id])
+  budget      Budget         @relation(fields: [budgetId], references: [id])
+  requisition Requisition?   @relation(fields: [requisitionId], references: [id])
   po          PurchaseOrder? @relation(fields: [poId], references: [id])
 
   @@index([tenantId])
@@ -1154,15 +1217,15 @@ model BudgetCommitment {
 }
 
 model BudgetAdjustment {
-  id             String               @id
-  tenantId       String               @map("tenant_id") @db.Uuid
-  budgetId       String               @map("budget_id")
-  adjustmentType BudgetAdjustmentType @map("adjustment_type")
-  amount         Decimal              @db.Decimal(18, 4)
-  reason         String
-  relatedBudgetId String?             @map("related_budget_id")
-  approvedBy     String               @map("approved_by")
-  approvedAt     DateTime             @default(now()) @map("approved_at") @db.Timestamptz(6)
+  id              String               @id
+  tenantId        String               @map("tenant_id") @db.Uuid
+  budgetId        String               @map("budget_id")
+  adjustmentType  BudgetAdjustmentType @map("adjustment_type")
+  amount          Decimal              @db.Decimal(18, 4)
+  reason          String
+  relatedBudgetId String?              @map("related_budget_id")
+  approvedBy      String               @map("approved_by")
+  approvedAt      DateTime             @default(now()) @map("approved_at") @db.Timestamptz(6)
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
   budget Budget @relation(fields: [budgetId], references: [id])
@@ -1247,8 +1310,8 @@ model GrnLine {
   glStockAccount      String?   @map("gl_stock_account")
   varianceFlags       Json?     @map("variance_flags")
 
-  grn       GoodsReceiptNote @relation(fields: [grnId], references: [id])
-  poLine    PurchaseOrderLine @relation(fields: [poLineId], references: [id])
+  grn       GoodsReceiptNote         @relation(fields: [grnId], references: [id])
+  poLine    PurchaseOrderLine        @relation(fields: [poLineId], references: [id])
   qcSamples GrnQcSample[]
   rmaLines  ReturnMaterialAuthLine[]
 
@@ -1258,21 +1321,21 @@ model GrnLine {
 }
 
 model GrnQcSample {
-  id                       String           @id
-  tenantId                 String           @map("tenant_id") @db.Uuid
-  grnLineId                String           @map("grn_line_id")
-  sampleType               QcSampleType     @default(AQL) @map("sample_type")
-  sampleSize               Int              @map("sample_size")
-  samplePlanRef            String?          @map("sample_plan_ref")
-  inspectedBy              String           @map("inspected_by")
-  inspectedAt              DateTime         @default(now()) @map("inspected_at") @db.Timestamptz(6)
-  parametersMeasured       Json             @map("parameters_measured")
-  parametersSpec           Json             @map("parameters_spec")
-  result                   QcSampleResult   @map("result")
-  defectsFound             String[]         @map("defects_found")
-  defectSeverity           QcDefectSeverity @default(NONE) @map("defect_severity")
-  certificateOfAnalysisS3  String?          @map("certificate_of_analysis_s3")
-  createdAt                DateTime         @default(now()) @db.Timestamptz(6)
+  id                      String           @id
+  tenantId                String           @map("tenant_id") @db.Uuid
+  grnLineId               String           @map("grn_line_id")
+  sampleType              QcSampleType     @default(AQL) @map("sample_type")
+  sampleSize              Int              @map("sample_size")
+  samplePlanRef           String?          @map("sample_plan_ref")
+  inspectedBy             String           @map("inspected_by")
+  inspectedAt             DateTime         @default(now()) @map("inspected_at") @db.Timestamptz(6)
+  parametersMeasured      Json             @map("parameters_measured")
+  parametersSpec          Json             @map("parameters_spec")
+  result                  QcSampleResult   @map("result")
+  defectsFound            String[]         @map("defects_found")
+  defectSeverity          QcDefectSeverity @default(NONE) @map("defect_severity")
+  certificateOfAnalysisS3 String?          @map("certificate_of_analysis_s3")
+  createdAt               DateTime         @default(now()) @db.Timestamptz(6)
 
   grnLine GrnLine @relation(fields: [grnLineId], references: [id])
 
@@ -1296,31 +1359,31 @@ model GrnAttachment {
 }
 
 model ReturnMaterialAuth {
-  id                 String                @id
-  tenantId           String                @map("tenant_id") @db.Uuid
-  number             String
-  grnId              String                @map("grn_id")
-  poId               String                @map("po_id")
-  vendorId           String                @map("vendor_id")
-  reasonCode         RmaReasonCode         @map("reason_code")
-  reasonNotes        String?               @map("reason_notes")
-  totalReturnValue   Decimal               @default("0") @map("total_return_value") @db.Decimal(18, 4)
-  currency           String                @default("INR")
-  status             RmaStatus             @default(DRAFT)
+  id                   String               @id
+  tenantId             String               @map("tenant_id") @db.Uuid
+  number               String
+  grnId                String               @map("grn_id")
+  poId                 String               @map("po_id")
+  vendorId             String               @map("vendor_id")
+  reasonCode           RmaReasonCode        @map("reason_code")
+  reasonNotes          String?              @map("reason_notes")
+  totalReturnValue     Decimal              @default("0") @map("total_return_value") @db.Decimal(18, 4)
+  currency             String               @default("INR")
+  status               RmaStatus            @default(DRAFT)
   returnFreightBorneBy ReturnFreightBorneBy @default(VENDOR) @map("return_freight_borne_by")
-  issuedAt           DateTime?             @map("issued_at") @db.Timestamptz(6)
-  pickedUpAt         DateTime?             @map("picked_up_at") @db.Timestamptz(6)
-  pickupScheduledAt  DateTime?             @map("pickup_scheduled_at") @db.Timestamptz(6)
-  creditNoteRef      String?               @map("credit_note_ref")
-  creditNoteAmount   Decimal?              @map("credit_note_amount") @db.Decimal(18, 4)
-  creditNoteS3Key    String?               @map("credit_note_s3_key")
-  vehicleOutNo       String?               @map("vehicle_out_no")
-  gatePassOutNo      String?               @map("gate_pass_out_no")
-  pdfS3Key           String?               @map("pdf_s3_key")
-  pdfGeneratedHash   String?               @map("pdf_generated_hash")
-  createdBy          String?               @map("created_by")
-  createdAt          DateTime              @default(now()) @db.Timestamptz(6)
-  updatedAt          DateTime              @default(now()) @updatedAt @db.Timestamptz(6)
+  issuedAt             DateTime?            @map("issued_at") @db.Timestamptz(6)
+  pickedUpAt           DateTime?            @map("picked_up_at") @db.Timestamptz(6)
+  pickupScheduledAt    DateTime?            @map("pickup_scheduled_at") @db.Timestamptz(6)
+  creditNoteRef        String?              @map("credit_note_ref")
+  creditNoteAmount     Decimal?             @map("credit_note_amount") @db.Decimal(18, 4)
+  creditNoteS3Key      String?              @map("credit_note_s3_key")
+  vehicleOutNo         String?              @map("vehicle_out_no")
+  gatePassOutNo        String?              @map("gate_pass_out_no")
+  pdfS3Key             String?              @map("pdf_s3_key")
+  pdfGeneratedHash     String?              @map("pdf_generated_hash")
+  createdBy            String?              @map("created_by")
+  createdAt            DateTime             @default(now()) @db.Timestamptz(6)
+  updatedAt            DateTime             @default(now()) @updatedAt @db.Timestamptz(6)
 
   tenant Tenant                   @relation(fields: [tenantId], references: [id])
   grn    GoodsReceiptNote         @relation(fields: [grnId], references: [id])
@@ -1354,21 +1417,21 @@ model ReturnMaterialAuthLine {
 
 // Slice 5 — stock ledger (NOT a WMS; see ADR-014). Movements only, no consumption.
 model StockLedger {
-  id                 String            @id
-  tenantId           String            @map("tenant_id") @db.Uuid
-  itemId             String?           @map("item_id")
-  itemDesc           String            @map("item_desc")
-  costCenterId       String?           @map("cost_center_id")
-  plantId            String?           @map("plant_id")
-  movementType       StockMovementType @map("movement_type")
-  sourceType         String            @map("source_type")
-  sourceId           String            @map("source_id")
-  qtyDelta           Decimal           @map("qty_delta") @db.Decimal(18, 4)
-  unitLandedCost     Decimal           @default("0") @map("unit_landed_cost") @db.Decimal(18, 4)
-  balanceQtyAfter    Decimal           @map("balance_qty_after") @db.Decimal(18, 4)
-  balanceValueAfter  Decimal           @map("balance_value_after") @db.Decimal(18, 4)
-  recordedAt         DateTime          @default(now()) @map("recorded_at") @db.Timestamptz(6)
-  recordedBy         String            @map("recorded_by")
+  id                String            @id
+  tenantId          String            @map("tenant_id") @db.Uuid
+  itemId            String?           @map("item_id")
+  itemDesc          String            @map("item_desc")
+  costCenterId      String?           @map("cost_center_id")
+  plantId           String?           @map("plant_id")
+  movementType      StockMovementType @map("movement_type")
+  sourceType        String            @map("source_type")
+  sourceId          String            @map("source_id")
+  qtyDelta          Decimal           @map("qty_delta") @db.Decimal(18, 4)
+  unitLandedCost    Decimal           @default("0") @map("unit_landed_cost") @db.Decimal(18, 4)
+  balanceQtyAfter   Decimal           @map("balance_qty_after") @db.Decimal(18, 4)
+  balanceValueAfter Decimal           @map("balance_value_after") @db.Decimal(18, 4)
+  recordedAt        DateTime          @default(now()) @map("recorded_at") @db.Timestamptz(6)
+  recordedBy        String            @map("recorded_by")
 
   tenant     Tenant      @relation(fields: [tenantId], references: [id])
   item       Item?       @relation(fields: [itemId], references: [id])
@@ -1390,7 +1453,7 @@ model Invoice {
   poId                   String?       @map("po_id")
   vendorInvoiceRef       String        @map("vendor_invoice_ref")
   invoiceDate            DateTime      @db.Timestamptz(6)
-  receivedAt            DateTime      @default(now()) @db.Timestamptz(6)
+  receivedAt             DateTime      @default(now()) @db.Timestamptz(6)
   status                 InvoiceStatus @default(RECEIVED)
   source                 InvoiceSource @default(MANUAL)
   grossAmount            Decimal       @default("0") @db.Decimal(18, 4)
@@ -1412,20 +1475,19 @@ model Invoice {
   createdAt              DateTime      @default(now()) @db.Timestamptz(6)
   updatedAt              DateTime      @updatedAt @db.Timestamptz(6)
 
-  tenant         Tenant              @relation(fields: [tenantId], references: [id])
-  vendor         Vendor              @relation(fields: [vendorId], references: [id])
-  po             PurchaseOrder?      @relation(fields: [poId], references: [id])
-  lines          InvoiceLine[]
-  exceptions     InvoiceException[]
-  attachments    InvoiceAttachment[]
-  comments       InvoiceComment[]
-  paymentItems   PaymentRunItem[]
-  paymentRecords PaymentRecord[]
+  tenant                 Tenant              @relation(fields: [tenantId], references: [id])
+  vendor                 Vendor              @relation(fields: [vendorId], references: [id])
+  po                     PurchaseOrder?      @relation(fields: [poId], references: [id])
+  lines                  InvoiceLine[]
+  exceptions             InvoiceException[]
+  attachments            InvoiceAttachment[]
+  comments               InvoiceComment[]
+  paymentItems           PaymentRunItem[]
+  paymentRecords         PaymentRecord[]
   inventoryLedgerEntries StockLedgerEntry[]
 
-  @@index([tenantId, assignedToId])
-
   @@unique([tenantId, number])
+  @@index([tenantId, assignedToId])
   @@index([tenantId])
   @@index([tenantId, status])
   @@index([tenantId, createdAt(sort: Desc)])
@@ -1569,14 +1631,14 @@ model PaymentRun {
 }
 
 model PaymentRunItem {
-  id           String  @id
-  tenantId     String  @map("tenant_id") @db.Uuid
-  paymentRunId String  @map("payment_run_id")
-  invoiceId    String  @map("invoice_id")
-  gross        Decimal @db.Decimal(18, 4)
-  tds          Decimal @default("0") @db.Decimal(18, 4)
-  net          Decimal @db.Decimal(18, 4)
-  orderInBatch Int
+  id               String                @id
+  tenantId         String                @map("tenant_id") @db.Uuid
+  paymentRunId     String                @map("payment_run_id")
+  invoiceId        String                @map("invoice_id")
+  gross            Decimal               @db.Decimal(18, 4)
+  tds              Decimal               @default("0") @db.Decimal(18, 4)
+  net              Decimal               @db.Decimal(18, 4)
+  orderInBatch     Int
   // Slice 10b — per-item bank submission outcome.
   bankStatus       PaymentItemBankStatus @default(PENDING) @map("bank_status")
   bankErrorMessage String?               @map("bank_error_message")
@@ -1755,55 +1817,55 @@ model DomainEvent {
 // ─────────────────────────── Sourcing / RFQ (Slice 6) ───────────────────────────
 
 model Rfq {
-  id                    String    @id
-  tenantId              String    @map("tenant_id") @db.Uuid
-  number                String
-  title                 String
-  requisitionId         String?   @map("requisition_id")
-  category              String
-  subcategory           String?
-  rfqType               RfqType   @map("rfq_type")
-  status                RfqStatus @default(DRAFT)
-  currency              String    @default("INR")
-  incotermDefault       String    @map("incoterm_default")
-  deliveryLocation      Json      @map("delivery_location")
-  paymentTermsDefault   String    @map("payment_terms_default")
-  estimatedValue        Decimal   @default("0") @map("estimated_value") @db.Decimal(18, 4)
-  budgetRangeMin        Decimal?  @map("budget_range_min") @db.Decimal(18, 4)
-  budgetRangeMax        Decimal?  @map("budget_range_max") @db.Decimal(18, 4)
-  evaluationCriteria    Json      @map("evaluation_criteria")
-  requiredDocuments     Json      @map("required_documents")
-  allowPartialAward     Boolean   @default(false) @map("allow_partial_award")
-  allowSplitAward       Boolean   @default(true) @map("allow_split_award")
-  maxAwardVendors       Int       @default(2) @map("max_award_vendors")
-  blindEvaluation       Boolean   @default(false) @map("blind_evaluation")
-  publishedAt           DateTime? @map("published_at") @db.Timestamptz(6)
-  publishBy             DateTime? @map("publish_by") @db.Timestamptz(6)
-  qaDeadline            DateTime? @map("qa_deadline") @db.Timestamptz(6)
-  bidDeadline           DateTime? @map("bid_deadline") @db.Timestamptz(6)
-  techOpenAt            DateTime? @map("tech_open_at") @db.Timestamptz(6)
-  commercialOpenAt      DateTime? @map("commercial_open_at") @db.Timestamptz(6)
-  awardDeadline         DateTime? @map("award_deadline") @db.Timestamptz(6)
-  allowBidRevision      Boolean   @default(false) @map("allow_bid_revision")
-  revisionCountMax      Int       @default(0) @map("revision_count_max")
-  corrigendaCount       Int       @default(0) @map("corrigenda_count")
-  isReverseAuction      Boolean   @default(false) @map("is_reverse_auction")
-  reverseAuctionConfig  Json?     @map("reverse_auction_config")
-  spotBuyException      Boolean   @default(false) @map("spot_buy_exception")
-  cancelReason          String?   @map("cancel_reason")
-  createdBy             String    @map("created_by")
-  createdAt             DateTime  @default(now()) @db.Timestamptz(6)
-  updatedAt             DateTime  @updatedAt @db.Timestamptz(6)
+  id                   String    @id
+  tenantId             String    @map("tenant_id") @db.Uuid
+  number               String
+  title                String
+  requisitionId        String?   @map("requisition_id")
+  category             String
+  subcategory          String?
+  rfqType              RfqType   @map("rfq_type")
+  status               RfqStatus @default(DRAFT)
+  currency             String    @default("INR")
+  incotermDefault      String    @map("incoterm_default")
+  deliveryLocation     Json      @map("delivery_location")
+  paymentTermsDefault  String    @map("payment_terms_default")
+  estimatedValue       Decimal   @default("0") @map("estimated_value") @db.Decimal(18, 4)
+  budgetRangeMin       Decimal?  @map("budget_range_min") @db.Decimal(18, 4)
+  budgetRangeMax       Decimal?  @map("budget_range_max") @db.Decimal(18, 4)
+  evaluationCriteria   Json      @map("evaluation_criteria")
+  requiredDocuments    Json      @map("required_documents")
+  allowPartialAward    Boolean   @default(false) @map("allow_partial_award")
+  allowSplitAward      Boolean   @default(true) @map("allow_split_award")
+  maxAwardVendors      Int       @default(2) @map("max_award_vendors")
+  blindEvaluation      Boolean   @default(false) @map("blind_evaluation")
+  publishedAt          DateTime? @map("published_at") @db.Timestamptz(6)
+  publishBy            DateTime? @map("publish_by") @db.Timestamptz(6)
+  qaDeadline           DateTime? @map("qa_deadline") @db.Timestamptz(6)
+  bidDeadline          DateTime? @map("bid_deadline") @db.Timestamptz(6)
+  techOpenAt           DateTime? @map("tech_open_at") @db.Timestamptz(6)
+  commercialOpenAt     DateTime? @map("commercial_open_at") @db.Timestamptz(6)
+  awardDeadline        DateTime? @map("award_deadline") @db.Timestamptz(6)
+  allowBidRevision     Boolean   @default(false) @map("allow_bid_revision")
+  revisionCountMax     Int       @default(0) @map("revision_count_max")
+  corrigendaCount      Int       @default(0) @map("corrigenda_count")
+  isReverseAuction     Boolean   @default(false) @map("is_reverse_auction")
+  reverseAuctionConfig Json?     @map("reverse_auction_config")
+  spotBuyException     Boolean   @default(false) @map("spot_buy_exception")
+  cancelReason         String?   @map("cancel_reason")
+  createdBy            String    @map("created_by")
+  createdAt            DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt            DateTime  @updatedAt @db.Timestamptz(6)
 
-  tenant      Tenant           @relation(fields: [tenantId], references: [id])
-  lines       RfqLine[]
-  documents   RfqDocument[]
-  invitations RfqInvitation[]
-  questions   RfqQuestion[]
-  corrigenda  RfqCorrigendum[]
-  quotes      Quote[]
+  tenant               Tenant                @relation(fields: [tenantId], references: [id])
+  lines                RfqLine[]
+  documents            RfqDocument[]
+  invitations          RfqInvitation[]
+  questions            RfqQuestion[]
+  corrigenda           RfqCorrigendum[]
+  quotes               Quote[]
   reverseAuctionRounds ReverseAuctionRound[]
-  awards      Award[]
+  awards               Award[]
 
   @@unique([tenantId, number])
   @@index([tenantId])
@@ -1950,16 +2012,16 @@ model Quote {
   createdAt               DateTime          @default(now()) @db.Timestamptz(6)
   updatedAt               DateTime          @updatedAt @db.Timestamptz(6)
 
-  tenant      Tenant             @relation(fields: [tenantId], references: [id])
-  rfq         Rfq                @relation(fields: [rfqId], references: [id])
-  invitation  RfqInvitation      @relation(fields: [invitationId], references: [id])
-  vendor      Vendor             @relation(fields: [vendorId], references: [id])
-  lines       QuoteLine[]
-  attachments QuoteAttachment[]
-  evaluations QuoteEvaluation[]
+  tenant             Tenant              @relation(fields: [tenantId], references: [id])
+  rfq                Rfq                 @relation(fields: [rfqId], references: [id])
+  invitation         RfqInvitation       @relation(fields: [invitationId], references: [id])
+  vendor             Vendor              @relation(fields: [vendorId], references: [id])
+  lines              QuoteLine[]
+  attachments        QuoteAttachment[]
+  evaluations        QuoteEvaluation[]
   reverseAuctionBids ReverseAuctionBid[]
-  openLogs    QuoteOpenLog[]
-  awardAllocations AwardAllocation[]
+  openLogs           QuoteOpenLog[]
+  awardAllocations   AwardAllocation[]
 
   @@index([tenantId])
   @@index([rfqId])
@@ -1996,18 +2058,18 @@ model QuoteLine {
 }
 
 model QuoteAttachment {
-  id              String              @id
-  tenantId        String              @map("tenant_id") @db.Uuid
-  quoteId         String              @map("quote_id")
-  docType         QuoteAttachmentType @map("doc_type")
-  s3Key           String              @map("s3_key")
-  filename        String
-  sizeBytes       Int                 @map("size_bytes")
-  mimeType        String              @map("mime_type")
-  fileHash        String              @map("file_hash")
-  envelope        QuoteEnvelope
-  watermarkApplied Boolean            @default(false) @map("watermark_applied")
-  uploadedAt      DateTime            @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  id               String              @id
+  tenantId         String              @map("tenant_id") @db.Uuid
+  quoteId          String              @map("quote_id")
+  docType          QuoteAttachmentType @map("doc_type")
+  s3Key            String              @map("s3_key")
+  filename         String
+  sizeBytes        Int                 @map("size_bytes")
+  mimeType         String              @map("mime_type")
+  fileHash         String              @map("file_hash")
+  envelope         QuoteEnvelope
+  watermarkApplied Boolean             @default(false) @map("watermark_applied")
+  uploadedAt       DateTime            @default(now()) @map("uploaded_at") @db.Timestamptz(6)
 
   quote Quote @relation(fields: [quoteId], references: [id])
 
@@ -2076,22 +2138,22 @@ model ReverseAuctionBid {
 }
 
 model Award {
-  id                    String      @id
-  tenantId              String      @map("tenant_id") @db.Uuid
-  rfqId                 String      @map("rfq_id")
-  recommendationBy      String      @map("recommendation_by")
-  recommendationAt      DateTime    @default(now()) @map("recommendation_at") @db.Timestamptz(6)
-  recommendationNotes   String?     @map("recommendation_notes")
-  varianceFromL1Reason  String?     @map("variance_from_l1_reason")
-  totalValue            Decimal     @default("0") @map("total_value") @db.Decimal(18, 4)
-  approvedAt            DateTime?   @map("approved_at") @db.Timestamptz(6)
-  approvedBy            String?     @map("approved_by")
-  status                AwardStatus @default(RECOMMENDED)
-  approvalMatrixSnapshot Json?      @map("approval_matrix_snapshot")
-  justificationS3Key    String?     @map("justification_s3_key")
-  justificationHash     String?     @map("justification_hash")
-  createdAt             DateTime    @default(now()) @db.Timestamptz(6)
-  updatedAt             DateTime    @updatedAt @db.Timestamptz(6)
+  id                     String      @id
+  tenantId               String      @map("tenant_id") @db.Uuid
+  rfqId                  String      @map("rfq_id")
+  recommendationBy       String      @map("recommendation_by")
+  recommendationAt       DateTime    @default(now()) @map("recommendation_at") @db.Timestamptz(6)
+  recommendationNotes    String?     @map("recommendation_notes")
+  varianceFromL1Reason   String?     @map("variance_from_l1_reason")
+  totalValue             Decimal     @default("0") @map("total_value") @db.Decimal(18, 4)
+  approvedAt             DateTime?   @map("approved_at") @db.Timestamptz(6)
+  approvedBy             String?     @map("approved_by")
+  status                 AwardStatus @default(RECOMMENDED)
+  approvalMatrixSnapshot Json?       @map("approval_matrix_snapshot")
+  justificationS3Key     String?     @map("justification_s3_key")
+  justificationHash      String?     @map("justification_hash")
+  createdAt              DateTime    @default(now()) @db.Timestamptz(6)
+  updatedAt              DateTime    @updatedAt @db.Timestamptz(6)
 
   tenant      Tenant            @relation(fields: [tenantId], references: [id])
   rfq         Rfq               @relation(fields: [rfqId], references: [id])
@@ -2274,28 +2336,28 @@ enum ScorecardPeriod {
 // ─────────────────────────── Vendor lifecycle models (Slice 7) ───────────────────────────
 
 model VendorOnboarding {
-  id                    String                     @id
-  tenantId              String                     @map("tenant_id") @db.Uuid
-  vendorId              String                     @map("vendor_id")
-  invitationSource      OnboardingInvitationSource @map("invitation_source")
-  invitationRef         String?                    @map("invitation_ref")
-  invitedBy             String?                    @map("invited_by")
-  selfRegistrationToken String?                    @map("self_registration_token")
-  tokenExpiresAt        DateTime?                  @map("token_expires_at") @db.Timestamptz(6)
-  emailVerifiedAt       DateTime?                  @map("email_verified_at") @db.Timestamptz(6)
-  wizardState           Json                       @map("wizard_state")
-  categoryConfigKey     String                     @map("category_config_key")
-  reviewDecision        OnboardingReviewDecision?  @map("review_decision")
-  reviewedBy            String?                    @map("reviewed_by")
-  reviewNotes           String?                    @map("review_notes")
-  reviewStartedAt       DateTime?                  @map("review_started_at") @db.Timestamptz(6)
-  returnForInfoItems    Json?                      @map("return_for_info_items")
-  startedAt             DateTime                   @default(now()) @map("started_at") @db.Timestamptz(6)
-  submittedAt           DateTime?                  @map("submitted_at") @db.Timestamptz(6)
-  decisionAt            DateTime?                  @map("decision_at") @db.Timestamptz(6)
-  slaTargetHours        Int                        @map("sla_target_hours")
-  slaBreachAt           DateTime?                  @map("sla_breach_at") @db.Timestamptz(6)
-  approvalMatrixSnapshot Json?                     @map("approval_matrix_snapshot")
+  id                     String                     @id
+  tenantId               String                     @map("tenant_id") @db.Uuid
+  vendorId               String                     @map("vendor_id")
+  invitationSource       OnboardingInvitationSource @map("invitation_source")
+  invitationRef          String?                    @map("invitation_ref")
+  invitedBy              String?                    @map("invited_by")
+  selfRegistrationToken  String?                    @map("self_registration_token")
+  tokenExpiresAt         DateTime?                  @map("token_expires_at") @db.Timestamptz(6)
+  emailVerifiedAt        DateTime?                  @map("email_verified_at") @db.Timestamptz(6)
+  wizardState            Json                       @map("wizard_state")
+  categoryConfigKey      String                     @map("category_config_key")
+  reviewDecision         OnboardingReviewDecision?  @map("review_decision")
+  reviewedBy             String?                    @map("reviewed_by")
+  reviewNotes            String?                    @map("review_notes")
+  reviewStartedAt        DateTime?                  @map("review_started_at") @db.Timestamptz(6)
+  returnForInfoItems     Json?                      @map("return_for_info_items")
+  startedAt              DateTime                   @default(now()) @map("started_at") @db.Timestamptz(6)
+  submittedAt            DateTime?                  @map("submitted_at") @db.Timestamptz(6)
+  decisionAt             DateTime?                  @map("decision_at") @db.Timestamptz(6)
+  slaTargetHours         Int                        @map("sla_target_hours")
+  slaBreachAt            DateTime?                  @map("sla_breach_at") @db.Timestamptz(6)
+  approvalMatrixSnapshot Json?                      @map("approval_matrix_snapshot")
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
   vendor Vendor @relation(fields: [vendorId], references: [id])
@@ -2306,21 +2368,21 @@ model VendorOnboarding {
 }
 
 model VendorBeneficialOwner {
-  id                     String                   @id
-  tenantId               String                   @map("tenant_id") @db.Uuid
-  vendorId               String                   @map("vendor_id")
-  ownerName              String                   @map("owner_name")
-  ownerPan               String                   @map("owner_pan")
-  ownerDob               DateTime?                @map("owner_dob") @db.Timestamptz(6)
-  ownershipPct           Decimal                  @map("ownership_pct") @db.Decimal(6, 2)
-  ownershipType          OwnershipType            @default(DIRECT) @map("ownership_type")
-  countryOfResidence     String                   @default("IN") @map("country_of_residence")
-  isPep                  Boolean                  @default(false) @map("is_pep")
-  pepDetails             String?                  @map("pep_details")
+  id                       String                   @id
+  tenantId                 String                   @map("tenant_id") @db.Uuid
+  vendorId                 String                   @map("vendor_id")
+  ownerName                String                   @map("owner_name")
+  ownerPan                 String                   @map("owner_pan")
+  ownerDob                 DateTime?                @map("owner_dob") @db.Timestamptz(6)
+  ownershipPct             Decimal                  @map("ownership_pct") @db.Decimal(6, 2)
+  ownershipType            OwnershipType            @default(DIRECT) @map("ownership_type")
+  countryOfResidence       String                   @default("IN") @map("country_of_residence")
+  isPep                    Boolean                  @default(false) @map("is_pep")
+  pepDetails               String?                  @map("pep_details")
   sanctionsScreeningStatus SanctionsScreeningStatus @default(NOT_LISTED) @map("sanctions_screening_status")
-  sanctionsScreeningAt   DateTime?                @map("sanctions_screening_at") @db.Timestamptz(6)
-  declaredAt             DateTime                 @default(now()) @map("declared_at") @db.Timestamptz(6)
-  declaredBy             String                   @map("declared_by")
+  sanctionsScreeningAt     DateTime?                @map("sanctions_screening_at") @db.Timestamptz(6)
+  declaredAt               DateTime                 @default(now()) @map("declared_at") @db.Timestamptz(6)
+  declaredBy               String                   @map("declared_by")
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
   vendor Vendor @relation(fields: [vendorId], references: [id])
@@ -2330,21 +2392,21 @@ model VendorBeneficialOwner {
 }
 
 model VendorScreening {
-  id                String                @id
-  tenantId          String                @map("tenant_id") @db.Uuid
-  vendorId          String                @map("vendor_id")
-  screeningType     ScreeningType         @map("screening_type")
-  screeningProvider String                @map("screening_provider")
-  requestedAt       DateTime              @default(now()) @map("requested_at") @db.Timestamptz(6)
-  completedAt       DateTime?             @map("completed_at") @db.Timestamptz(6)
-  status            ScreeningStatus       @default(PENDING)
-  flagSeverity      ScreeningFlagSeverity? @map("flag_severity")
-  providerResponse  Json?                 @map("provider_response")
-  findings          Json?
-  reviewedBy        String?               @map("reviewed_by")
-  reviewDecision    ScreeningReviewDecision? @map("review_decision")
-  reviewNotes       String?               @map("review_notes")
-  nextScreeningDueAt DateTime?            @map("next_screening_due_at") @db.Timestamptz(6)
+  id                 String                   @id
+  tenantId           String                   @map("tenant_id") @db.Uuid
+  vendorId           String                   @map("vendor_id")
+  screeningType      ScreeningType            @map("screening_type")
+  screeningProvider  String                   @map("screening_provider")
+  requestedAt        DateTime                 @default(now()) @map("requested_at") @db.Timestamptz(6)
+  completedAt        DateTime?                @map("completed_at") @db.Timestamptz(6)
+  status             ScreeningStatus          @default(PENDING)
+  flagSeverity       ScreeningFlagSeverity?   @map("flag_severity")
+  providerResponse   Json?                    @map("provider_response")
+  findings           Json?
+  reviewedBy         String?                  @map("reviewed_by")
+  reviewDecision     ScreeningReviewDecision? @map("review_decision")
+  reviewNotes        String?                  @map("review_notes")
+  nextScreeningDueAt DateTime?                @map("next_screening_due_at") @db.Timestamptz(6)
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
   vendor Vendor @relation(fields: [vendorId], references: [id])
@@ -2423,21 +2485,21 @@ model VendorSuspension {
 }
 
 model VendorChangeRequest {
-  id                    String              @id
-  tenantId              String              @map("tenant_id") @db.Uuid
-  vendorId              String              @map("vendor_id")
-  requestedBy           String              @map("requested_by")
-  requestType           ChangeRequestType   @map("request_type")
-  proposedChanges       Json                @map("proposed_changes")
-  currentValues         Json                @map("current_values")
-  status                ChangeRequestStatus @default(PENDING)
-  requiresReverification Boolean            @default(false) @map("requires_reverification")
-  reverificationTypes   Json?               @map("reverification_types")
-  requestedAt           DateTime            @default(now()) @map("requested_at") @db.Timestamptz(6)
-  decidedAt             DateTime?           @map("decided_at") @db.Timestamptz(6)
-  decidedBy             String?             @map("decided_by")
-  decisionNotes         String?             @map("decision_notes")
-  approvalMatrixSnapshot Json?              @map("approval_matrix_snapshot")
+  id                     String              @id
+  tenantId               String              @map("tenant_id") @db.Uuid
+  vendorId               String              @map("vendor_id")
+  requestedBy            String              @map("requested_by")
+  requestType            ChangeRequestType   @map("request_type")
+  proposedChanges        Json                @map("proposed_changes")
+  currentValues          Json                @map("current_values")
+  status                 ChangeRequestStatus @default(PENDING)
+  requiresReverification Boolean             @default(false) @map("requires_reverification")
+  reverificationTypes    Json?               @map("reverification_types")
+  requestedAt            DateTime            @default(now()) @map("requested_at") @db.Timestamptz(6)
+  decidedAt              DateTime?           @map("decided_at") @db.Timestamptz(6)
+  decidedBy              String?             @map("decided_by")
+  decisionNotes          String?             @map("decision_notes")
+  approvalMatrixSnapshot Json?               @map("approval_matrix_snapshot")
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
   vendor Vendor @relation(fields: [vendorId], references: [id])
@@ -2456,10 +2518,10 @@ model VendorChangeRequest {
 // ─────────────────────────────────────────────────────────────────────────────
 
 enum SavingsInitiativeType {
-  HARD_RFQ          // negotiated via RFQ: baseline highest-qualified-quote vs awarded
+  HARD_RFQ // negotiated via RFQ: baseline highest-qualified-quote vs awarded
   PRICE_IMPROVEMENT // PO unit price below reference (labelled "price improvement", not "savings")
   SOFT_PAYMENT_TERM // working-capital benefit from extended payment terms (estimate)
-  AVOIDED_COST      // self-reported, requires justification + review
+  AVOIDED_COST // self-reported, requires justification + review
 }
 
 enum SavingsSourceType {
@@ -2485,7 +2547,7 @@ model TenantComplianceConfig {
   rbiRateSource        String?   @map("rbi_rate_source")
   costOfCapitalPct     Decimal   @default("12.0000") @map("cost_of_capital_pct") @db.Decimal(6, 4)
   createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@index([tenantId])
 }
@@ -2971,22 +3033,22 @@ enum InboundEmailStatus {
 /// message for audit + manual handling; unrecognised senders and malformed
 /// messages are quarantined here rather than silently creating invoices.
 model InboundEmail {
-  id            String             @id
-  tenantId      String             @map("tenant_id") @db.Uuid
-  fromEmail     String             @map("from_email")
-  fromDomain    String             @map("from_domain")
-  subject       String?
-  status        InboundEmailStatus @default(RECEIVED)
-  matchedVendorId String?          @map("matched_vendor_id")
-  invoiceId     String?            @map("invoice_id")
-  bodyS3Key     String?            @map("body_s3_key")
-  attachmentS3Key String?          @map("attachment_s3_key")
-  attachmentName String?           @map("attachment_name")
-  deadLetterReason String?         @map("dead_letter_reason")
-  providerMessageId String?        @map("provider_message_id")
-  resolvedBy    String?            @map("resolved_by")
-  resolvedAt    DateTime?          @map("resolved_at") @db.Timestamptz(6)
-  createdAt     DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  id                String             @id
+  tenantId          String             @map("tenant_id") @db.Uuid
+  fromEmail         String             @map("from_email")
+  fromDomain        String             @map("from_domain")
+  subject           String?
+  status            InboundEmailStatus @default(RECEIVED)
+  matchedVendorId   String?            @map("matched_vendor_id")
+  invoiceId         String?            @map("invoice_id")
+  bodyS3Key         String?            @map("body_s3_key")
+  attachmentS3Key   String?            @map("attachment_s3_key")
+  attachmentName    String?            @map("attachment_name")
+  deadLetterReason  String?            @map("dead_letter_reason")
+  providerMessageId String?            @map("provider_message_id")
+  resolvedBy        String?            @map("resolved_by")
+  resolvedAt        DateTime?          @map("resolved_at") @db.Timestamptz(6)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@index([tenantId])
   @@index([tenantId, status])
@@ -3080,33 +3142,33 @@ enum QcStatus {
 /// `Item` mandates hsnCode/gstRate/primaryUom, which none of the 625 legacy rows
 /// carry. `itemId` optionally bridges a warehouse SKU to its procurement Item.
 model Product {
-  id                   String    @id
-  tenantId             String    @map("tenant_id") @db.Uuid
+  id                       String    @id
+  tenantId                 String    @map("tenant_id") @db.Uuid
   /// Auto-generated {CATEGORY_PREFIX}-{sequence}, e.g. HD-000123. Supersedes the
   /// legacy Product ID / SKU columns, which are "N/A" on all 625 source rows.
-  code                 String
-  legacyProductId      String?   @map("legacy_product_id")
-  legacySku            String?   @map("legacy_sku")
-  name                 String
+  code                     String
+  legacyProductId          String?   @map("legacy_product_id")
+  legacySku                String?   @map("legacy_sku")
+  name                     String
   /// Required going forward; legacy nulls are backfilled as "Uncategorized"
   /// (601 of 625 source rows have no category).
-  category             String
-  colour               String?
-  imageUrl             String?   @map("image_url")
-  unit                 String    @default("pcs")
-  reorderPoint         Int?      @map("reorder_point")
-  expiryOrWarrantyDate DateTime? @map("expiry_or_warranty_date") @db.Timestamptz(6)
+  category                 String
+  colour                   String?
+  imageUrl                 String?   @map("image_url")
+  unit                     String    @default("pcs")
+  reorderPoint             Int?      @map("reorder_point")
+  expiryOrWarrantyDate     DateTime? @map("expiry_or_warranty_date") @db.Timestamptz(6)
   /// Product-level free-text notes, carried over verbatim at migration. Distinct
   /// from StockLedgerEntry.remark, which is per-transaction.
-  remark               String?
-  active               Boolean   @default(true)
+  remark                   String?
+  active                   Boolean   @default(true)
   /// Optional bridge to the Slice 4 procurement item master.
-  itemId               String?   @map("item_id")
+  itemId                   String?   @map("item_id")
   /// Traceability back to the bulk upload that created this product, if any.
-  createdFromImportBatchId String? @map("created_from_import_batch_id")
-  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdFromImportBatchId String?   @map("created_from_import_batch_id")
+  createdAt                DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   /// Powers "Last Updated" — the ledger service touches this on every entry.
-  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  updatedAt                DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   tenant        Tenant             @relation(fields: [tenantId], references: [id])
   item          Item?              @relation(fields: [itemId], references: [id])
@@ -3126,12 +3188,12 @@ model Product {
 /// simultaneously, recorded today as free text ("Confrance Room-600 & -B2-205").
 /// `parentId` allows optional room -> rack -> bin nesting.
 model Location {
-  id       String  @id
-  tenantId String  @map("tenant_id") @db.Uuid
-  name     String
-  rackNo   String? @map("rack_no")
-  parentId String? @map("parent_id")
-  active   Boolean @default(true)
+  id        String   @id
+  tenantId  String   @map("tenant_id") @db.Uuid
+  name      String
+  rackNo    String?  @map("rack_no")
+  parentId  String?  @map("parent_id")
+  active    Boolean  @default(true)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   tenant        Tenant             @relation(fields: [tenantId], references: [id])
