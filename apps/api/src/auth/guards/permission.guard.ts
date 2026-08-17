@@ -30,8 +30,9 @@ export class PermissionGuard implements CanActivate {
     const user = request.user;
     if (!user) throw new ForbiddenException('Not authenticated');
 
-    if (!user.perms.includes(meta.permission)) {
-      throw new ForbiddenException(`Missing permission: ${meta.permission}`);
+    const accepted = Array.isArray(meta.permission) ? meta.permission : [meta.permission];
+    if (!accepted.some((p) => user.perms.includes(p))) {
+      throw new ForbiddenException(`Missing permission: ${accepted.join(' or ')}`);
     }
 
     if (meta.predicate) {

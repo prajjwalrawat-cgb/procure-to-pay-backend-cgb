@@ -1,8 +1,9 @@
-import type { INestApplication } from '@nestjs/common';
+import { NotFoundException, type INestApplication } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
+import { PERMISSIONS } from '@procureflow/shared';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { ProblemExceptionFilter } from '../common/filters/problem.filter';
 import { StorageService } from '../common/storage/storage.service';
@@ -14,7 +15,12 @@ import { MatchService } from './match.service';
 /** Integration: InvoicesController wired through Nest with mocked services. */
 describe('InvoicesController (integration)', () => {
   let app: INestApplication;
-  const query = { find: vi.fn(), getTabCounts: vi.fn(), findById: vi.fn() };
+  const query = {
+    find: vi.fn(),
+    getTabCounts: vi.fn(),
+    findById: vi.fn(),
+    assertVisible: vi.fn(),
+  };
   const invoices = { resolveAndRoute: vi.fn() };
   const match = { resolveException: vi.fn(), runFor: vi.fn() };
   const user = {
@@ -22,7 +28,7 @@ describe('InvoicesController (integration)', () => {
     tenantId: 'ten_1',
     audience: 'buyer',
     roles: [],
-    perms: [],
+    perms: [PERMISSIONS.INVOICE_READ_TENANT] as string[],
   };
 
   beforeAll(async () => {
@@ -57,6 +63,11 @@ describe('InvoicesController (integration)', () => {
     await app.close();
   });
 
+  afterEach(() => {
+    user.perms = [PERMISSIONS.INVOICE_READ_TENANT];
+    query.assertVisible.mockReset();
+  });
+
   it('GET /invoices returns the filtered list', async () => {
     query.find.mockResolvedValueOnce({
       items: [{ number: 'INV-4471' }],
@@ -66,8 +77,44 @@ describe('InvoicesController (integration)', () => {
     const res = await request(app.getHttpServer()).get('/invoices?tab=exceptions');
     expect(res.status).toBe(200);
     expect(res.body.items[0].number).toBe('INV-4471');
+    // Second arg is the scope: null = the whole tenant's AP book.
     expect(query.find).toHaveBeenCalledWith(
       expect.objectContaining({ tab: 'exceptions' }),
+      null,
+    );
+  });
+
+  it('narrows the list to the caller when they only hold the assigned scope', async () => {
+    user.perms = [PERMISSIONS.INVOICE_READ_ASSIGNED];
+    query.find.mockResolvedValueOnce({ items: [], nextCursor: null, totalEstimate: 0 });
+    const res = await request(app.getHttpServer()).get('/invoices?tab=all');
+    expect(res.status).toBe(200);
+    expect(query.find).toHaveBeenCalledWith(expect.objectContaining({ tab: 'all' }), {
+      userId: 'usr_1',
+      team: false,
+    });
+  });
+
+  it('flags the team scope for a head so their officers’ invoices come back', async () => {
+    user.perms = [PERMISSIONS.INVOICE_READ_ASSIGNED, PERMISSIONS.INVOICE_READ_TEAM];
+    query.find.mockResolvedValueOnce({ items: [], nextCursor: null, totalEstimate: 0 });
+    await request(app.getHttpServer()).get('/invoices?tab=all');
+    expect(query.find).toHaveBeenCalledWith(expect.anything(), {
+      userId: 'usr_1',
+      team: true,
+    });
+  });
+
+  it('404s an action on an invoice outside the caller’s scope', async () => {
+    user.perms = [PERMISSIONS.INVOICE_READ_ASSIGNED, PERMISSIONS.INVOICE_RESOLVE_EXCEPTION];
+    query.assertVisible.mockRejectedValueOnce(new NotFoundException('Invoice not found'));
+    const res = await request(app.getHttpServer()).post(
+      '/invoices/inv_someone_else/resolve-and-route',
+    );
+    expect(res.status).toBe(404);
+    expect(invoices.resolveAndRoute).not.toHaveBeenCalledWith(
+      'inv_someone_else',
+      'usr_1',
     );
   });
 

@@ -24,6 +24,10 @@ interface Totals {
   taxKind: 'IGST' | 'CGST_SGST';
 }
 
+/** The states the 3-way matcher leaves an invoice in; anything else has not
+ *  been matched (or is already past approval). */
+const MATCHED_STATUSES: string[] = ['OCR_DONE', 'MATCH_EXCEPTION'];
+
 @Injectable()
 export class InvoiceService {
   constructor(
@@ -381,7 +385,20 @@ export class InvoiceService {
 
   /** Resolve gate, then hand off to the generic approval engine (Slice 2). */
   async resolveAndRoute(invoiceId: string, actorId: string): Promise<void> {
-    await this.requireInvoice(invoiceId);
+    const invoice = await this.requireInvoice(invoiceId);
+    // "No open exceptions" is only evidence of a clean match if a match has
+    // actually run. Before it does — OCR pending, below the confidence floor,
+    // provider failed, sender unrecognised — the count is zero because nothing
+    // was ever checked, and routing on that would send an unmatched invoice,
+    // possibly with no goods receipt behind it, straight into the approval
+    // chain. OCR_DONE and MATCH_EXCEPTION are the only states the matcher
+    // leaves behind (unhold re-runs it), so they are the only ones that route.
+    if (!MATCHED_STATUSES.includes(invoice.status)) {
+      throw new ForbiddenException(
+        `This invoice has not been through the 3-way match yet (${invoice.status}). ` +
+          'Complete OCR or run the match before routing it for approval.',
+      );
+    }
     const open = await this.prisma.client.invoiceException.count({
       where: { invoiceId, resolvedAt: null },
     });

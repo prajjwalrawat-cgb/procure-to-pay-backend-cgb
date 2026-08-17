@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { PROCUREMENT_TEAM_ROLES } from '@procureflow/shared';
 import type {
   ApprovalChainStepView,
   InvoiceDetailResponse,
@@ -14,6 +15,7 @@ import Decimal from 'decimal.js';
 import { ApprovalRoutingService } from '../approvals/approval-routing.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../common/storage/storage.service';
+import type { InvoiceScope } from './invoice-scope';
 import { MsmeService } from './domain/msme.service';
 import { TdsService } from './domain/tds.service';
 
@@ -50,21 +52,95 @@ export class InvoiceQueryService {
     private readonly routing: ApprovalRoutingService,
   ) {}
 
-  async getTabCounts(): Promise<InvoiceTabCounts> {
+  /**
+   * The `where` fragment that narrows a scoped caller's view, or `null` for a
+   * tenant-wide reader. Four ways an invoice can be theirs:
+   *
+   *  - assigned to them;
+   *  - billed against a purchase order they raised;
+   *  - routed to them for approval — an approver who cannot open the document
+   *    cannot judge it, and the inbox links straight at the invoice page;
+   *  - raised by any procurement buyer, for a head with `invoice:read:team`.
+   *
+   * `Approval` is keyed by (documentType, documentId) with no relation to
+   * `Invoice`, so the approver branch needs its ids fetched first.
+   */
+  private async scopeWhere(
+    scope: InvoiceScope | null,
+  ): Promise<Record<string, unknown> | null> {
+    if (!scope) return null;
+    const [approvals, team] = await Promise.all([
+      this.prisma.client.approval.findMany({
+        where: { documentType: 'INVOICE', approverId: scope.userId },
+        select: { documentId: true },
+      }),
+      scope.team
+        ? this.prisma.client.userRole.findMany({
+            where: { role: { name: { in: PROCUREMENT_TEAM_ROLES } } },
+            select: { userId: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const or: Record<string, unknown>[] = [
+      { assignedToId: scope.userId },
+      { po: { createdBy: scope.userId } },
+    ];
+    if (approvals.length > 0) {
+      or.push({ id: { in: [...new Set(approvals.map((a) => a.documentId))] } });
+    }
+    if (team.length > 0) {
+      or.push({ po: { createdBy: { in: [...new Set(team.map((t) => t.userId))] } } });
+    }
+    return { OR: or };
+  }
+
+  /** Merge the scope into a `where` without disturbing its own filters. */
+  private merge(
+    where: Record<string, unknown>,
+    scope: Record<string, unknown> | null,
+  ): Record<string, unknown> {
+    if (!scope) return where;
+    const existing = Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : [];
+    return { ...where, AND: [...existing, scope] };
+  }
+
+  /**
+   * Gate a single invoice for a narrow-scope caller. Out-of-scope invoices are
+   * 404, not 403: a buyer has no business learning which supplier bills exist
+   * outside their own orders. A `null` scope (tenant-wide reader) is a no-op.
+   */
+  async assertVisible(id: string, scope: InvoiceScope | null): Promise<void> {
+    const clause = await this.scopeWhere(scope);
+    if (!clause) return;
+    const visible = await this.prisma.client.invoice.findFirst({
+      where: { id, ...clause },
+      select: { id: true },
+    });
+    if (!visible) throw new NotFoundException('Invoice not found');
+  }
+
+  /** `scope` narrows every tab to that caller's invoices (see invoice-scope). */
+  async getTabCounts(scope: InvoiceScope | null = null): Promise<InvoiceTabCounts> {
     const c = this.prisma.client.invoice;
+    const clause = await this.scopeWhere(scope);
+    const scoped = (where: Record<string, unknown>): Record<string, unknown> =>
+      this.merge(where, clause);
     const [all, exceptions, approval, scheduled, paid, msme] = await Promise.all([
-      c.count({ where: { status: openStatusIn() } }),
-      c.count({ where: { status: 'MATCH_EXCEPTION' } }),
-      c.count({ where: { status: 'AWAITING_APPROVAL' } }),
-      c.count({ where: { status: 'SCHEDULED' } }),
-      c.count({ where: { status: 'PAID' } }),
-      c.count({ where: { status: openStatusIn(), vendor: { isMsme: true } } }),
+      c.count({ where: scoped({ status: openStatusIn() }) }),
+      c.count({ where: scoped({ status: 'MATCH_EXCEPTION' }) }),
+      c.count({ where: scoped({ status: 'AWAITING_APPROVAL' }) }),
+      c.count({ where: scoped({ status: 'SCHEDULED' }) }),
+      c.count({ where: scoped({ status: 'PAID' }) }),
+      c.count({ where: scoped({ status: openStatusIn(), vendor: { isMsme: true } }) }),
     ]);
     return { all, exceptions, approval, scheduled, paid, msme };
   }
 
-  async find(query: InvoiceListQuery): Promise<InvoiceListResponse> {
-    const where = this.buildWhere(query);
+  async find(
+    query: InvoiceListQuery,
+    scope: InvoiceScope | null = null,
+  ): Promise<InvoiceListResponse> {
+    const where = this.merge(this.buildWhere(query), await this.scopeWhere(scope));
     const items = await this.prisma.client.invoice.findMany({
       where,
       take: query.limit + 1,
@@ -113,7 +189,12 @@ export class InvoiceQueryService {
     };
   }
 
-  async findById(id: string, viewerId?: string): Promise<InvoiceDetailResponse> {
+  async findById(
+    id: string,
+    viewerId?: string,
+    scope: InvoiceScope | null = null,
+  ): Promise<InvoiceDetailResponse> {
+    await this.assertVisible(id, scope);
     const inv = await this.prisma.client.invoice.findUnique({
       where: { id },
       include: {

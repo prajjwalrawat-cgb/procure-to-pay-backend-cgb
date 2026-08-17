@@ -57,6 +57,16 @@ function build(
   const prisma = {
     $queryRaw: vi.fn().mockResolvedValue(rows),
     session: { create: sessionCreate },
+    // The login response carries the buying org, read through `client` outside
+    // any tenant context. Omitting it here is what let a broken `client` getter
+    // reach production as a 500 on every successful sign-in.
+    client: {
+      tenant: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({ id: USER_ROW.tenant_id, name: 'Star Cement Ltd' }),
+      },
+    },
     runInTenantContext: vi.fn(
       async (_tid: string, fn: (tx: unknown) => Promise<unknown>) =>
         fn({
