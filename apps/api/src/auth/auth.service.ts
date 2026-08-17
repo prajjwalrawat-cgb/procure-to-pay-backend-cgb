@@ -16,6 +16,7 @@ import {
   type LoginResponse,
   type Portal,
   type RoleName,
+  type SessionTenant,
 } from '@procureflow/shared';
 import { hash as argonHash, verify as argonVerify } from 'argon2';
 import { authenticator } from 'otplib';
@@ -114,6 +115,7 @@ export class AuthService {
         name: user.name,
         roles,
         mfaEnabled: user.mfa_enabled,
+        tenant: await this.loadTenant(user.tenant_id),
       },
       tokens: {
         accessToken: access.token,
@@ -410,7 +412,18 @@ export class AuthService {
     return roles.some((role) => role !== ROLES.VENDOR_USER);
   }
 
-  private mfaChallengeResponse(user: AuthRow): LoginResponse {
+  /** The user's own organisation, for screens that display the buying org's
+   *  name. `Tenant` carries no RLS policy (it is the anchor every policy keys
+   *  off), so this is readable before a tenant context is established. */
+  private async loadTenant(tenantId: string): Promise<SessionTenant> {
+    const tenant = await this.prisma.client.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, name: true },
+    });
+    return tenant ?? { id: tenantId, name: '' };
+  }
+
+  private async mfaChallengeResponse(user: AuthRow): Promise<LoginResponse> {
     return {
       user: {
         id: user.id,
@@ -418,6 +431,7 @@ export class AuthService {
         name: user.name,
         roles: [],
         mfaEnabled: true,
+        tenant: await this.loadTenant(user.tenant_id),
       },
       tokens: { accessToken: '', refreshToken: '', tokenType: 'Bearer', expiresIn: 0 },
       mfaRequired: true,

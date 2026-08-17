@@ -26,6 +26,7 @@ import {
   PurchaseOrderValidationError,
   VendorNotEligibleError,
 } from './purchase-order.errors';
+import { defaultPlantQuery } from '../common/plants/default-plant';
 
 const ISSUED_OR_BEYOND = [
   'ISSUED',
@@ -57,6 +58,44 @@ export class PurchaseOrderService {
   ) {}
 
   /** Dispatch the union create schema (from-PR, spot-buy, or contract call-off). */
+  /**
+   * The GST registration an order bills to, resolved once at creation and
+   * stored on the row.
+   *
+   * Pinned rather than derived on read: the place of supply is part of what was
+   * agreed when the order went out, so editing a requisition's branch later
+   * must not silently re-tax an issued PO. Precedence is the caller's explicit
+   * choice, then the requisition's branch, then the tenant's default.
+   */
+  private async resolveBillToPlant(
+    explicitId: string | null | undefined,
+    requisitionPlantId?: string | null,
+  ): Promise<{ id: string; stateCode: string } | null> {
+    if (explicitId) {
+      const chosen = await this.prisma.client.plant.findFirst({
+        where: { id: explicitId, tenantId: this.tenantId() },
+        select: { id: true, stateCode: true },
+      });
+      if (!chosen) {
+        throw new PurchaseOrderStateError('That GST registration does not exist.', {
+          billToPlantId: explicitId,
+        });
+      }
+      return chosen;
+    }
+    if (requisitionPlantId) {
+      const fromPr = await this.prisma.client.plant.findFirst({
+        where: { id: requisitionPlantId, tenantId: this.tenantId() },
+        select: { id: true, stateCode: true },
+      });
+      if (fromPr) return fromPr;
+    }
+    return this.prisma.client.plant.findFirst({
+      ...defaultPlantQuery(this.tenantId()),
+      select: { id: true, stateCode: true },
+    });
+  }
+
   async create(input: PoCreateInput, actorId: string): Promise<{ id: string }> {
     if (input.kind === 'FROM_PR') return this.createFromRequisition(input, actorId);
     if (input.kind === 'FROM_CONTRACT') return this.createFromContract(input, actorId);
@@ -146,16 +185,14 @@ export class PurchaseOrderService {
       };
     });
 
-    const plant = await this.prisma.client.plant.findFirst({
-      where: { tenantId: this.tenantId() },
-    });
+    const plant = await this.resolveBillToPlant(input.billToPlantId);
     const tax = computeDocTax(
       lines.map((l) => ({
         qty: l.qtyOrdered.toString(),
         unitPrice: l.unitPrice.toString(),
         taxRate: l.taxRate.toString(),
       })),
-      { plantStateCode: plant?.stateCode ?? '17', vendorGstin: vendor.gstin },
+      { plantStateCode: plant?.stateCode ?? '', vendorGstin: vendor.gstin },
     );
 
     const skip = contract.skipPoApprovalWithinContract;
@@ -170,6 +207,7 @@ export class PurchaseOrderService {
         contractId: contract.id,
         status: skip ? 'APPROVED' : 'DRAFT',
         poType: 'CONTRACT_CALLOFF',
+        billToPlantId: plant?.id ?? null,
         totalAmount: new Prisma.Decimal(tax.total),
         taxAmount: new Prisma.Decimal(tax.taxAmount),
         currency: contract.currency,
@@ -279,13 +317,17 @@ export class PurchaseOrderService {
       };
     });
 
+    const billTo = await this.resolveBillToPlant(input.billToPlantId, pr.plantId);
     const tax = computeDocTax(
       lines.map((l) => ({
         qty: l.qtyOrdered.toString(),
         unitPrice: l.unitPrice.toString(),
         taxRate: l.taxRate.toString(),
       })),
-      { plantStateCode: pr.plant.stateCode, vendorGstin: vendor.gstin },
+      {
+        plantStateCode: billTo?.stateCode ?? pr.plant.stateCode,
+        vendorGstin: vendor.gstin,
+      },
     );
 
     const id = newId('purchaseOrder');
@@ -297,6 +339,7 @@ export class PurchaseOrderService {
         number,
         vendorId: input.vendorId,
         requisitionId: input.requisitionId,
+        billToPlantId: billTo?.id ?? null,
         status: 'DRAFT',
         poType: 'STANDARD',
         totalAmount: new Prisma.Decimal(tax.total),
@@ -342,9 +385,9 @@ export class PurchaseOrderService {
     actorId: string,
   ): Promise<{ id: string }> {
     const vendor = await this.requireEligibleVendor(input.vendorId);
-    const plant = await this.prisma.client.plant.findFirst({
-      where: { tenantId: this.tenantId() },
-    });
+    // No requisition behind a spot buy, so the buyer's chosen registration —
+    // or the tenant default — is the only place of supply available.
+    const plant = await this.resolveBillToPlant(input.billToPlantId);
 
     const lines = input.lines.map((line, idx) => ({
       id: newId('purchaseOrderLine'),
@@ -367,7 +410,7 @@ export class PurchaseOrderService {
         discountPct: l.discountPct.toString(),
         taxRate: l.taxRate.toString(),
       })),
-      { plantStateCode: plant?.stateCode ?? '17', vendorGstin: vendor.gstin },
+      { plantStateCode: plant?.stateCode ?? '', vendorGstin: vendor.gstin },
     );
 
     // No value ceiling on a spot buy: procurement raises these against an
@@ -386,6 +429,7 @@ export class PurchaseOrderService {
         status: 'DRAFT',
         poType: 'SPOT_BUY',
         isSpotBuy: true,
+        billToPlantId: plant?.id ?? null,
         totalAmount: new Prisma.Decimal(tax.total),
         taxAmount: new Prisma.Decimal(tax.taxAmount),
         currency: 'INR',

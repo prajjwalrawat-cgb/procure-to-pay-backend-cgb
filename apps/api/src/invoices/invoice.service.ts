@@ -16,6 +16,7 @@ import { MsmeService } from './domain/msme.service';
 import { TdsService } from './domain/tds.service';
 import type { OcrExtraction } from './ocr/ocr.provider';
 import { OcrService } from './ocr/ocr.service';
+import { defaultPlantQuery } from '../common/plants/default-plant';
 
 interface Totals {
   subtotal: Decimal;
@@ -415,7 +416,9 @@ export class InvoiceService {
     vendorGstin: string | null,
     lines: Array<Pick<InvoiceLineInput, 'qty' | 'unitPrice' | 'taxRate'>>,
   ): Promise<Totals> {
-    const plant = await this.prisma.client.plant.findFirst({ where: { tenantId } });
+    const plant = await this.prisma.client.plant.findFirst(
+      defaultPlantQuery(tenantId),
+    );
     const tenantState = plant?.stateCode ?? null;
     const vendorState = vendorGstin ? vendorGstin.slice(0, 2) : null;
     const taxKind: Totals['taxKind'] =

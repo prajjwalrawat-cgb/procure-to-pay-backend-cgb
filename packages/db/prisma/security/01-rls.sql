@@ -52,7 +52,9 @@ DECLARE
     -- Slice 10b banking
     'PaymentSubmissionIntent',
     -- Slice 12 inventory (native warehouse module)
-    'Product', 'Location', 'StockLedgerEntry', 'ImportBatch', 'ImportRow'
+    'Product', 'Location', 'StockLedgerEntry', 'ImportBatch', 'ImportRow',
+    -- Slice 11 organisation settings
+    'CustomFieldDefinition'
   ];
 BEGIN
   FOREACH t IN ARRAY tenanted_tables LOOP

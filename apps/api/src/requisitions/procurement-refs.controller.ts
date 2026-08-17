@@ -37,14 +37,21 @@ export class ProcurementRefsController {
 
   @Get('plants')
   @RequirePermission(PERMISSIONS.BUDGET_READ)
+  /** Branches = GST registrations. The tenant's default sorts first so a form
+   *  defaulting to the first entry picks the intended registration, not
+   *  whichever branch happens to sort first alphabetically. */
   async plants(): Promise<{ items: PlantRef[] }> {
-    const rows = await this.prisma.client.plant.findMany({ orderBy: { name: 'asc' } });
+    const rows = await this.prisma.client.plant.findMany({
+      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+    });
     return {
       items: rows.map((p) => ({
         id: p.id,
         name: p.name,
         stateCode: p.stateCode,
         address: p.address,
+        gstin: p.gstin,
+        isDefault: p.isDefault,
       })),
     };
   }

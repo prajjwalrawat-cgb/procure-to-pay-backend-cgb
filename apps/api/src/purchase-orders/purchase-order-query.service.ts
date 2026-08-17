@@ -17,6 +17,7 @@ import { ApprovalRoutingService } from '../approvals/approval-routing.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PoAttachmentService } from './po-attachment.service';
 import { PoTermsService } from './po-terms.service';
+import { defaultPlantQuery } from '../common/plants/default-plant';
 
 type PoWithRels = Prisma.PurchaseOrderGetPayload<{
   include: {
@@ -96,6 +97,7 @@ export class PurchaseOrderQueryService {
       where: { id },
       include: {
         vendor: true,
+        billToPlant: true,
         lines: { orderBy: { lineNo: 'asc' } },
         requisition: true,
         grns: true,
@@ -105,9 +107,11 @@ export class PurchaseOrderQueryService {
     });
     if (!po) throw new NotFoundException('Purchase order not found');
 
-    const plant = await this.prisma.client.plant.findFirst({
-      where: { tenantId: po.tenantId },
-    });
+    // Bill-to registration decides the place of supply; fall back to the
+    // tenant's default rather than an arbitrary branch.
+    const plant =
+      po.billToPlant ??
+      (await this.prisma.client.plant.findFirst(defaultPlantQuery(po.tenantId)));
     const tax = computeDocTax(
       po.lines.map((l) => ({
         qty: l.qtyOrdered.toString(),

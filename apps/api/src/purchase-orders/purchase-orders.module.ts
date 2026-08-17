@@ -4,6 +4,7 @@ import { ApprovalsModule } from '../approvals/approvals.module';
 import { BudgetsModule } from '../budgets/budgets.module';
 import { DomainEventsModule } from '../common/events/domain-event.service';
 import { StorageModule } from '../common/storage/storage.service';
+import { SettingsModule } from '../settings/settings.module';
 import { PoAttachmentService } from './po-attachment.service';
 import { PoDocumentService } from './po-document.service';
 import { PoTermsService } from './po-terms.service';
@@ -19,7 +20,14 @@ import { VendorPoService } from './vendor-po.service';
  * sanitised vendor-portal view (separate JWT audience).
  */
 @Module({
-  imports: [ApprovalsModule, BudgetsModule, DomainEventsModule, StorageModule],
+  imports: [
+    ApprovalsModule,
+    BudgetsModule,
+    DomainEventsModule,
+    StorageModule,
+    // Printable custom fields on the PO PDF.
+    SettingsModule,
+  ],
   controllers: [PurchaseOrdersController, VendorPoController],
   providers: [
     PurchaseOrderService,

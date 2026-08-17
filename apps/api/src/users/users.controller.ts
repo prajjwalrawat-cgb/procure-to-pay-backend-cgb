@@ -9,6 +9,7 @@ import {
   UsersService,
   type PendingInvite,
   type TeamMember,
+  type MyProfile,
   type UserProfile,
 } from './users.service';
 
@@ -43,7 +44,7 @@ export class UsersController {
   constructor(private readonly users: UsersService) {}
 
   @Get('me')
-  async me(@CurrentUser() user: AuthUser): Promise<UserProfile> {
+  async me(@CurrentUser() user: AuthUser): Promise<MyProfile> {
     return this.users.findProfile(user.userId);
   }
 

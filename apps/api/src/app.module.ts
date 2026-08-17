@@ -32,6 +32,7 @@ import { RequisitionsModule } from './requisitions/requisitions.module';
 import { SourcingModule } from './sourcing/sourcing.module';
 import { TenantInterceptor } from './tenant/tenant.interceptor';
 import { TenantModule } from './tenant/tenant.module';
+import { SettingsModule } from './settings/settings.module';
 import { UsersModule } from './users/users.module';
 import { VendorsModule } from './vendors/vendors.module';
 import { AnalyticsModule } from './analytics/analytics.module';
@@ -76,6 +77,7 @@ import { ComplianceModule } from './compliance/compliance.module';
     AuthModule,
     TenantModule,
     UsersModule,
+    SettingsModule,
     HealthModule,
     ApprovalsModule,
     InvoicesModule,

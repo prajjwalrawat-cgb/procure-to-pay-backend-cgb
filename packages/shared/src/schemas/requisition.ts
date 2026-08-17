@@ -145,6 +145,11 @@ export interface PlantRef {
   name: string;
   stateCode: string;
   address: string | null;
+  /** The branch's own GST registration number, shown beside its name.
+   *  Null until an admin fills it in under Settings → GST registrations. */
+  gstin: string | null;
+  /** The registration a document bills to when none is chosen. */
+  isDefault: boolean;
 }
 
 export interface VendorRef {

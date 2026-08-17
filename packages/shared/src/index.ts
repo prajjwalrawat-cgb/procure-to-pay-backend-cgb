@@ -11,6 +11,8 @@ export * from './constants/inventory-status';
 export * from './constants/currency';
 export * from './constants/gst-states';
 export * from './schemas/auth';
+export * from './schemas/settings';
+export * from './schemas/custom-fields';
 export * from './schemas/invoice';
 export * from './schemas/approvals';
 export * from './schemas/audit';

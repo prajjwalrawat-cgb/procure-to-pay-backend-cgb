@@ -3,6 +3,7 @@ import { computeDocTax, taxKindLabel, type VendorPoOption } from '@procureflow/s
 
 import { PrismaService } from '../prisma/prisma.service';
 import { TdsService } from './domain/tds.service';
+import { defaultPlantQuery } from '../common/plants/default-plant';
 
 export type RefCard =
   | {
@@ -147,7 +148,7 @@ export class RefsService {
     // identical tax kind and total the supplier saw on the PO.
     const tenantId = pos[0]?.tenantId;
     const plant = tenantId
-      ? await this.prisma.client.plant.findFirst({ where: { tenantId } })
+      ? await this.prisma.client.plant.findFirst(defaultPlantQuery(tenantId))
       : null;
     return pos.map((po) => {
       const tax = computeDocTax(

@@ -104,6 +104,8 @@ export const ID_PREFIX = {
   stockLedgerEntry: 'sle',
   importBatch: 'imb',
   importRow: 'imr',
+  // Slice 11 organisation settings
+  customFieldDefinition: 'cfd',
 } as const;
 
 export type EntityKind = keyof typeof ID_PREFIX;

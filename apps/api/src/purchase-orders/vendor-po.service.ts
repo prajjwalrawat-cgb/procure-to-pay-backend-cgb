@@ -18,6 +18,7 @@ import { NotificationService } from '../approvals/notification.service';
 import { AuditLogService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PoTermsService } from './po-terms.service';
+import { defaultPlantQuery } from '../common/plants/default-plant';
 
 /** Statuses a vendor is allowed to see (issued and beyond). */
 const VENDOR_VISIBLE: PoStatus[] = [
@@ -89,9 +90,9 @@ export class VendorPoService {
   async detail(userId: string, poId: string): Promise<VendorPoDetailResponse> {
     const vendorId = await this.resolveVendorId(userId);
     const po = await this.requireVendorPo(poId, vendorId);
-    const plant = await this.prisma.client.plant.findFirst({
-      where: { tenantId: po.tenantId },
-    });
+    const plant =
+      po.billToPlant ??
+      (await this.prisma.client.plant.findFirst(defaultPlantQuery(po.tenantId)));
     const tax = computeDocTax(
       po.lines.map((l) => ({
         qty: l.qtyOrdered.toString(),
@@ -216,7 +217,12 @@ export class VendorPoService {
   private async requireVendorPo(poId: string, vendorId: string) {
     const po = await this.prisma.client.purchaseOrder.findUnique({
       where: { id: poId },
-      include: { lines: { orderBy: { lineNo: 'asc' } }, vendor: true, comments: true },
+      include: {
+        lines: { orderBy: { lineNo: 'asc' } },
+        vendor: true,
+        billToPlant: true,
+        comments: true,
+      },
     });
     // Return 404 (not 403) for another vendor's PO — no existence disclosure.
     if (!po || po.vendorId !== vendorId || !VENDOR_VISIBLE.includes(po.status)) {

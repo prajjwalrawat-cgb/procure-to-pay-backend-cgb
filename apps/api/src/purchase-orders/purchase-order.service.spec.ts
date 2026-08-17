@@ -38,6 +38,7 @@ function build(
     vendorLifecycleStatus?: string;
     bankVerified?: boolean;
     prLines?: ReturnType<typeof prLine>[];
+    vendorGstin?: string;
   } = {},
 ) {
   const requisition = {
@@ -53,7 +54,7 @@ function build(
     id: 'ven_patel',
     name: 'Patel Engineering',
     code: 'V-PATEL',
-    gstin: '24AABCP1234K1Z5',
+    gstin: opts.vendorGstin ?? '24AABCP1234K1Z5',
     status: opts.vendorStatus ?? 'ACTIVE',
     lifecycleStatus: opts.vendorLifecycleStatus ?? 'ACTIVE',
     banks: [{ isVerified: opts.bankVerified ?? true }],
@@ -72,7 +73,19 @@ function build(
         .fn()
         .mockResolvedValue({ spotBuyCeiling: new Decimal('50000') }),
     },
-    plant: { findFirst: vi.fn().mockResolvedValue({ stateCode: '17' }) },
+    // Two GST registrations: Meghalaya (default) and Karnataka. `findFirst`
+    // answers by id when one is named, else the default.
+    plant: {
+      findFirst: vi.fn().mockImplementation((args: { where?: { id?: string } }) => {
+        const byId: Record<string, { id: string; stateCode: string }> = {
+          plt_meg: { id: 'plt_meg', stateCode: '17' },
+          plt_blr: { id: 'plt_blr', stateCode: '29' },
+        };
+        const wanted = args?.where?.id;
+        if (wanted) return Promise.resolve(byId[wanted] ?? null);
+        return Promise.resolve({ id: 'plt_meg', stateCode: '17' });
+      }),
+    },
     budgetCommitment: { findFirst: vi.fn().mockResolvedValue(null) },
   };
   const prisma = { client, currentTenantId: 'ten_1' } as unknown as PrismaService;
@@ -254,6 +267,83 @@ describe('PurchaseOrderService.createFromRequisition', () => {
         'usr_1',
       ),
     ).rejects.toBeInstanceOf(PurchaseOrderStateError);
+  });
+});
+
+describe('PurchaseOrderService — bill-to GST registration', () => {
+  const spotBuy = (billToPlantId?: string) => ({
+    kind: 'SPOT_BUY' as const,
+    vendorId: 'ven_patel',
+    costCenterId: 'cc_1',
+    ...(billToPlantId ? { billToPlantId } : {}),
+    ...terms,
+    lines: [
+      {
+        itemDesc: 'Widget',
+        uom: 'nos',
+        qtyOrdered: '1',
+        unitPrice: '1000',
+        discountPct: '0',
+        taxRate: '0.18',
+      },
+    ],
+  });
+
+  it('pins the chosen registration on the order', async () => {
+    const { service, client } = build();
+    await service.createSpotBuy(spotBuy('plt_blr'), 'usr_1');
+    expect(client.purchaseOrder.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ billToPlantId: 'plt_blr' }),
+      }),
+    );
+  });
+
+  it('falls back to the tenant default when none is named', async () => {
+    const { service, client } = build();
+    await service.createSpotBuy(spotBuy(), 'usr_1');
+    expect(client.purchaseOrder.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ billToPlantId: 'plt_meg' }),
+      }),
+    );
+  });
+
+  /**
+   * The vendor is in Karnataka (29), so billing to Karnataka is intra-state
+   * (CGST+SGST) while billing the same order to Meghalaya is inter-state
+   * (IGST). Only the totals are stored here — the split itself is derived at
+   * render time from the pinned registration's state — so what this asserts is
+   * that the named registration is the one fed to the tax context, and that
+   * the stored total is unchanged either way.
+   */
+  it('feeds the named registration into the tax context', async () => {
+    const karnatakaVendor = { vendorGstin: '29AABCP1234K1Z5' };
+    const { service, client } = build({ vendorGstin: karnatakaVendor.vendorGstin });
+    await service.createSpotBuy(spotBuy('plt_blr'), 'usr_1');
+    const intra = client.purchaseOrder.create.mock.calls[0]![0] as {
+      data: { taxAmount: { toString(): string } };
+    };
+
+    const other = build({ vendorGstin: karnatakaVendor.vendorGstin });
+    await other.service.createSpotBuy(spotBuy('plt_meg'), 'usr_1');
+    const inter = other.client.purchaseOrder.create.mock.calls[0]![0] as {
+      data: { taxAmount: { toString(): string } };
+    };
+
+    // Same total tax either way — what differs is the split, which the document
+    // and the invoice read back off the registration's state.
+    expect(intra.data.taxAmount.toString()).toBe(inter.data.taxAmount.toString());
+    expect(client.plant.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ id: 'plt_blr' }) }),
+    );
+  });
+
+  it('rejects a registration that is not the tenant’s', async () => {
+    const { service } = build();
+    await expect(
+      service.createSpotBuy(spotBuy('plt_someone_else'), 'usr_1'),
+    ).rejects.toThrow(/does not exist/i);
   });
 });
 

@@ -17,7 +17,7 @@ const GOLDEN_DATE = new Date('2026-07-14T00:00:00.000Z');
  * Award justification PDF (Slice 6 §10). Renders the full comparison matrix,
  * every opened quote, the scoring rationale and the variance-from-L1
  * justification into a real binary PDF whose sha256 is recorded on the Award —
- * the artefact Star Cement hands to internal audit / SEBI compliance.
+ * the artefact the buying tenant hands to internal audit / SEBI compliance.
  */
 @Injectable()
 export class AwardJustificationService {

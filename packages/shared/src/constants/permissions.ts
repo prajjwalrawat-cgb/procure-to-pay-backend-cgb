@@ -122,6 +122,10 @@ export const PERMISSIONS = {
   AUDIT_LOG_READ: 'audit_log:read',
   AUDIT_LOG_WRITE: 'audit_log:write',
 
+  // Organisation settings — tenant identity, letterhead branding, primary plant.
+  SETTINGS_READ: 'settings:read',
+  SETTINGS_WRITE: 'settings:write',
+
   USER_READ: 'user:read',
   USER_CREATE: 'user:create',
   USER_UPDATE: 'user:update',
@@ -315,6 +319,8 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     PERMISSIONS.USER_READ,
     PERMISSIONS.USER_CREATE,
     PERMISSIONS.USER_UPDATE,
+    PERMISSIONS.SETTINGS_READ,
+    PERMISSIONS.SETTINGS_WRITE,
     ...PURCHASING,
     ...VENDOR_MASTER,
     PERMISSIONS.VENDOR_ONBOARDING_CANCEL,
