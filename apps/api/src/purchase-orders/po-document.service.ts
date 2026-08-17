@@ -8,8 +8,10 @@ import {
   formatCustomFieldValue,
   formatGstState,
   gstStateName,
+  PAYMENT_TERM_LABELS,
   taxKindLabel,
   type CustomFieldDefinition,
+  type PaymentTermKind,
   type PaymentTerms,
 } from '@procureflow/shared';
 import Decimal from 'decimal.js';
@@ -439,11 +441,13 @@ export class PoDocumentService {
         (!plant?.address ||
           !addr.line1.toLowerCase().includes(plant.address.toLowerCase()));
 
+      // Prefer the wording captured on the order; otherwise the catalogue's,
+      // so a term never prints to a vendor as a raw enum like "DELIVERY_7".
+      const paymentKind = paymentTerms?.kind ?? 'NET_30';
       const paymentLabel =
         paymentTerms?.label ??
-        `${paymentTerms?.kind ?? 'NET_30'}${
-          paymentTerms?.days ? ` (${paymentTerms.days} days)` : ''
-        }`;
+        PAYMENT_TERM_LABELS[paymentKind as PaymentTermKind] ??
+        paymentKind;
 
       // ── Company header ────────────────────────────────────────────────
       const orgName = po.tenant.name.toUpperCase();
