@@ -116,6 +116,9 @@ export const PoCreateInputSchema = z.discriminatedUnion('kind', [
 export type PoCreateInput = z.infer<typeof PoCreateInputSchema>;
 
 export const PoUpdateInputSchema = z.object({
+  /** Move a draft to another GST registration. Recomputes the place of
+   *  supply; refused once the order has left DRAFT. */
+  billToPlantId: z.string().min(1).nullish(),
   deliveryAddress: DeliveryAddressSchema.nullish(),
   deliveryTerms: z.enum(INCOTERMS).nullish(),
   paymentTerms: PaymentTermsSchema.nullish(),
@@ -317,6 +320,9 @@ export interface PoDetailResponse {
     isMsme: boolean;
   };
   requisition: { id: string; number: string } | null;
+  /** The GST registration this order bills to — drives the GSTIN printed on
+   *  the PO and the place of supply. */
+  billTo: { id: string; name: string; gstin: string | null; stateCode: string } | null;
   stages: { key: string; label: string; state: 'done' | 'active' | 'todo' }[];
   lines: PoLineView[];
   amounts: {

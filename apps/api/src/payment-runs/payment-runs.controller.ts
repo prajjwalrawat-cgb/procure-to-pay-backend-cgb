@@ -1,8 +1,20 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, Res } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Put,
+  Query,
+  Res,
+} from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
+import { z } from 'zod';
 import type { Response } from 'express';
 import {
   AddPaymentItemInputSchema,
+  BankAccountInputSchema,
   CancelPaymentRunInputSchema,
   CreatePaymentRunInputSchema,
   PaymentRunDecisionInputSchema,
@@ -11,6 +23,7 @@ import {
   ReorderPaymentItemsInputSchema,
   SuggestInvoicesInputSchema,
   type AddPaymentItemInput,
+  type BankAccountInput,
   type BankAccountView,
   type BankConfirmationResult,
   type BankReconciliationResponse,
@@ -50,10 +63,54 @@ export class PaymentRunsController {
     private readonly tds: TdsService,
   ) {}
 
+  /** Active accounts only — this feeds the "debit account" picker on a run. */
   @Get('bank-accounts')
   @RequirePermission(PERMISSIONS.INVOICE_READ_TENANT)
   async listBankAccounts(): Promise<{ items: BankAccountView[] }> {
     return { items: await this.bankAccounts.list() };
+  }
+
+  /**
+   * Every account, retired ones included — the settings screen. Finance owns
+   * these accounts, so the gate is `bank_account:*` rather than `settings:*`:
+   * an AP head maintains the banking without holding admin rights over the
+   * rest of the organisation's settings.
+   */
+  @Get('bank-accounts/all')
+  @RequirePermission(PERMISSIONS.BANK_ACCOUNT_READ)
+  async listAllBankAccounts(): Promise<{ items: BankAccountView[] }> {
+    return { items: await this.bankAccounts.listAll() };
+  }
+
+  @Post('bank-accounts')
+  @RequirePermission(PERMISSIONS.BANK_ACCOUNT_MANAGE)
+  async createBankAccount(
+    @CurrentUser() user: AuthUser,
+    @Body(new ZodValidationPipe(BankAccountInputSchema)) dto: BankAccountInput,
+  ): Promise<{ items: BankAccountView[] }> {
+    return { items: await this.bankAccounts.create(user.tenantId, dto, user.userId) };
+  }
+
+  @Put('bank-accounts/:id')
+  @RequirePermission(PERMISSIONS.BANK_ACCOUNT_MANAGE)
+  async updateBankAccount(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(BankAccountInputSchema)) dto: BankAccountInput,
+  ): Promise<{ items: BankAccountView[] }> {
+    return { items: await this.bankAccounts.update(id, dto, user.userId) };
+  }
+
+  /** Retire or restore. Blocked while a run is still open against it. */
+  @Post('bank-accounts/:id/active')
+  @RequirePermission(PERMISSIONS.BANK_ACCOUNT_MANAGE)
+  async setBankAccountActive(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(z.object({ isActive: z.boolean() })))
+    dto: { isActive: boolean },
+  ): Promise<{ items: BankAccountView[] }> {
+    return { items: await this.bankAccounts.setActive(id, dto.isActive, user.userId) };
   }
 
   @Get('payment-runs')

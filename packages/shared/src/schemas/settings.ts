@@ -13,6 +13,7 @@ import { GST_STATES } from '../constants/gst-states';
  */
 
 const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const STATE_CODES = GST_STATES.map((s) => s.code);
 
 const gstin = z
@@ -42,7 +43,7 @@ export const OrganisationSettingsSchema = z.object({
   tenant: z.object({
     id: z.string(),
     name: z.string(),
-    gstin: z.string().nullable(),
+    pan: z.string().nullable(),
     currency: z.string(),
   }),
   branches: z.array(BranchSchema),
@@ -53,7 +54,13 @@ export type OrganisationSettings = z.infer<typeof OrganisationSettingsSchema>;
 
 export const OrganisationUpdateInputSchema = z.object({
   name: z.string().trim().min(1, 'Organisation name is required').max(160).optional(),
-  gstin: gstin,
+  /// A company holds one PAN however many state registrations it has.
+  pan: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .regex(PAN_RE, 'Enter a valid 10-character PAN')
+    .nullish(),
   currency: z.string().trim().length(3).toUpperCase().optional(),
 });
 export type OrganisationUpdateInput = z.infer<typeof OrganisationUpdateInputSchema>;

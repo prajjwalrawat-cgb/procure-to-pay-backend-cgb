@@ -5,6 +5,7 @@ import Decimal from 'decimal.js';
 import PDFDocument from 'pdfkit';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { defaultPlantQuery } from '../common/plants/default-plant';
 
 export interface GeneratedRma {
   buffer: Buffer;
@@ -36,7 +37,15 @@ export class RmaDocumentService {
       },
     });
     if (!rma) throw new NotFoundException('RMA not found');
-    const buffer = await this.render(rma, opts);
+    // A GSTIN belongs to a state registration, so the letterhead takes it from
+    // the tenant's default branch.
+    const branch = await this.prisma.client.plant.findFirst(
+      defaultPlantQuery(rma.tenantId),
+    );
+    const buffer = await this.render(rma, {
+      ...opts,
+      branchGstin: branch?.gstin ?? null,
+    });
     const hash = createHash('sha256').update(buffer).digest('hex');
     return { buffer, hash };
   }
@@ -56,7 +65,7 @@ export class RmaDocumentService {
         grnLine: { poLine: { itemDesc: string; uom: string } };
       }[];
     },
-    opts: { deterministic?: boolean },
+    opts: { deterministic?: boolean; branchGstin?: string | null },
   ): Promise<Buffer> {
     return new Promise<Buffer>((resolve, reject) => {
       const doc = new PDFDocument({
@@ -77,7 +86,7 @@ export class RmaDocumentService {
 
       doc.fontSize(18).font('Helvetica-Bold').text(rma.tenant.name);
       doc.fontSize(9).font('Helvetica').fillColor('#555');
-      doc.text(`GSTIN: ${rma.tenant.gstin ?? '—'}`);
+      doc.text(`GSTIN: ${opts.branchGstin ?? '—'}`);
       doc.moveDown(0.5);
       doc
         .fillColor('#000')

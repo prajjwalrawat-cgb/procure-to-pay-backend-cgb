@@ -146,6 +146,16 @@ export class PurchaseOrderQueryService {
       requisition: po.requisition
         ? { id: po.requisition.id, number: po.requisition.number }
         : null,
+      // `plant` is the resolved bill-to (explicit → requisition → default), so
+      // the UI shows what will actually print rather than only an explicit pick.
+      billTo: plant
+        ? {
+            id: plant.id,
+            name: plant.name,
+            gstin: plant.gstin,
+            stateCode: plant.stateCode,
+          }
+        : null,
       stages: this.stages(po.status),
       lines: po.lines.map((l) => this.toLineView(l)),
       amounts: {

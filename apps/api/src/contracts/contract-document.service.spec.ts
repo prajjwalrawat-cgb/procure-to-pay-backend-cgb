@@ -100,6 +100,10 @@ function coalContract() {
 function build() {
   const client = {
     contract: { findUnique: vi.fn().mockResolvedValue(coalContract()) },
+    // The letterhead GSTIN comes from the tenant's default branch.
+    plant: {
+      findFirst: vi.fn().mockResolvedValue({ gstin: '17AAACS1234M1Z9' }),
+    },
   };
   const prisma = { client } as unknown as PrismaService;
   return new ContractDocumentService(prisma);
