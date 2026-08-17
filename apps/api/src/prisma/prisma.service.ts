@@ -22,6 +22,18 @@ interface TenantContext {
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   private readonly als = new AsyncLocalStorage<TenantContext>();
 
+  /**
+   * The client every caller outside this class actually holds. `PrismaClient`'s
+   * constructor hands back a Proxy that materialises the model delegates
+   * (`.user`, `.tenant`, …) on access; a *getter* body, unlike a method body,
+   * runs with the unproxied target as `this`, and that target carries none of
+   * them. So `client` must not fall back to a bare `this` — it would return an
+   * object where `.tenant.findUnique` is a TypeError, which is precisely what
+   * broke every unauthenticated request (login) that queries outside a tenant
+   * context. The constructor still sees the proxy, so capture it here.
+   */
+  private readonly proxied: PrismaClient = this;
+
   async onModuleInit(): Promise<void> {
     await this.$connect();
   }
@@ -33,7 +45,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   /** The active client: the request transaction when inside a tenant context,
    *  otherwise the base (unscoped) client. */
   get client(): Prisma.TransactionClient | PrismaClient {
-    return this.als.getStore()?.tx ?? this;
+    return this.als.getStore()?.tx ?? this.proxied;
   }
 
   /** The tenant id of the current request context, if any. */
