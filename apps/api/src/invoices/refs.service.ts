@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import type { VendorPoOption } from '@procureflow/shared';
+import { computeDocTax, taxKindLabel, type VendorPoOption } from '@procureflow/shared';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { TdsService } from './domain/tds.service';
@@ -139,21 +139,47 @@ export class RefsService {
           ],
         },
       },
-      include: { lines: { orderBy: { lineNo: 'asc' } } },
+      include: { lines: { orderBy: { lineNo: 'asc' } }, vendor: true },
       orderBy: { createdAt: 'desc' },
     });
-    return pos.map((po) => ({
-      id: po.id,
-      number: po.number,
-      lines: po.lines.map((l) => ({
-        id: l.id,
-        lineNo: l.lineNo,
-        itemDesc: l.itemDesc,
-        uom: l.uom,
-        qtyOrdered: l.qtyOrdered.toString(),
-        unitPrice: l.unitPrice.toString(),
-        taxRate: l.taxRate.toString(),
-      })),
-    }));
+    // GST split is decided by delivery plant state vs vendor GSTIN state — the
+    // same context VendorPoService.detail uses, so the invoice wizard quotes the
+    // identical tax kind and total the supplier saw on the PO.
+    const tenantId = pos[0]?.tenantId;
+    const plant = tenantId
+      ? await this.prisma.client.plant.findFirst({ where: { tenantId } })
+      : null;
+    return pos.map((po) => {
+      const tax = computeDocTax(
+        po.lines.map((l) => ({
+          qty: l.qtyOrdered.toString(),
+          unitPrice: l.unitPrice.toString(),
+          discountPct: l.discountPct.toString(),
+          taxRate: l.taxRate.toString(),
+        })),
+        { plantStateCode: plant?.stateCode ?? '17', vendorGstin: po.vendor.gstin },
+      );
+      return {
+        id: po.id,
+        number: po.number,
+        currency: po.currency,
+        lines: po.lines.map((l) => ({
+          id: l.id,
+          lineNo: l.lineNo,
+          itemDesc: l.itemDesc,
+          hsnCode: l.hsnCode,
+          uom: l.uom,
+          qtyOrdered: l.qtyOrdered.toString(),
+          unitPrice: l.unitPrice.toString(),
+          taxRate: l.taxRate.toString(),
+        })),
+        amounts: {
+          subtotal: tax.subtotal,
+          taxAmount: tax.taxAmount,
+          taxKind: taxKindLabel(tax.taxKind),
+          total: tax.total,
+        },
+      };
+    });
   }
 }

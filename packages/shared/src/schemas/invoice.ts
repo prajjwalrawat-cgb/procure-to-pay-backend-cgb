@@ -234,13 +234,28 @@ export interface InvoiceDetailResponse {
 export interface VendorPoOption {
   id: string;
   number: string;
+  currency: string;
   lines: {
     id: string;
     lineNo: number;
     itemDesc: string;
+    hsnCode: string | null;
     uom: string;
     qtyOrdered: string;
     unitPrice: string;
+    /** Fraction, e.g. "0.05" for 5% — the rate the PO was raised at. */
     taxRate: string;
   }[];
+  /**
+   * Ordered value of the PO including GST, so the portal shows the supplier the
+   * same figure the PO screen and the PO PDF do (tax-exclusive totals read as a
+   * short-payment to a vendor comparing the two).
+   */
+  amounts: {
+    subtotal: string;
+    taxAmount: string;
+    /** Human label, e.g. "IGST" / "CGST + SGST". */
+    taxKind: string;
+    total: string;
+  };
 }
