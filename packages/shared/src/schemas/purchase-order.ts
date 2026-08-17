@@ -51,6 +51,11 @@ export type PoSpotBuyLineInput = z.infer<typeof PoSpotBuyLineInputSchema>;
 
 export const PoCreateFromPrInputSchema = z.object({
   kind: z.literal('FROM_PR'),
+  /** GST registration the order bills to. Decides the GSTIN printed on the
+   *  PO and the place of supply — under IGST Act s.10(1)(b) this, not the
+   *  ship-to address, sets CGST+SGST vs IGST. Defaults to the requisition's
+   *  branch, else the tenant's default registration. */
+  billToPlantId: z.string().min(1).nullish(),
   requisitionId: z.string().min(1),
   vendorId: z.string().min(1),
   deliveryAddress: DeliveryAddressSchema.nullish(),
@@ -71,6 +76,11 @@ export type PoFromContractLineInput = z.infer<typeof PoFromContractLineInputSche
 
 export const PoCreateFromContractInputSchema = z.object({
   kind: z.literal('FROM_CONTRACT'),
+  /** GST registration the order bills to. Decides the GSTIN printed on the
+   *  PO and the place of supply — under IGST Act s.10(1)(b) this, not the
+   *  ship-to address, sets CGST+SGST vs IGST. Defaults to the requisition's
+   *  branch, else the tenant's default registration. */
+  billToPlantId: z.string().min(1).nullish(),
   contractId: z.string().min(1),
   deliveryAddress: DeliveryAddressSchema.nullish(),
   deliveryTerms: z.enum(INCOTERMS).default('DDP'),
@@ -81,6 +91,11 @@ export type PoCreateFromContractInput = z.infer<typeof PoCreateFromContractInput
 
 export const PoCreateSpotBuyInputSchema = z.object({
   kind: z.literal('SPOT_BUY'),
+  /** GST registration the order bills to. Decides the GSTIN printed on the
+   *  PO and the place of supply — under IGST Act s.10(1)(b) this, not the
+   *  ship-to address, sets CGST+SGST vs IGST. Defaults to the requisition's
+   *  branch, else the tenant's default registration. */
+  billToPlantId: z.string().min(1).nullish(),
   vendorId: z.string().min(1),
   costCenterId: z.string().min(1),
   deliveryAddress: DeliveryAddressSchema.nullish(),

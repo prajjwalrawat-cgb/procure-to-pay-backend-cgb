@@ -25,6 +25,15 @@ export const TokenPairSchema = z.object({
 });
 export type TokenPair = z.infer<typeof TokenPairSchema>;
 
+/** The signed-in user's own organisation. Every screen that names the buying
+ *  org reads it from here — the name is tenant data, never a literal in the
+ *  UI, so a second tenant sees its own name and not the first one's. */
+export const SessionTenantSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+export type SessionTenant = z.infer<typeof SessionTenantSchema>;
+
 export const LoginResponseSchema = z.object({
   user: z.object({
     id: z.string(),
@@ -32,6 +41,7 @@ export const LoginResponseSchema = z.object({
     name: z.string(),
     roles: z.array(z.enum(ALL_ROLES as [string, ...string[]])),
     mfaEnabled: z.boolean(),
+    tenant: SessionTenantSchema,
   }),
   tokens: TokenPairSchema,
   // Present when MFA is required but no code was supplied.

@@ -18,6 +18,7 @@ import { StorageService } from '../common/storage/storage.service';
 import type { InvoiceScope } from './invoice-scope';
 import { MsmeService } from './domain/msme.service';
 import { TdsService } from './domain/tds.service';
+import { defaultPlantQuery } from '../common/plants/default-plant';
 
 const OPEN_STATUSES = [
   'RECEIVED',
@@ -208,6 +209,12 @@ export class InvoiceQueryService {
     });
     if (!inv) throw new NotFoundException('Invoice not found');
 
+    // Place of supply for the CGST/SGST-vs-IGST split.
+    const plant = await this.prisma.client.plant.findFirst({
+      ...defaultPlantQuery(inv.tenantId),
+      select: { stateCode: true },
+    });
+
     const openExceptionLineIds = new Set(
       inv.exceptions
         .filter((e) => !e.resolvedAt && e.invoiceLineId)
@@ -351,7 +358,7 @@ export class InvoiceQueryService {
       amounts: {
         subtotal: subtotal.toFixed(4),
         taxAmount: inv.taxAmount.toString(),
-        taxKind: taxKind(inv.vendor.gstin),
+        taxKind: taxKind(inv.vendor.gstin, plant?.stateCode ?? null),
         tdsAmount: inv.tdsAmount.toString(),
         grossAmount: inv.grossAmount.toString(),
         netPayable: inv.netAmount.toString(),
@@ -442,9 +449,13 @@ function agingDays(receivedAt: Date): number {
   );
 }
 
-function taxKind(gstin: string | null): string {
-  // Star Cement plant state = 17 (Meghalaya). Same first two digits → intra-state.
-  return gstin && gstin.slice(0, 2) === '17' ? 'CGST_SGST' : 'IGST';
+/** Place of supply is the buying tenant's own plant state, not a fixed one:
+ *  same state as the vendor → CGST+SGST, otherwise IGST. */
+function taxKind(gstin: string | null, plantStateCode: string | null): string {
+  const vendorState = gstin ? gstin.slice(0, 2) : null;
+  return plantStateCode && vendorState && plantStateCode === vendorState
+    ? 'CGST_SGST'
+    : 'IGST';
 }
 
 function buildStages(status: string): InvoiceDetailResponse['stages'] {

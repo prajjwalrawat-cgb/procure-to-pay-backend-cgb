@@ -1,4 +1,9 @@
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  GetObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Global, Injectable, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -34,6 +39,32 @@ export class StorageService {
       }),
     );
     return key;
+  }
+
+  /** Object bytes, or null when the key does not exist. Used where the API
+   *  itself needs the content (e.g. embedding a logo in a rendered PDF). */
+  async getBuffer(key: string): Promise<Buffer | null> {
+    try {
+      const res = await this.s3.send(
+        new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+      );
+      const bytes = await res.Body?.transformToByteArray();
+      return bytes ? Buffer.from(bytes) : null;
+    } catch {
+      // NoSuchKey, or storage is unreachable — callers treat both as "absent"
+      // rather than failing the document they are assembling.
+      return null;
+    }
+  }
+
+  /** Whether an object exists, without downloading it. */
+  async exists(key: string): Promise<boolean> {
+    try {
+      await this.s3.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** Time-limited download URL for an attachment (default 10 minutes). */

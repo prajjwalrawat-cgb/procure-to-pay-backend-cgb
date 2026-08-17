@@ -45,6 +45,12 @@ export interface UserProfile {
   mfaEnabled: boolean;
 }
 
+/** `/users/me` — the profile plus the caller's own organisation. The tenant
+ *  travels with the session so no screen has to hardcode the org's name. */
+export interface MyProfile extends UserProfile {
+  tenant: { id: string; name: string };
+}
+
 export interface TeamMember {
   id: string;
   email: string;
@@ -476,10 +482,13 @@ export class UsersService {
     return { id: targetUserId };
   }
 
-  async findProfile(userId: string): Promise<UserProfile> {
+  async findProfile(userId: string): Promise<MyProfile> {
     const user = await this.prisma.client.user.findUnique({
       where: { id: userId },
-      include: { userRoles: { include: { role: true } } },
+      include: {
+        userRoles: { include: { role: true } },
+        tenant: { select: { id: true, name: true } },
+      },
     });
     if (!user) throw new NotFoundException('User not found');
     return {
@@ -488,6 +497,7 @@ export class UsersService {
       name: user.name,
       roles: user.userRoles.map((ur) => ur.role.name),
       mfaEnabled: user.mfaEnabled,
+      tenant: { id: user.tenant.id, name: user.tenant.name },
     };
   }
 

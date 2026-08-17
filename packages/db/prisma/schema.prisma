@@ -514,6 +514,7 @@ model Tenant {
   products               Product[]
   locations              Location[]
   stockLedgerEntries     StockLedgerEntry[]
+  customFieldDefinitions CustomFieldDefinition[]
   importBatches          ImportBatch[]
   importRows             ImportRow[]
 }
@@ -607,6 +608,9 @@ model Plant {
   gstin     String?
   address   String?
   stateCode String
+  /// The registration a document bills to when none is chosen explicitly.
+   /// Exactly one plant per tenant carries this.
+  isDefault Boolean  @default(false) @map("is_default")
   createdAt DateTime @default(now()) @db.Timestamptz(6)
 
   tenant       Tenant        @relation(fields: [tenantId], references: [id])
@@ -614,6 +618,7 @@ model Plant {
   costCenters  CostCenter[]
   requisitions Requisition[]
   stockLedger  StockLedger[]
+  billedPos    PurchaseOrder[] @relation("PoBillToPlant")
 
   @@index([tenantId])
 }
@@ -705,6 +710,8 @@ model Vendor {
   blacklistReason         String?               @map("blacklist_reason")
   blacklistedBy           String?               @map("blacklisted_by")
   blacklistedAt           DateTime?             @map("blacklisted_at") @db.Timestamptz(6)
+  /// Admin-defined fields (Settings → Custom fields), keyed by definition key.
+  customFields Json? @map("custom_fields")
   createdAt               DateTime              @default(now()) @db.Timestamptz(6)
   updatedAt               DateTime              @updatedAt @db.Timestamptz(6)
 
@@ -835,6 +842,8 @@ model Requisition {
   neededBy               DateTime?           @db.Timestamptz(6)
   budgetBreachDetail     Json?               @map("budget_breach_detail")
   approvalMatrixSnapshot Json?               @map("approval_matrix_snapshot")
+  /// Admin-defined fields (Settings → Custom fields), keyed by definition key.
+  customFields Json? @map("custom_fields")
   createdAt              DateTime            @default(now()) @db.Timestamptz(6)
   updatedAt              DateTime            @updatedAt @db.Timestamptz(6)
 
@@ -946,6 +955,10 @@ model PurchaseOrder {
   totalAmount            Decimal   @default("0") @db.Decimal(18, 4)
   taxAmount              Decimal   @default("0") @db.Decimal(18, 4)
   currency               String    @default("INR")
+  /// GST registration the order is billed to — drives the GSTIN printed on
+   /// the PO and the place of supply. Under IGST Act s.10(1)(b) this, not the
+   /// ship-to address, decides CGST+SGST vs IGST on a drop-shipped order.
+  billToPlantId          String?   @map("bill_to_plant_id")
   deliveryAddr           String? // legacy free-text (Slice 0/1)
   deliveryAddress        Json?     @map("delivery_address")
   deliveryTerms          String?   @map("delivery_terms") // INCOTERM
@@ -965,10 +978,13 @@ model PurchaseOrder {
   cancelReason           String?   @map("cancel_reason")
   cancelledAt            DateTime? @map("cancelled_at") @db.Timestamptz(6)
   createdBy              String?   @map("created_by")
+  /// Admin-defined fields (Settings → Custom fields), keyed by definition key.
+  customFields Json? @map("custom_fields")
   createdAt              DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt              DateTime  @updatedAt @db.Timestamptz(6)
 
   tenant                 Tenant                    @relation(fields: [tenantId], references: [id])
+  billToPlant            Plant?                    @relation("PoBillToPlant", fields: [billToPlantId], references: [id])
   vendor                 Vendor                    @relation(fields: [vendorId], references: [id])
   requisition            Requisition?              @relation(fields: [requisitionId], references: [id])
   lines                  PurchaseOrderLine[]
@@ -986,6 +1002,7 @@ model PurchaseOrder {
   @@index([tenantId, createdAt(sort: Desc)])
   @@index([vendorId])
   @@index([contractId])
+  @@index([billToPlantId])
 }
 
 model PurchaseOrderLine {
@@ -1110,6 +1127,8 @@ model Item {
   samplingPlanRef  String?  @map("sampling_plan_ref")
   aqlLevel         String?  @map("aql_level")
   stockGlAccount   String?  @map("stock_gl_account")
+  /// Admin-defined fields (Settings → Custom fields), keyed by definition key.
+  customFields Json? @map("custom_fields")
   createdAt        DateTime @default(now()) @db.Timestamptz(6)
   updatedAt        DateTime @updatedAt @db.Timestamptz(6)
 
@@ -1271,6 +1290,8 @@ model GoodsReceiptNote {
   reversedBy               String?             @map("reversed_by")
   reversalReason           String?             @map("reversal_reason")
   createdBy                String?             @map("created_by")
+  /// Admin-defined fields (Settings → Custom fields), keyed by definition key.
+  customFields Json? @map("custom_fields")
   createdAt                DateTime            @default(now()) @db.Timestamptz(6)
   updatedAt                DateTime            @default(now()) @updatedAt @db.Timestamptz(6)
 
@@ -1472,6 +1493,8 @@ model Invoice {
   holdReason             String?
   paidAt                 DateTime?     @map("paid_at") @db.Timestamptz(6)
   approvalMatrixSnapshot Json?         @map("approval_matrix_snapshot")
+  /// Admin-defined fields (Settings → Custom fields), keyed by definition key.
+  customFields Json? @map("custom_fields")
   createdAt              DateTime      @default(now()) @db.Timestamptz(6)
   updatedAt              DateTime      @updatedAt @db.Timestamptz(6)
 
@@ -2653,6 +2676,59 @@ model AnalyticsMsmeMonthly {
 
   @@unique([tenantId, month])
   @@index([tenantId])
+}
+
+
+// ──────────────── Admin-defined custom fields (Slice 11) ────────────────
+// Extra fields an admin adds to a document type from Settings, without a
+// code change. Definitions live here; the values live in each row's
+// `custom_fields` JSON, keyed by definition `key`.
+
+model CustomFieldDefinition {
+  id          String            @id
+  tenantId    String            @map("tenant_id") @db.Uuid
+  entityType  CustomFieldEntity @map("entity_type")
+  /// Stable identifier used as the JSON key on the document row. Immutable
+   /// once created — renaming it would orphan every value already captured.
+  key         String
+  label       String
+  fieldType   CustomFieldType   @map("field_type")
+  /// Choices for SELECT / MULTI_SELECT; empty for every other type.
+  options     String[]          @default([])
+  isRequired  Boolean           @default(false) @map("is_required")
+  /// Printed on the document PDF (purchase orders today).
+  isPrintable Boolean           @default(false) @map("is_printable")
+  helpText    String?           @map("help_text")
+  orderNo     Int               @map("order_no")
+  /// Retired fields stop appearing on forms but keep historic values
+   /// readable — deleting the definition would strand them.
+  isActive    Boolean           @default(true) @map("is_active")
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, entityType, key])
+  @@index([tenantId, entityType, orderNo])
+}
+
+enum CustomFieldEntity {
+  REQUISITION
+  PURCHASE_ORDER
+  GOODS_RECEIPT
+  INVOICE
+  VENDOR
+  ITEM
+}
+
+enum CustomFieldType {
+  TEXT
+  TEXTAREA
+  NUMBER
+  DATE
+  SELECT
+  MULTI_SELECT
+  CHECKBOX
 }
 
 // ─────────────────────────── Contracts (Slice 9) ───────────────────────────
