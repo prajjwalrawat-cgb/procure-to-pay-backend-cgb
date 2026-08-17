@@ -6,8 +6,36 @@ import { INCOTERMS, PO_TYPE } from '../constants/status';
 
 const decimalString = z.string().regex(/^-?\d+(\.\d+)?$/, 'must be a decimal string');
 
+/** Payment terms a buyer can put on an order. NET_* and MSME_45 run from the
+ *  invoice date; the DELIVERY_* terms run from delivery, and ADVANCE is paid
+ *  before it. */
+export const PAYMENT_TERM_KINDS = [
+  'ADVANCE',
+  'NET_30',
+  'NET_45',
+  'NET_60',
+  'MSME_45',
+  'DELIVERY_7',
+  'DELIVERY_15',
+  'MILESTONE',
+] as const;
+export type PaymentTermKind = (typeof PAYMENT_TERM_KINDS)[number];
+
+/** Wording printed on the PO when an order captured no label of its own. */
+export const PAYMENT_TERM_LABELS: Record<PaymentTermKind, string> = {
+  ADVANCE: 'Advance',
+  NET_30: 'Net 30',
+  NET_45: 'Net 45',
+  NET_60: 'Net 60',
+  MSME_45: 'MSME 45 (s.15 cap)',
+  DELIVERY_7: '7 days from delivery',
+  DELIVERY_15: '15 days from delivery',
+  MILESTONE: 'Milestone',
+};
+
+export const PaymentTermsSchemaKind = z.enum(PAYMENT_TERM_KINDS);
 export const PaymentTermsSchema = z.object({
-  kind: z.enum(['NET_30', 'NET_45', 'NET_60', 'MSME_45', 'MILESTONE']),
+  kind: PaymentTermsSchemaKind,
   days: z.number().int().min(0).max(180).nullish(),
   label: z.string().max(120).nullish(),
 });
