@@ -38,6 +38,7 @@ import { newId } from '@procureflow/db';
 
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser, RequirePermission } from '../auth/decorators';
+import { INVOICE_READ_SCOPES, invoiceScope } from './invoice-scope';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { StorageService } from '../common/storage/storage.service';
 import { InvoiceQueryService } from './invoice-query.service';
@@ -60,26 +61,27 @@ export class InvoicesController {
   ) {}
 
   @Get()
-  @RequirePermission(PERMISSIONS.INVOICE_READ_TENANT)
+  @RequirePermission(INVOICE_READ_SCOPES)
   async list(
+    @CurrentUser() user: AuthUser,
     @Query(new ZodValidationPipe(InvoiceListQuerySchema)) q: InvoiceListQuery,
   ): Promise<InvoiceListResponse> {
-    return this.query.find(q);
+    return this.query.find(q, invoiceScope(user));
   }
 
   @Get('counts')
-  @RequirePermission(PERMISSIONS.INVOICE_READ_TENANT)
-  async counts(): Promise<InvoiceTabCounts> {
-    return this.query.getTabCounts();
+  @RequirePermission(INVOICE_READ_SCOPES)
+  async counts(@CurrentUser() user: AuthUser): Promise<InvoiceTabCounts> {
+    return this.query.getTabCounts(invoiceScope(user));
   }
 
   @Get(':id')
-  @RequirePermission(PERMISSIONS.INVOICE_READ_TENANT)
+  @RequirePermission(INVOICE_READ_SCOPES)
   async detail(
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,
   ): Promise<InvoiceDetailResponse> {
-    return this.query.findById(id, user.userId);
+    return this.query.findById(id, user.userId, invoiceScope(user));
   }
 
   @Post()
@@ -126,6 +128,7 @@ export class InvoicesController {
     @Param('id') id: string,
     @Body(new ZodValidationPipe(AssignInputSchema)) dto: AssignInput,
   ): Promise<{ ok: true }> {
+    await this.assertVisible(user, id);
     await this.invoices.assign(id, dto.userId, user.userId);
     return { ok: true };
   }
@@ -137,6 +140,7 @@ export class InvoicesController {
     @Param('id') id: string,
     @Body(new ZodValidationPipe(HoldInputSchema)) dto: HoldInput,
   ): Promise<{ ok: true }> {
+    await this.assertVisible(user, id);
     await this.invoices.hold(id, dto.reason, user.userId);
     return { ok: true };
   }
@@ -148,6 +152,7 @@ export class InvoicesController {
     @Param('id') id: string,
     @Body(new ZodValidationPipe(CommentInputSchema)) dto: CommentInput,
   ): Promise<{ ok: true }> {
+    await this.assertVisible(user, id);
     await this.invoices.addComment(id, user.userId, dto.body);
     return { ok: true };
   }
@@ -161,6 +166,7 @@ export class InvoicesController {
     @Body(new ZodValidationPipe(ExceptionResolutionInputSchema))
     dto: ExceptionResolutionInput,
   ): Promise<{ ok: true }> {
+    await this.assertVisible(user, id);
     await this.match.resolveException(
       id,
       excId,
@@ -177,6 +183,7 @@ export class InvoicesController {
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,
   ): Promise<{ ok: true }> {
+    await this.assertVisible(user, id);
     await this.match.runFor(id, user.userId);
     return { ok: true };
   }
@@ -187,7 +194,18 @@ export class InvoicesController {
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,
   ): Promise<{ ok: true }> {
+    await this.assertVisible(user, id);
     await this.invoices.resolveAndRoute(id, user.userId);
     return { ok: true };
+  }
+
+  /**
+   * Acting on an invoice needs the same visibility as reading it. Every action
+   * route below is gated on `invoice:resolve_exception`, which procurement
+   * holds tenant-wide — without this, a buyer who cannot open somebody else's
+   * invoice could still comment on it or push it into approval by id.
+   */
+  private async assertVisible(user: AuthUser, id: string): Promise<void> {
+    await this.query.assertVisible(id, invoiceScope(user));
   }
 }

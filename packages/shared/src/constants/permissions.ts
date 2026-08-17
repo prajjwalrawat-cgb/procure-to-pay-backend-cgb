@@ -14,7 +14,12 @@ export type Scope = (typeof SCOPES)[number];
  */
 export const PERMISSIONS = {
   INVOICE_READ_TENANT: 'invoice:read:tenant',
+  /** Invoices assigned to me, billed against a PO I raised, or routed to me to
+   *  approve — the buyer's view of the bills their own orders attracted. */
   INVOICE_READ_ASSIGNED: 'invoice:read:assigned',
+  /** Adds every procurement buyer's invoices on top of `:assigned`, so a head
+   *  can see and reassign the work of the officers reporting to them. */
+  INVOICE_READ_TEAM: 'invoice:read:team',
   INVOICE_READ_OWN: 'invoice:read:own',
   INVOICE_CREATE: 'invoice:create',
   INVOICE_RESOLVE_EXCEPTION: 'invoice:resolve_exception',
@@ -161,6 +166,17 @@ export const PERMISSIONS = {
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
+
+/**
+ * Whose work `invoice:read:team` covers. There is no department or reporting
+ * line in the data model yet — `User` has neither a department nor a manager —
+ * so a head's team is derived from roles: every procurement buyer in the
+ * tenant. Replace this with the org structure once one exists.
+ */
+export const PROCUREMENT_TEAM_ROLES: RoleName[] = [
+  ROLES.PROCUREMENT_OFFICER,
+  ROLES.PROCUREMENT_HEAD,
+];
 
 /**
  * Static role → permission grants (Master Context §5 excerpt). Dynamic,
@@ -343,6 +359,7 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     ...CONTRACT_MANAGE,
     PERMISSIONS.CONTRACT_TERMINATE,
     PERMISSIONS.INVOICE_READ_ASSIGNED,
+    PERMISSIONS.INVOICE_READ_TEAM,
     PERMISSIONS.INVOICE_RESOLVE_EXCEPTION,
     PERMISSIONS.APPROVAL_MATRIX_READ,
     PERMISSIONS.APPROVAL_READ,

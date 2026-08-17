@@ -20,13 +20,21 @@ export const RequireAudience = (audience: Portal): CustomDecorator =>
 
 export const REQUIRED_PERMISSION_KEY = 'requiredPermission';
 export interface RequiredPermissionMeta {
-  permission: string;
+  /** One permission, or several of which the caller needs *any one* (§5). */
+  permission: string | string[];
   predicate?: OwnershipPredicate;
 }
-/** Require a permission string (Master Context §5). Scoped permissions may pass
- *  an ownership predicate that is evaluated against the route params. */
+/**
+ * Require a permission string (Master Context §5). Scoped permissions may pass
+ * an ownership predicate that is evaluated against the route params.
+ *
+ * An array means "any one of these" — the shape a resource readable at more
+ * than one scope needs (`invoice:read:tenant` OR `invoice:read:assigned`). The
+ * guard only decides admission; a handler let in on the narrower permission is
+ * responsible for narrowing what it returns.
+ */
 export const RequirePermission = (
-  permission: string,
+  permission: string | string[],
   predicate?: OwnershipPredicate,
 ): CustomDecorator => SetMetadata(REQUIRED_PERMISSION_KEY, { permission, predicate });
 
