@@ -473,6 +473,35 @@ export class PurchaseOrderService {
         status: po.status,
       });
     }
+
+    // Moving the order to another GST registration changes the place of supply,
+    // so the stored totals are recomputed against the new branch's state rather
+    // than left as they were.
+    let billTo: { id: string; stateCode: string } | null = null;
+    let totals: ReturnType<typeof computeDocTax> | null = null;
+    if (input.billToPlantId !== undefined && input.billToPlantId !== po.billToPlantId) {
+      billTo = await this.resolveBillToPlant(input.billToPlantId);
+      const [lines, vendor] = await Promise.all([
+        this.prisma.client.purchaseOrderLine.findMany({ where: { poId: id } }),
+        this.prisma.client.vendor.findUnique({
+          where: { id: po.vendorId },
+          select: { gstin: true },
+        }),
+      ]);
+      totals = computeDocTax(
+        lines.map((l) => ({
+          qty: l.qtyOrdered.toString(),
+          unitPrice: l.unitPrice.toString(),
+          discountPct: l.discountPct.toString(),
+          taxRate: l.taxRate.toString(),
+        })),
+        {
+          plantStateCode: billTo?.stateCode ?? '',
+          vendorGstin: vendor?.gstin ?? null,
+        },
+      );
+    }
+
     await this.prisma.client.purchaseOrder.update({
       where: { id },
       data: {
@@ -488,6 +517,13 @@ export class PurchaseOrderService {
         expectedDeliveryDate: input.expectedDeliveryDate
           ? new Date(input.expectedDeliveryDate)
           : undefined,
+        ...(billTo ? { billToPlantId: billTo.id } : {}),
+        ...(totals
+          ? {
+              totalAmount: new Prisma.Decimal(totals.total),
+              taxAmount: new Prisma.Decimal(totals.taxAmount),
+            }
+          : {}),
       },
     });
     await this.audit.record({
@@ -495,6 +531,12 @@ export class PurchaseOrderService {
       entityType: 'PurchaseOrder',
       entityId: id,
       actorId,
+      ...(billTo
+        ? {
+            before: { billToPlantId: po.billToPlantId },
+            after: { billToPlantId: billTo.id },
+          }
+        : {}),
     });
     return { ok: true };
   }

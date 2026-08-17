@@ -56,6 +56,40 @@ export type PaymentRunListQuery = z.infer<typeof PaymentRunListQuerySchema>;
 
 export const bankFormatKeyEnum = z.enum(BANK_FORMAT_KEYS);
 
+
+/**
+ * A tenant disbursement account — the account a payment run debits.
+ *
+ * Only the last four digits of the account number are held: the file the bank
+ * receives is built from the format template plus the tenant code, and keeping
+ * the full number would put a payment credential in the application database
+ * for no operational gain.
+ */
+export const BankAccountInputSchema = z.object({
+  bankName: z.string().trim().min(1, "Bank name is required").max(120),
+  accountNoLast4: z
+    .string()
+    .trim()
+    .regex(/^[0-9]{4}$/, "Enter the last 4 digits of the account number"),
+  ifsc: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, "Enter a valid 11-character IFSC"),
+  holderName: z.string().trim().min(1, "Account holder name is required").max(160),
+  /** Which bank file layout this account is submitted in. */
+  formatKey: bankFormatKeyEnum,
+  /** Optional ceiling on a single run against this account. */
+  dailyLimit: z
+    .string()
+    .regex(/^\d+(\.\d+)?$/, 'Enter an amount')
+    .nullish(),
+  /** Format-specific extras, e.g. the corporate/tenant code some layouts embed. */
+  tenantCode: z.string().trim().max(40).nullish(),
+  isActive: z.boolean().optional(),
+});
+export type BankAccountInput = z.infer<typeof BankAccountInputSchema>;
+
 // ── Read models (shared with the frontend) ───────────────────────────────────
 
 export interface BankAccountView {
@@ -66,6 +100,7 @@ export interface BankAccountView {
   holderName: string;
   formatKey: string;
   dailyLimit: string | null;
+  tenantCode: string | null;
   isActive: boolean;
 }
 

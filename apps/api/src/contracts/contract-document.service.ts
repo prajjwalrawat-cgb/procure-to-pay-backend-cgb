@@ -10,6 +10,7 @@ import Decimal from 'decimal.js';
 import PDFDocument from 'pdfkit';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { defaultPlantQuery } from '../common/plants/default-plant';
 
 export interface GeneratedContract {
   buffer: Buffer;
@@ -36,14 +37,19 @@ export class ContractDocumentService {
   ): Promise<GeneratedContract> {
     const contract = await this.load(contractId);
     if (!contract) throw new NotFoundException('Contract not found');
-    const buffer = await this.render(contract, opts);
+    // A GSTIN belongs to a state registration, so the letterhead takes it from
+    // the tenant's default branch.
+    const branch = await this.prisma.client.plant.findFirst(
+      defaultPlantQuery(contract.tenantId),
+    );
+    const buffer = await this.render(contract, { ...opts, branchGstin: branch?.gstin ?? null });
     const hash = createHash('sha256').update(buffer).digest('hex');
     return { buffer, hash };
   }
 
   private render(
     c: NonNullable<Awaited<ReturnType<ContractDocumentService['load']>>>,
-    opts: { watermark?: string; deterministic?: boolean },
+    opts: { watermark?: string; deterministic?: boolean; branchGstin?: string | null },
   ): Promise<Buffer> {
     return new Promise<Buffer>((resolve, reject) => {
       const doc = new PDFDocument({
@@ -67,7 +73,7 @@ export class ContractDocumentService {
       // Header
       doc.fontSize(18).font('Helvetica-Bold').fillColor('#000').text(c.tenant.name);
       doc.fontSize(9).font('Helvetica').fillColor('#555');
-      doc.text(`GSTIN: ${c.tenant.gstin ?? '—'}`);
+      doc.text(`GSTIN: ${opts.branchGstin ?? '—'}`);
       doc.moveDown(0.5);
       doc
         .fillColor('#000')
@@ -85,7 +91,7 @@ export class ContractDocumentService {
       doc.font('Helvetica-Bold').fontSize(10).text('Buyer', 48, topY);
       doc.font('Helvetica').fontSize(9);
       doc.text(c.tenant.name);
-      doc.text(`GSTIN: ${c.tenant.gstin ?? '—'}`);
+      doc.text(`GSTIN: ${opts.branchGstin ?? '—'}`);
       doc.font('Helvetica-Bold').fontSize(10).text('Vendor', 320, topY);
       doc.font('Helvetica').fontSize(9);
       doc.text(c.vendor.name, 320);

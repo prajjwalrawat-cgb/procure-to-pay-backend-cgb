@@ -35,7 +35,7 @@ export class SettingsService {
   async get(tenantId: string): Promise<OrganisationSettings> {
     const tenant = await this.prisma.client.tenant.findUnique({
       where: { id: tenantId },
-      select: { id: true, name: true, gstin: true, currency: true },
+      select: { id: true, name: true, pan: true, currency: true },
     });
     if (!tenant) throw new NotFoundException('Organisation not found');
 
@@ -68,12 +68,12 @@ export class SettingsService {
   ): Promise<OrganisationSettings> {
     const before = await this.get(tenantId);
 
-    if (input.name !== undefined || input.gstin !== undefined || input.currency) {
+    if (input.name !== undefined || input.pan !== undefined || input.currency) {
       await this.prisma.client.tenant.update({
         where: { id: tenantId },
         data: {
           ...(input.name !== undefined ? { name: input.name } : {}),
-          ...(input.gstin !== undefined ? { gstin: input.gstin ?? null } : {}),
+          ...(input.pan !== undefined ? { pan: input.pan ?? null } : {}),
           ...(input.currency ? { currency: input.currency } : {}),
         },
       });

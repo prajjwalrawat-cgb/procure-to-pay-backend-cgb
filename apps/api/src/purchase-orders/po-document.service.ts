@@ -447,9 +447,11 @@ export class PoDocumentService {
 
       // ── Company header ────────────────────────────────────────────────
       const orgName = po.tenant.name.toUpperCase();
+      // Address and GSTIN both come from the billing branch — a company has one
+      // registration per state, not one overall.
       const orgLine = [
         plant?.address ?? null,
-        po.tenant.gstin ? `GSTIN: ${po.tenant.gstin}` : null,
+        plant?.gstin ? `GSTIN: ${plant.gstin}` : null,
       ]
         .filter(Boolean)
         .join('  ·  ');
@@ -549,8 +551,11 @@ export class PoDocumentService {
         currency,
       );
       kv(
+        // The registration this order is billed under, not the tenant-level
+        // field: with a GSTIN per state, only the billing branch's number is
+        // the right one to print.
         'GSTIN of company',
-        po.tenant.gstin ?? '—',
+        plant?.gstin ?? '—',
         'Total order value',
         `${currency} ${money(tax.total)}`,
       );
@@ -566,6 +571,10 @@ export class PoDocumentService {
         'Tax treatment',
         taxKindLabel(tax.taxKind),
       );
+      // The buyer's PAN — vendors need it to claim credit for the TDS deducted
+      // against this order. Paired with the branch, so the document says in one
+      // row who is buying and under which registration.
+      kv('PAN of company', po.tenant.pan ?? '—', 'Billing branch', plant?.name ?? '—');
 
       // ── Addresses ─────────────────────────────────────────────────────
       const halfW = CONTENT_W / 2;

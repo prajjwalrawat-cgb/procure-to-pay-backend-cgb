@@ -27,7 +27,7 @@ function build(opts: { branches?: (typeof DELHI)[]; hasLogo?: boolean } = {}) {
   const tenant = {
     id: 'ten_1',
     name: 'ArtBox Solutions',
-    gstin: '07AABCA1234K1Z2',
+    pan: 'AABCA1234K',
     currency: 'INR',
   };
   const branches = opts.branches ?? [DELHI, BLR];
@@ -120,11 +120,11 @@ describe('SettingsService', () => {
     );
   });
 
-  it('clears the GSTIN when it is explicitly set to null', async () => {
+  it('clears the PAN when it is explicitly set to null', async () => {
     const { service, client } = build();
-    await service.update('ten_1', { gstin: null }, 'usr_1');
+    await service.update('ten_1', { pan: null }, 'usr_1');
     expect(client.tenant.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { gstin: null } }),
+      expect.objectContaining({ data: { pan: null } }),
     );
   });
 

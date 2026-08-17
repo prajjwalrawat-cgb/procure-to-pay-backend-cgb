@@ -339,6 +339,46 @@ describe('PurchaseOrderService — bill-to GST registration', () => {
     );
   });
 
+  it('moves a draft to another registration and re-derives its totals', async () => {
+    const { service, client } = build();
+    client.purchaseOrder.findUnique = vi.fn().mockResolvedValue({
+      id: 'po_1',
+      status: 'DRAFT',
+      vendorId: 'ven_patel',
+      billToPlantId: 'plt_meg',
+    });
+    client.purchaseOrder.update = vi.fn().mockResolvedValue({});
+    client.purchaseOrderLine = {
+      findMany: vi.fn().mockResolvedValue([
+        {
+          qtyOrdered: new Decimal('1'),
+          unitPrice: new Decimal('1000'),
+          discountPct: new Decimal('0'),
+          taxRate: new Decimal('0.18'),
+        },
+      ]),
+    };
+
+    await service.updateDraft('po_1', { billToPlantId: 'plt_blr' }, 'usr_1');
+
+    const arg = client.purchaseOrder.update.mock.calls[0]![0] as {
+      data: { billToPlantId: string; totalAmount: { toString(): string } };
+    };
+    expect(arg.data.billToPlantId).toBe('plt_blr');
+    expect(arg.data.totalAmount.toString()).toBe('1180');
+  });
+
+  /** The place of supply is part of what the vendor was sent. */
+  it('refuses to move an order that has left DRAFT', async () => {
+    const { service, client } = build();
+    client.purchaseOrder.findUnique = vi
+      .fn()
+      .mockResolvedValue({ id: 'po_1', status: 'ISSUED', billToPlantId: 'plt_meg' });
+    await expect(
+      service.updateDraft('po_1', { billToPlantId: 'plt_blr' }, 'usr_1'),
+    ).rejects.toBeInstanceOf(PurchaseOrderStateError);
+  });
+
   it('rejects a registration that is not the tenant’s', async () => {
     const { service } = build();
     await expect(

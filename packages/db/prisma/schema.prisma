@@ -452,6 +452,8 @@ model Tenant {
   id                          String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name                        String
   gstin                       String?
+  /// One PAN per legal entity — a GSTIN is per state registration, a PAN is not.
+  pan                         String?
   msmePaymentCapDays          Int                      @default(45)
   tdsRate                     Decimal                  @default("0.001") @db.Decimal(6, 4)
   currency                    String                   @default("INR")
