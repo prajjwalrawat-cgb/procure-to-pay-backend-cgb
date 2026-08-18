@@ -1,5 +1,8 @@
+import type { ConfigService } from '@nestjs/config';
 import type { JobsOptions, Queue, Worker } from 'bullmq';
 import type IORedis from 'ioredis';
+
+import type { Env } from '../../config/env';
 
 /**
  * Crash guards for the BullMQ trios (connection + queue + worker) each
@@ -64,4 +67,27 @@ export function scheduleRepeatable(
   void queue.add(jobName, {}, opts).catch((err: Error) => {
     log(`[${label}] could not schedule repeatable "${jobName}": ${err.message}`);
   });
+}
+
+/**
+ * Seconds a scheduler's worker spends blocked on Redis per poll (BullMQ's
+ * default is 5). A cron job picked up a minute late is harmless, and the longer
+ * block cuts that worker's idle command count by roughly 12x.
+ */
+export const SCHEDULER_DRAIN_DELAY_SECONDS = 60;
+
+/**
+ * Whether the repeatable/cron workers should start.
+ *
+ * `DISABLE_BACKGROUND_JOBS` is the master switch — tests and one-off scripts
+ * must open no Redis connection at all. `DISABLE_SCHEDULED_JOBS` narrows that
+ * to the always-idle schedulers, so OCR and bulk import keep running: the
+ * invoice pipeline needs them (no OCR means no 3-way match, and an unmatched
+ * invoice cannot be routed for approval), while the cron workers can wait.
+ */
+export function schedulersDisabled(config: ConfigService<Env, true>): boolean {
+  return (
+    config.get('DISABLE_BACKGROUND_JOBS', { infer: true }) ||
+    config.get('DISABLE_SCHEDULED_JOBS', { infer: true })
+  );
 }

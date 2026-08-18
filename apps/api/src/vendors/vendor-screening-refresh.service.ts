@@ -9,7 +9,12 @@ import type { ScreeningType } from '@procureflow/shared';
 import { Queue, Worker, type ConnectionOptions } from 'bullmq';
 import IORedis from 'ioredis';
 
-import { guardBullMq, scheduleRepeatable } from '../common/queue/queue-guard';
+import {
+  SCHEDULER_DRAIN_DELAY_SECONDS,
+  guardBullMq,
+  scheduleRepeatable,
+  schedulersDisabled,
+} from '../common/queue/queue-guard';
 import type { Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
 import { VendorVerificationService } from './vendor-verification.service';
@@ -38,7 +43,7 @@ export class VendorScreeningRefreshService implements OnModuleInit, OnModuleDest
   ) {}
 
   onModuleInit(): void {
-    if (this.config.get('DISABLE_BACKGROUND_JOBS', { infer: true })) return;
+    if (schedulersDisabled(this.config)) return;
     this.connection = new IORedis(this.config.get('REDIS_URL', { infer: true }), {
       maxRetriesPerRequest: null,
     });
@@ -58,7 +63,7 @@ export class VendorScreeningRefreshService implements OnModuleInit, OnModuleDest
       async () => {
         await this.refreshAllTenants();
       },
-      { connection: conn },
+      { connection: conn, drainDelay: SCHEDULER_DRAIN_DELAY_SECONDS },
     );
     this.worker.on('failed', (job, err) => {
       this.logger.error(`Screening refresh job ${job?.id} failed: ${err.message}`);

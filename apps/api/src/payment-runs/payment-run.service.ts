@@ -98,6 +98,7 @@ export class PaymentRunService implements OnModuleInit {
     });
     // Routes, snapshots the matrix, sets status AWAITING_APPROVAL, notifies.
     await this.routing.submit('PAYMENT_RUN', runId, actorId);
+    await this.markInvoicesScheduled(runId, run.items, actorId);
   }
 
   /** Thin wrapper on the engine so the decision route mirrors invoices. */
@@ -156,6 +157,7 @@ export class PaymentRunService implements OnModuleInit {
       where: { id: runId },
       data: { status: 'CANCELLED' },
     });
+    await this.releaseScheduledInvoices(runId, actorId);
     await this.audit.record({
       action: 'RUN_CANCELLED',
       entityType: 'PaymentRun',
@@ -188,6 +190,60 @@ export class PaymentRunService implements OnModuleInit {
         'Some invoices are no longer valid for payment.',
         { invoices: invalid.map((it) => it.invoice.number) },
       );
+    }
+  }
+
+  /**
+   * Commit a submitted batch's invoices to `SCHEDULED`.
+   *
+   * Nothing used to write this status, so an approved invoice still read
+   * `APPROVED` from the approval decision all the way to the bank UTR: it
+   * appeared in no AP inbox tab, and the "Scheduled" tab was permanently empty.
+   *
+   * Guarded on `APPROVED` rather than written blind — if the run auto-approved
+   * and the bank confirmed inside `routing.submit`, those invoices are already
+   * `PAID` and must not be dragged backwards.
+   */
+  private async markInvoicesScheduled(
+    runId: string,
+    items: { invoiceId: string }[],
+    actorId: string,
+  ): Promise<void> {
+    for (const { invoiceId } of items) {
+      const { count } = await this.prisma.client.invoice.updateMany({
+        where: { id: invoiceId, status: 'APPROVED' },
+        data: { status: 'SCHEDULED' },
+      });
+      if (count === 0) continue;
+      await this.audit.record({
+        action: 'PAYMENT_SCHEDULED',
+        entityType: 'Invoice',
+        entityId: invoiceId,
+        actorId,
+        after: { paymentRunId: runId },
+      });
+    }
+  }
+
+  /** Cancelling a run puts its invoices back on the payable pile. */
+  private async releaseScheduledInvoices(runId: string, actorId: string): Promise<void> {
+    const items = await this.prisma.client.paymentRunItem.findMany({
+      where: { paymentRunId: runId },
+      select: { invoiceId: true },
+    });
+    for (const { invoiceId } of items) {
+      const { count } = await this.prisma.client.invoice.updateMany({
+        where: { id: invoiceId, status: 'SCHEDULED' },
+        data: { status: 'APPROVED' },
+      });
+      if (count === 0) continue;
+      await this.audit.record({
+        action: 'PAYMENT_UNSCHEDULED',
+        entityType: 'Invoice',
+        entityId: invoiceId,
+        actorId,
+        after: { paymentRunId: runId },
+      });
     }
   }
 

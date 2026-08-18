@@ -12,7 +12,12 @@ import IORedis from 'ioredis';
 
 import { AuditLogService } from '../audit/audit.service';
 import { DomainEventService } from '../common/events/domain-event.service';
-import { guardBullMq, scheduleRepeatable } from '../common/queue/queue-guard';
+import {
+  SCHEDULER_DRAIN_DELAY_SECONDS,
+  guardBullMq,
+  scheduleRepeatable,
+  schedulersDisabled,
+} from '../common/queue/queue-guard';
 import type { Env } from '../config/env';
 import { GspClient, type Gstr2bEntry } from '../integrations/gsp/gsp-client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -54,7 +59,7 @@ export class Gstr2bReconciliationService implements OnModuleInit, OnModuleDestro
   ) {}
 
   onModuleInit(): void {
-    if (this.config.get('DISABLE_BACKGROUND_JOBS', { infer: true })) return;
+    if (schedulersDisabled(this.config)) return;
     this.connection = new IORedis(this.config.get('REDIS_URL', { infer: true }), {
       maxRetriesPerRequest: null,
     });
@@ -72,7 +77,7 @@ export class Gstr2bReconciliationService implements OnModuleInit, OnModuleDestro
       async () => {
         await this.reconcileAllTenants();
       },
-      { connection: conn },
+      { connection: conn, drainDelay: SCHEDULER_DRAIN_DELAY_SECONDS },
     );
     this.worker.on('failed', (job, err) => {
       this.logger.error(`GSTR-2B recon job ${job?.id} failed: ${err.message}`);

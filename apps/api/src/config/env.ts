@@ -19,6 +19,16 @@ const EnvSchema = z.object({
     .string()
     .default('false')
     .transform((v) => v === 'true'),
+  // Parks only the repeatable/cron workers (SLA sweep, analytics refresh,
+  // GSTR-2B reconcile, vendor maintenance + screening refresh) while leaving the
+  // on-demand ones — OCR, bulk import — running. Every BullMQ worker polls Redis
+  // around the clock whether or not there is work, so on a command-metered plan
+  // the five always-idle schedulers, not the OCR queue, are what burns the
+  // quota. Set true to run the invoice pipeline on a free Redis tier.
+  DISABLE_SCHEDULED_JOBS: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true'),
 
   S3_ENDPOINT: z.string().default('http://localhost:9000'),
   S3_REGION: z.string().default('ap-south-1'),

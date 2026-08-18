@@ -57,7 +57,7 @@ export const InvoiceListQuerySchema = z.object({
   assignedToId: z.string().nullish(),
   msmeRisk: z.coerce.boolean().nullish(),
   tab: z
-    .enum(['all', 'exceptions', 'approval', 'scheduled', 'paid', 'msme'])
+    .enum(['all', 'exceptions', 'approval', 'approved', 'scheduled', 'paid', 'msme'])
     .default('all'),
 });
 export type InvoiceListQuery = z.infer<typeof InvoiceListQuerySchema>;
@@ -86,12 +86,13 @@ export type AssignInput = z.infer<typeof AssignInputSchema>;
 // ── Response read-models (typed, shared with the frontend) ─────────────────
 
 export type InvoiceTab =
-  'all' | 'exceptions' | 'approval' | 'scheduled' | 'paid' | 'msme';
+  'all' | 'exceptions' | 'approval' | 'approved' | 'scheduled' | 'paid' | 'msme';
 
 export interface InvoiceTabCounts {
   all: number;
   exceptions: number;
   approval: number;
+  approved: number;
   scheduled: number;
   paid: number;
   msme: number;

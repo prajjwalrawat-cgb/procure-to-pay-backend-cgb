@@ -29,6 +29,7 @@ const OPEN_STATUSES = [
   'PENDING_VENDOR_MATCH', // Slice 10a — unrecognised email sender
   'MATCH_EXCEPTION',
   'AWAITING_APPROVAL',
+  'APPROVED', // approved but unpaid — still AP's work until the bank confirms
   'HELD',
 ] as const;
 const openStatusIn = (): { in: (typeof OPEN_STATUSES)[number][] } => ({
@@ -126,15 +127,17 @@ export class InvoiceQueryService {
     const clause = await this.scopeWhere(scope);
     const scoped = (where: Record<string, unknown>): Record<string, unknown> =>
       this.merge(where, clause);
-    const [all, exceptions, approval, scheduled, paid, msme] = await Promise.all([
-      c.count({ where: scoped({ status: openStatusIn() }) }),
-      c.count({ where: scoped({ status: 'MATCH_EXCEPTION' }) }),
-      c.count({ where: scoped({ status: 'AWAITING_APPROVAL' }) }),
-      c.count({ where: scoped({ status: 'SCHEDULED' }) }),
-      c.count({ where: scoped({ status: 'PAID' }) }),
-      c.count({ where: scoped({ status: openStatusIn(), vendor: { isMsme: true } }) }),
-    ]);
-    return { all, exceptions, approval, scheduled, paid, msme };
+    const [all, exceptions, approval, approved, scheduled, paid, msme] =
+      await Promise.all([
+        c.count({ where: scoped({ status: openStatusIn() }) }),
+        c.count({ where: scoped({ status: 'MATCH_EXCEPTION' }) }),
+        c.count({ where: scoped({ status: 'AWAITING_APPROVAL' }) }),
+        c.count({ where: scoped({ status: 'APPROVED' }) }),
+        c.count({ where: scoped({ status: 'SCHEDULED' }) }),
+        c.count({ where: scoped({ status: 'PAID' }) }),
+        c.count({ where: scoped({ status: openStatusIn(), vendor: { isMsme: true } }) }),
+      ]);
+    return { all, exceptions, approval, approved, scheduled, paid, msme };
   }
 
   async find(
@@ -421,6 +424,7 @@ export class InvoiceQueryService {
       all: { status: openStatusIn() },
       exceptions: { status: 'MATCH_EXCEPTION' },
       approval: { status: 'AWAITING_APPROVAL' },
+      approved: { status: 'APPROVED' },
       scheduled: { status: 'SCHEDULED' },
       paid: { status: 'PAID' },
       msme: { status: openStatusIn(), vendor: { isMsme: true } },

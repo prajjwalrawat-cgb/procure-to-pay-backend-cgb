@@ -1,9 +1,24 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import type { VendorInvoiceSubmitInput, VendorPoOption } from '@procureflow/shared';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { StorageService } from '../common/storage/storage.service';
 import { InvoiceService } from './invoice.service';
 import { RefsService } from './refs.service';
+
+/**
+ * Object-key prefix for vendor-uploaded invoice documents. Minted by
+ * `VendorInvoicesController.upload` and re-checked on submit, so the format
+ * lives in exactly one place.
+ */
+export function vendorUploadPrefix(tenantId: string): string {
+  return `invoices/${tenantId}/vendor/`;
+}
 
 export interface VendorInvoiceSummary {
   id: string;
@@ -24,6 +39,7 @@ export class VendorInvoiceService {
     private readonly prisma: PrismaService,
     private readonly invoices: InvoiceService,
     private readonly refs: RefsService,
+    private readonly storage: StorageService,
   ) {}
 
   async resolveVendorId(userId: string): Promise<string> {
@@ -51,8 +67,32 @@ export class VendorInvoiceService {
     input: VendorInvoiceSubmitInput,
   ): Promise<{ id: string }> {
     const vendorId = await this.resolveVendorId(userId);
+    await this.assertUploadedKey(tenantId, input.s3Key);
     const id = await this.invoices.createFromVendorPortal(tenantId, vendorId, input);
     return { id };
+  }
+
+  /**
+   * `s3Key` arrives from the browser, so it is a claim rather than a fact.
+   *
+   * The portal used to skip the upload entirely — it synthesised the key from
+   * the chosen filename and posted that — so every vendor invoice pointed at an
+   * object nobody had written, and the buyer's "Attachment (PDF)" link presigned
+   * a URL that returned NoSuchKey. Demanding the key sit under this tenant's
+   * vendor prefix *and* resolve to a real object fixes that, and stops a
+   * hand-rolled key from addressing somebody else's document.
+   */
+  private async assertUploadedKey(tenantId: string, s3Key: string): Promise<void> {
+    if (!s3Key.startsWith(vendorUploadPrefix(tenantId))) {
+      throw new ForbiddenException(
+        'Attach the tax invoice through the upload step before submitting.',
+      );
+    }
+    if (!(await this.storage.exists(s3Key))) {
+      throw new BadRequestException(
+        'The uploaded tax invoice could not be found in storage — attach it again.',
+      );
+    }
   }
 
   async listOwn(userId: string): Promise<VendorInvoiceSummary[]> {

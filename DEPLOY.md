@@ -72,7 +72,9 @@ Create ONE Railway project with **two services** from the backend repo:
   | `RESEND_API_KEY` **or** `BREVO_API_KEY` | **One is required.** Railway blocks outbound SMTP on every plan below Pro (`:465` and `:587` both `ETIMEDOUT`), so nodemailer cannot deliver from here — mail must go over HTTPS. Resend needs the `SMTP_FROM` *domain* DNS-verified (SPF + DKIM) or it 403s; Brevo needs only the single *address* verified by clicking a link it emails there, so it works without DNS access. |
   | `SMTP_FROM` | e.g. `Procure To Pay <no-reply@cgbindia.com>` — the from address on every transport |
   | `APP_BASE_URL` | Public web origin (e.g. `https://vendor.artboxsolutions.ai`) — builds the invite/set-password links. Defaults to `http://localhost:3000`, which silently produces dead links. |
-  | `OCR_API_URL` | `http://ocr.railway.internal:8000` (private URL of service B) |
+  | `OCR_API_URL` | `http://ocr.railway.internal:8000` (private URL of service B). Leave empty to use the in-repo sandbox OCR simulator |
+  | `DISABLE_BACKGROUND_JOBS` | `false` — **must not be true here.** OCR runs on a BullMQ worker; with the workers off, invoices sit in `OCR_PENDING` forever, the 3-way match never runs, and `resolve-and-route` refuses them |
+  | `DISABLE_SCHEDULED_JOBS` | `true` on a free/metered Redis plan. Parks the five idle cron workers, keeps OCR + bulk import. `false` once Redis is paid for |
 
   Do NOT set `API_INTERNAL_URL` here — that's a frontend var.
 
@@ -81,8 +83,27 @@ Create ONE Railway project with **two services** from the backend repo:
   `Dockerfile` (already present).
 - Keep it **private** (no public domain) — only the API calls it, over Railway's
   private network at `http://ocr.railway.internal:8000`.
-- **Env vars:** `OCR_PROVIDER`, `AZURE_DOC_INTEL_ENDPOINT/KEY`, `LLM_*`,
-  `OCR_DEFAULT_TAX_RATE`, `OCR_DEFAULT_UOM` (see `docker-compose.yml` for the list).
+- **Env vars** (full list + defaults in `services/ocr-service/.env.example`):
+
+  | Var | Value |
+  |---|---|
+  | `OCR_PROVIDER` | `azure_doc_intelligence` (default) | `rapidocr` | `paddleocr` |
+  | `AZURE_DOC_INTEL_ENDPOINT` | `https://<resource>.cognitiveservices.azure.com/` — required for the Azure engine |
+  | `AZURE_DOC_INTEL_KEY` | key 1 or 2 from the same resource |
+  | `LLM_API_KEY` / `LLM_MODEL` | **required** for `rapidocr`/`paddleocr` — those engines return raw text, and the LLM is what turns it into line items. Optional for Azure, where the LLM is only a bad-scan fallback. `LLM_API_BASE` alone also satisfies it (e.g. a self-hosted Ollama) |
+  | `OCR_DEFAULT_TAX_RATE` | `0.18` — per-line GST assumed when the invoice omits it |
+  | `OCR_DEFAULT_UOM` | `NOS` |
+  | `OCR_MAX_DOCUMENT_MB` | `25` — guard on the presigned document download |
+
+  The engine's credentials are checked when the first request builds the
+  extractor, so a missing key surfaces as a 500 → the API's circuit breaker
+  counts a provider failure → the invoice lands in `OCR_FAILED` (manual data
+  entry). It degrades rather than losing the invoice, but check
+  `GET /health` on this service — it echoes the resolved provider.
+
+- **Then set `OCR_API_URL` on service A** to this service's private URL. Until
+  you do, the API keeps using the in-repo sandbox simulator regardless of
+  whether this service is running.
 
 ### Database migrations on deploy
 Run once after the first deploy (Railway → service → one-off command, using the
