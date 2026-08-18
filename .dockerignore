@@ -17,7 +17,6 @@
 .vscode
 .idea
 
-# Python OCR service builds from its OWN Dockerfile as a separate Railway
-# service — exclude its heavy local artifacts from the API image context.
-services/ocr-service/.venv
-services/ocr-service/**/__pycache__
+# (The Python OCR service used to live here under services/ocr-service. It is
+# now its own repository, procure-to-pay-ocr, deployed as a separate service and
+# reached over HTTP via OCR_API_URL — nothing of it is in this build context.)

@@ -25,10 +25,17 @@ pnpm-workspace.yaml  package.json  turbo.json  tsconfig.base.json
 
 **`procure-to-pay-backend`** (deploys to Railway)
 ```
-apps/api/            packages/db/            packages/shared/*       services/ocr-service/
+apps/api/            packages/db/            packages/shared/*
 Dockerfile  .dockerignore  railway.toml
 pnpm-workspace.yaml  package.json  turbo.json  tsconfig.base.json  scripts/with-env.mjs
 ```
+
+**`procure-to-pay-ocr`** (separate repo, optional — deploys to Railway)
+```
+app/  tests/  Dockerfile  requirements.txt  .env.example
+```
+Reached only over HTTP via `OCR_API_URL`. Leave that unset and the API uses its
+built-in sandbox simulator instead, so this repo is not required to run P2P.
 
 ### The shared package (`@procureflow/shared`)
 It's imported by BOTH sides but is pure TypeScript (types, constants, validation
@@ -78,12 +85,19 @@ Create ONE Railway project with **two services** from the backend repo:
 
   Do NOT set `API_INTERNAL_URL` here — that's a frontend var.
 
-### Service B — `ocr` (Python)
-- **Source:** same repo, **root directory `services/ocr-service`**, its own
-  `Dockerfile` (already present).
+### Service B — `ocr` (Python) — **optional**
+
+Skip this entirely to start: with `OCR_API_URL` unset, service A uses its
+built-in sandbox simulator and the invoice pipeline runs end to end (OCR →
+3-way match → routing) without this service existing. Add it when you want real
+extraction.
+
+- **Source:** the **`procure-to-pay-ocr` repository**, root directory `/`, its
+  own `Dockerfile` (already present). It was previously a folder in this repo;
+  it is now standalone so it can be deployed and rolled back independently.
 - Keep it **private** (no public domain) — only the API calls it, over Railway's
   private network at `http://ocr.railway.internal:8000`.
-- **Env vars** (full list + defaults in `services/ocr-service/.env.example`):
+- **Env vars** (full list + defaults in that repo's `.env.example`):
 
   | Var | Value |
   |---|---|
