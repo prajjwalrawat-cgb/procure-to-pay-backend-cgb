@@ -26,7 +26,12 @@ AS $$
   SELECT u.id, u.tenant_id, u.email, u.name,
          u."argonHash", u."mfaSecret", u."mfaEnabled", u."isActive"
   FROM "User" u
-  WHERE u.email = lower(p_email)
+  -- Both sides are lowered. Comparing a lowered input against the raw column
+  -- locked out any user whose stored address carried a capital (a vendor invite
+  -- used to store the email exactly as the buyer typed it): login found no row
+  -- and reported "Invalid credentials", and forgot-password silently sent
+  -- nothing. Writes normalise now, but the lookup must not depend on that.
+  WHERE lower(u.email) = lower(p_email)
   LIMIT 1;
 $$;
 

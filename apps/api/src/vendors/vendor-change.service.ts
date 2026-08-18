@@ -115,7 +115,14 @@ export class VendorChangeService implements OnModuleInit {
           where: { id: contact.id },
           data: {
             phone: (proposed.phone as string | undefined) ?? contact.phone,
-            email: (proposed.email as string | undefined) ?? contact.email,
+            // Lowercased: every vendor-portal route resolves the vendor by
+            // matching this address against `User.email` exactly, so a capital
+            // stored here would silently detach the supplier from their own
+            // records. `proposedChanges` is free-form JSON with no zod pass,
+            // which is why the normalisation has to happen at the write.
+            email:
+              (proposed.email as string | undefined)?.trim().toLowerCase() ??
+              contact.email,
           },
         });
       }

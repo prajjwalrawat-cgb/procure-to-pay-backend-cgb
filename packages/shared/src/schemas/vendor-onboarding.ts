@@ -46,7 +46,7 @@ export const InviteVendorInputSchema = z.object({
     .string()
     .min(2, 'Enter the vendor’s registered legal entity name (at least 2 characters)')
     .max(200, 'Legal entity name cannot exceed 200 characters'),
-  email: z.string().email(EMAIL_MESSAGE),
+  email: z.string().trim().toLowerCase().email(EMAIL_MESSAGE),
   name: z
     .string()
     .min(2, 'Display name must be at least 2 characters')
@@ -112,7 +112,7 @@ export const SelfRegistrationInputSchema = z.object({
     .string()
     .min(2, 'Enter your registered legal entity name (at least 2 characters)')
     .max(200, 'Legal entity name cannot exceed 200 characters'),
-  email: z.string().email(EMAIL_MESSAGE),
+  email: z.string().trim().toLowerCase().email(EMAIL_MESSAGE),
   phone: z
     .string()
     .min(6, 'Enter a valid phone number (at least 6 digits)')
