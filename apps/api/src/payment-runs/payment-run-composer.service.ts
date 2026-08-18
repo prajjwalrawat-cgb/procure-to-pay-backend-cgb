@@ -17,8 +17,18 @@ import { PrismaService } from '../prisma/prisma.service';
 import { BankAccountService } from './bank-account.service';
 import { PaymentItemInvalidError, PaymentRunStateError } from './payment-run.errors';
 
-/** Run statuses in which an invoice is still committed to a run (dedup guard). */
-const ACTIVE_RUN_STATUSES = ['DRAFT', 'AWAITING_APPROVAL', 'SUBMITTED_TO_BANK'] as const;
+/**
+ * A run holds onto its invoices in every status but CANCELLED (dedup guard).
+ *
+ * Written as the one released status rather than a list of active ones. The old
+ * allow-list — DRAFT, AWAITING_APPROVAL, SUBMITTED_TO_BANK — omitted
+ * SUBMITTED_PENDING_BANK_CONFIRMATION, the status a run actually lands in once
+ * submitted (see BankSubmissionService), along with COMPLETED and FAILED. An
+ * invoice already sent to the bank was therefore free to join a second run and
+ * be paid twice. Inverting the test also means a status added to the enum later
+ * defaults to "still committed" rather than "up for grabs".
+ */
+const RELEASED_RUN_STATUSES = ['CANCELLED'] as const;
 /** Invoice statuses eligible for a payment run. */
 const PAYABLE_STATUSES = ['APPROVED', 'SCHEDULED'] as const;
 /** MSME "approaching the cap" window for auto-inclusion, in days remaining. */
@@ -145,7 +155,7 @@ export class PaymentRunComposerService {
     const dupe = await this.prisma.client.paymentRunItem.findFirst({
       where: {
         invoiceId,
-        paymentRun: { status: { in: [...ACTIVE_RUN_STATUSES] } },
+        paymentRun: { status: { notIn: [...RELEASED_RUN_STATUSES] } },
       },
     });
     if (dupe) {
@@ -390,7 +400,7 @@ export class PaymentRunComposerService {
 
   private async invoiceIdsInActiveRuns(): Promise<Set<string>> {
     const items = await this.prisma.client.paymentRunItem.findMany({
-      where: { paymentRun: { status: { in: [...ACTIVE_RUN_STATUSES] } } },
+      where: { paymentRun: { status: { notIn: [...RELEASED_RUN_STATUSES] } } },
       select: { invoiceId: true },
     });
     return new Set(items.map((i) => i.invoiceId));

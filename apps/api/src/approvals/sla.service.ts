@@ -8,7 +8,12 @@ import { PinoLogger } from 'nestjs-pino';
 
 import { AuditLogService } from '../audit/audit.service';
 import { DomainEventService } from '../common/events/domain-event.service';
-import { guardBullMq, scheduleRepeatable } from '../common/queue/queue-guard';
+import {
+  SCHEDULER_DRAIN_DELAY_SECONDS,
+  guardBullMq,
+  scheduleRepeatable,
+  schedulersDisabled,
+} from '../common/queue/queue-guard';
 import type { Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
 import { ApprovalContextService } from './approval-context.service';
@@ -47,7 +52,7 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleInit(): void {
-    if (this.config.get('DISABLE_BACKGROUND_JOBS', { infer: true })) return;
+    if (schedulersDisabled(this.config)) return;
     this.connection = new IORedis(this.config.get('REDIS_URL', { infer: true }), {
       maxRetriesPerRequest: null,
     });
@@ -65,7 +70,7 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
       async () => {
         await this.sweepAll();
       },
-      { connection: conn },
+      { connection: conn, drainDelay: SCHEDULER_DRAIN_DELAY_SECONDS },
     );
     this.worker.on('failed', (job, err) => {
       this.logger.error({ jobId: job?.id, err: err.message }, 'SLA sweep failed');

@@ -6,7 +6,12 @@ import IORedis from 'ioredis';
 import { PinoLogger } from 'nestjs-pino';
 
 import { ApprovalRoutingService } from '../approvals/approval-routing.service';
-import { guardBullMq, scheduleRepeatable } from '../common/queue/queue-guard';
+import {
+  SCHEDULER_DRAIN_DELAY_SECONDS,
+  guardBullMq,
+  scheduleRepeatable,
+  schedulersDisabled,
+} from '../common/queue/queue-guard';
 import type { Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -67,7 +72,7 @@ export class AnalyticsRefreshService implements OnModuleInit, OnModuleDestroy {
     this.routing.onApproved('RFQ_AWARD', (_id, _actor) => this.triggerRefresh('EVENT'));
     this.routing.onApproved('PAYMENT_RUN', (_id, _actor) => this.triggerRefresh('EVENT'));
 
-    if (this.config.get('DISABLE_BACKGROUND_JOBS', { infer: true })) return;
+    if (schedulersDisabled(this.config)) return;
     this.connection = new IORedis(this.config.get('REDIS_URL', { infer: true }), {
       maxRetriesPerRequest: null,
     });
@@ -85,7 +90,7 @@ export class AnalyticsRefreshService implements OnModuleInit, OnModuleDestroy {
       async () => {
         await this.refreshAll('SCHEDULED');
       },
-      { connection: conn },
+      { connection: conn, drainDelay: SCHEDULER_DRAIN_DELAY_SECONDS },
     );
     this.worker.on('failed', (job, err) => {
       this.logger.error({ jobId: job?.id, err: err.message }, 'Analytics refresh failed');

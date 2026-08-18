@@ -44,6 +44,14 @@ interface FetchResponse {
  * No signed OCR contract exists in this environment, so this path is wired but
  * unexercised; the sandbox simulator runs by default.
  */
+/**
+ * Ceiling on one extraction call. The provider is reached from a BullMQ worker,
+ * and `fetch` has no timeout of its own: a hung OCR service would hold the
+ * worker slot open indefinitely and quietly stall the whole queue behind it.
+ * Generous, because a large scanned PDF legitimately takes a while.
+ */
+const REQUEST_TIMEOUT_MS = 120_000;
+
 @Injectable()
 export class RealOcrProvider implements IOcrProvider {
   private readonly logger = new Logger(RealOcrProvider.name);
@@ -57,11 +65,17 @@ export class RealOcrProvider implements IOcrProvider {
     const baseUrl = this.config.get('OCR_API_URL', { infer: true });
     // The document is fetched via a short-lived presigned URL and handed to the
     // provider (or streamed — provider-specific). Kept generic behind the interface.
-    const url = await this.storage.presignedGetUrl(s3Key).catch(() => '');
+    // Failing here rather than posting an empty document_url: the OCR service
+    // would answer that with an opaque 502, hiding a storage problem behind
+    // what reads like a provider outage.
+    const url = await this.storage.presignedGetUrl(s3Key).catch((err: unknown) => {
+      throw new Error(`Could not presign ${s3Key} for OCR: ${String(err)}`);
+    });
     const res = (await fetch(`${baseUrl}/extract`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ document_url: url }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     })) as FetchResponse;
     if (!res.ok) {
       throw new Error(`OCR provider returned ${res.status}`);

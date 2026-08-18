@@ -1,4 +1,9 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma, newId } from '@procureflow/db';
 import type {
   InvoiceCreateInput,
@@ -31,6 +36,8 @@ const MATCHED_STATUSES: string[] = ['OCR_DONE', 'MATCH_EXCEPTION'];
 
 @Injectable()
 export class InvoiceService {
+  private readonly logger = new Logger(InvoiceService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
@@ -108,8 +115,7 @@ export class InvoiceService {
       totals,
       s3Key: input.s3Key,
     });
-    const jobId = await this.ocr.submit({ invoiceId: id, tenantId, s3Key: input.s3Key });
-    await this.prisma.client.invoice.update({ where: { id }, data: { ocrJobId: jobId } });
+    await this.queueOcr(tenantId, id, input.s3Key);
     await this.auditCreated(id, vendorId, 'PORTAL', input.vendorInvoiceRef);
     return id;
   }
@@ -148,10 +154,44 @@ export class InvoiceService {
       },
       s3Key: args.s3Key,
     });
-    const jobId = await this.ocr.submit({ invoiceId: id, tenantId, s3Key: args.s3Key });
-    await this.prisma.client.invoice.update({ where: { id }, data: { ocrJobId: jobId } });
+    await this.queueOcr(tenantId, id, args.s3Key);
     await this.auditCreated(id, actorId, 'UPLOAD', args.vendorInvoiceRef);
     return id;
+  }
+
+  /**
+   * Hand the document to the OCR queue without letting the queue break intake.
+   *
+   * The invoice row is already committed by the time this runs, so an outage or
+   * an exhausted quota on Redis must not surface as a 500: that reports failure
+   * for an invoice we did in fact accept, and the submitter re-sends a duplicate.
+   *
+   * A dead queue drops the invoice into `OCR_FAILED` — the same manual
+   * data-entry fallback a permanently failing provider gets — rather than
+   * leaving it in `OCR_PENDING`, where no worker will ever pick it up, the
+   * 3-way match can never run, and `resolveAndRoute` refuses it forever.
+   */
+  private async queueOcr(
+    tenantId: string,
+    invoiceId: string,
+    s3Key: string,
+  ): Promise<void> {
+    try {
+      const jobId = await this.ocr.submit({ invoiceId, tenantId, s3Key });
+      await this.prisma.client.invoice.update({
+        where: { id: invoiceId },
+        data: { ocrJobId: jobId },
+      });
+    } catch (err) {
+      this.logger.error(
+        `Could not queue OCR for ${invoiceId} — falling back to manual data entry: ${String(err)}`,
+      );
+      await this.markOcrFailed(
+        tenantId,
+        invoiceId,
+        `OCR could not be queued: ${String(err)}`,
+      );
+    }
   }
 
   /** OCR completion callback (from the worker). Runs in its own tenant context. */

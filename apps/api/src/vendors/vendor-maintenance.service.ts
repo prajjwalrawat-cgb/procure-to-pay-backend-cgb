@@ -4,7 +4,12 @@ import { Queue, Worker, type ConnectionOptions } from 'bullmq';
 import IORedis from 'ioredis';
 import { PinoLogger } from 'nestjs-pino';
 
-import { guardBullMq, scheduleRepeatable } from '../common/queue/queue-guard';
+import {
+  SCHEDULER_DRAIN_DELAY_SECONDS,
+  guardBullMq,
+  scheduleRepeatable,
+  schedulersDisabled,
+} from '../common/queue/queue-guard';
 import type { Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
 import { VendorDocumentService } from './vendor-document.service';
@@ -39,7 +44,7 @@ export class VendorMaintenanceService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleInit(): void {
-    if (this.config.get('DISABLE_BACKGROUND_JOBS', { infer: true })) return;
+    if (schedulersDisabled(this.config)) return;
     this.connection = new IORedis(this.config.get('REDIS_URL', { infer: true }), {
       maxRetriesPerRequest: null,
     });
@@ -58,7 +63,7 @@ export class VendorMaintenanceService implements OnModuleInit, OnModuleDestroy {
       async () => {
         await this.sweepAll();
       },
-      { connection: conn },
+      { connection: conn, drainDelay: SCHEDULER_DRAIN_DELAY_SECONDS },
     );
     this.worker.on('failed', (job, err) => {
       this.logger.error(

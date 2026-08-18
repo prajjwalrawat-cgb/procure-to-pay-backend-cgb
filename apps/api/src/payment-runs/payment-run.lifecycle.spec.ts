@@ -147,6 +147,22 @@ function harness(
           return {};
         },
       ),
+      // Status-guarded, like the real updateMany: the service relies on the
+      // guard to leave an already-PAID invoice alone.
+      updateMany: vi.fn(
+        async ({
+          where,
+          data,
+        }: {
+          where: { id: string; status: string };
+          data: { status: string };
+        }) => {
+          const it = items.find((i) => i.invoiceId === where.id);
+          if (!it || it.invoice.status !== where.status) return { count: 0 };
+          it.invoice.status = data.status;
+          return { count: 1 };
+        },
+      ),
     },
   };
   const prisma = { client } as unknown as PrismaService;
@@ -202,6 +218,9 @@ describe('PaymentRunService — full lifecycle (submit → approve → confirm �
     await service.submitForApproval('pay_1', 'usr_iyer');
     expect(run.previewHash).toBe('abc123');
     expect(routing.submit).toHaveBeenCalledWith('PAYMENT_RUN', 'pay_1', 'usr_iyer');
+    // Submitting commits the batch: the invoices leave APPROVED for SCHEDULED,
+    // so the AP inbox stops showing them as still awaiting a payment run.
+    expect(run.items.every((i) => i.invoice.status === 'SCHEDULED')).toBe(true);
 
     // Approval hook → real submission → pending bank confirmation (NOT yet paid).
     await service.onFullyApproved('pay_1', 'usr_das');

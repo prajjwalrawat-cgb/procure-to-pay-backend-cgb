@@ -52,3 +52,8 @@ docs/**/~$*
 Docs/
 *.xlsx
 *.xlsm
+
+# Python OCR sidecar: virtualenv + bytecode caches (services/ocr-service).
+.venv/
+__pycache__/
+.pytest_cache/
