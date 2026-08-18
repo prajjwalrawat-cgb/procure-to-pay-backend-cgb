@@ -53,7 +53,7 @@ Docs/
 *.xlsx
 *.xlsm
 
-# Python OCR sidecar: virtualenv + bytecode caches (services/ocr-service).
+# Python artefacts (the OCR sidecar now lives in the procure-to-pay-ocr repo).
 .venv/
 __pycache__/
 .pytest_cache/

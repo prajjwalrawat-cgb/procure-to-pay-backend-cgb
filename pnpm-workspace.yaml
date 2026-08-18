@@ -1,5 +1,5 @@
 packages:
   - 'apps/*'
   - 'packages/*'
-# services/ocr-service is a Python service (no package.json) — not a pnpm
-# workspace member; it builds from its own Dockerfile as a separate Railway service.
+# The OCR sidecar now lives in its own repository (procure-to-pay-ocr) and is
+# deployed as a separate service; the API reaches it over HTTP via OCR_API_URL.

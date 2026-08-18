@@ -1,6 +1,7 @@
-# Railway config for the API service (the service whose root directory is the
-# backend repo root). The Python OCR runs as a SECOND Railway service pointed at
-# services/ocr-service/Dockerfile — configure that one in the Railway UI.
+# Railway config for the API service. The Python OCR engine is a SECOND service
+# deployed from its own repository (procure-to-pay-ocr); point this service's
+# OCR_API_URL at it. Leave OCR_API_URL unset to use the in-repo sandbox
+# simulator instead — the API runs fine either way.
 [build]
 builder = "dockerfile"
 dockerfilePath = "Dockerfile"

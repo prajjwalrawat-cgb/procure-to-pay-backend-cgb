@@ -2,8 +2,8 @@
 # ProcureFlow backend (NestJS API) — Docker image for Railway.
 #
 # Build context = repo root of the BACKEND repo, which is a pnpm workspace
-# containing apps/api, packages/db, packages/shared (and services/ocr-service,
-# built from its own Dockerfile as a separate Railway service).
+# containing apps/api, packages/db and packages/shared. The Python OCR engine is
+# a separate repository and image entirely; this one never builds it.
 #
 # Debian base (node:20-slim) so the Prisma query engine (debian-openssl-3.0.x)
 # and the argon2 native binding both resolve. Alpine/musl would need different
