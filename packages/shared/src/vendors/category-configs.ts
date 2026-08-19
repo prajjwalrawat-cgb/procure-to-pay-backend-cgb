@@ -134,6 +134,39 @@ export const VENDOR_CATEGORY_CONFIGS: VendorCategoryConfig[] = [
   },
 ];
 
+/**
+ * Statutory documents the vendor uploads in **step 1**, where they drive the
+ * auto-fill: the GST certificate and PAN card are the two documents every
+ * extracted/verified field on the company-basics step comes from, so they are
+ * collected before the form rather than after it.
+ */
+export const ONBOARDING_STEP1_DOCUMENTS: VendorDocumentType[] = ['GST_CERT', 'PAN_CARD'];
+
+/**
+ * The only documents mandatory on **step 4 (Documents)**, for every category.
+ * Category-specific certificates (ISO, pollution NOC, factory licence…) stay
+ * available under "other documents" and are requested by the buyer during review
+ * when the category actually needs them — they were blocking submission before,
+ * which is what stalled onboardings on paperwork nobody had chased yet.
+ */
+export const ONBOARDING_STEP4_DOCUMENTS: VendorDocumentType[] = [
+  'CANCELLED_CHEQUE',
+  'AUDITED_FINANCIALS',
+];
+
+/**
+ * Offered on step 4 but never required: a vendor with a catalogue can attach it
+ * for the buyer to browse, and one without is not held up. Deliberately kept
+ * out of ONBOARDING_MANDATORY_DOCUMENTS — nothing here gates submission.
+ */
+export const ONBOARDING_OPTIONAL_DOCUMENTS: VendorDocumentType[] = ['CATALOGUE'];
+
+/** Everything a vendor must have uploaded before submit is allowed. */
+export const ONBOARDING_MANDATORY_DOCUMENTS: VendorDocumentType[] = [
+  ...ONBOARDING_STEP1_DOCUMENTS,
+  ...ONBOARDING_STEP4_DOCUMENTS,
+];
+
 export function categoryConfig(key: string): VendorCategoryConfig | undefined {
   return VENDOR_CATEGORY_CONFIGS.find((c) => c.categoryKey === key);
 }

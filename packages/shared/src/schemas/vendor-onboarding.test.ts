@@ -26,7 +26,7 @@ describe('onboarding step validation — per-step, not union', () => {
 
   it('regression: the union silently mis-parses the bad body (why per-step is required)', () => {
     const r = SaveStepInputSchema.safeParse(badStep3);
-    // The union "succeeds" by falling through to step-4 → { certifications: [] },
+    // The union "succeeds" by falling through to step-4 → { documentsConfirmed: true },
     // dropping bankName/accountNumber/ifsc — which is what caused the 500 downstream.
     expect(r.success).toBe(true);
     expect(r.success && 'accountNumber' in r.data).toBe(false);

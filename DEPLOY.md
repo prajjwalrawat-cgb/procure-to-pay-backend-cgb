@@ -104,7 +104,7 @@ extraction.
   | `OCR_PROVIDER` | `azure_doc_intelligence` (default) | `rapidocr` | `paddleocr` |
   | `AZURE_DOC_INTEL_ENDPOINT` | `https://<resource>.cognitiveservices.azure.com/` — required for the Azure engine |
   | `AZURE_DOC_INTEL_KEY` | key 1 or 2 from the same resource |
-  | `LLM_API_KEY` / `LLM_MODEL` | **required** for `rapidocr`/`paddleocr` — those engines return raw text, and the LLM is what turns it into line items. Optional for Azure, where the LLM is only a bad-scan fallback. `LLM_API_BASE` alone also satisfies it (e.g. a self-hosted Ollama) |
+  | `LLM_API_KEY` / `LLM_MODEL` | **required for invoices** on `rapidocr`/`paddleocr` — those engines return raw text, and the LLM is what turns it into line items. Optional for Azure, where the LLM is only a bad-scan fallback. `LLM_API_BASE` alone also satisfies it (e.g. a self-hosted Ollama). **Not needed for `/extract-kyc`** — vendor-onboarding documents are parsed by fixed patterns, so a deployment that only wants GST/PAN/cheque reading can run with an engine and no model |
   | `OCR_DEFAULT_TAX_RATE` | `0.18` — per-line GST assumed when the invoice omits it |
   | `OCR_DEFAULT_UOM` | `NOS` |
   | `OCR_MAX_DOCUMENT_MB` | `25` — guard on the presigned document download |
@@ -118,6 +118,14 @@ extraction.
 - **Then set `OCR_API_URL` on service A** to this service's private URL. Until
   you do, the API keeps using the in-repo sandbox simulator regardless of
   whether this service is running.
+
+- **Vendor onboarding** (`POST /extract-kyc`) uses this same service and the same
+  `OCR_API_URL`, but degrades differently from invoices: if the service is absent
+  or down, the API parses the document's own PDF text layer in-process. Portal-
+  issued GST certificates are digitally generated, so the common case keeps
+  working with no OCR service at all — what needs this service is a *scan or a
+  phone photo*, which has no text layer to read. Without it the vendor types
+  those fields instead, and the documents reach the buyer's review either way.
 
 ### Database migrations on deploy
 Run once after the first deploy (Railway → service → one-off command, using the

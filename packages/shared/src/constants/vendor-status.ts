@@ -92,6 +92,9 @@ export const VENDOR_DOCUMENT_TYPE = [
   'AUDITED_FINANCIALS',
   'CREDIT_REPORT',
   'CODE_OF_CONDUCT',
+  /** Product/price catalogue. Never mandatory and never parsed — it is
+   *  commercial material for the buyer to read, not a statutory document. */
+  'CATALOGUE',
   'OTHER',
 ] as const;
 export type VendorDocumentType = (typeof VENDOR_DOCUMENT_TYPE)[number];

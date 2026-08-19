@@ -4,6 +4,7 @@ import {
   CancelOnboardingInputSchema,
   InviteVendorInputSchema,
   LiftSuspensionInputSchema,
+  BankOverrideInputSchema,
   OnboardingDecisionInputSchema,
   OnboardingListQuerySchema,
   PERMISSIONS,
@@ -20,6 +21,7 @@ import {
   type CancelOnboardingInput,
   type InviteVendorInput,
   type LiftSuspensionInput,
+  type BankOverrideInput,
   type OnboardingDecisionInput,
   type OnboardingDetailResponse,
   type OnboardingListQuery,
@@ -121,6 +123,21 @@ export class VendorsController {
    * procurement officers, so a permission every inviter held would let one
    * officer cancel another's vendor.
    */
+  /**
+   * Accept a bank account the penny drop could not confirm. Gated on the same
+   * permission as verifying a document, because it is the same act: a human
+   * looked at the cancelled cheque and vouched for it.
+   */
+  @Post(':id/bank/override')
+  @RequirePermission(PERMISSIONS.VENDOR_DOC_VERIFY)
+  async overrideBank(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(BankOverrideInputSchema)) dto: BankOverrideInput,
+  ): Promise<{ ok: true }> {
+    return this.onboarding.overrideBankVerification(id, dto.reason, user.userId);
+  }
+
   @Post('onboarding/:id/cancel')
   @RequirePermission(PERMISSIONS.VENDOR_ONBOARDING_CANCEL)
   async cancelOnboarding(

@@ -11,22 +11,29 @@ import { ConfigService } from '@nestjs/config';
 import { Prisma, newId } from '@procureflow/db';
 import { hash } from 'argon2';
 import {
+  ONBOARDING_MANDATORY_DOCUMENTS,
+  ONBOARDING_STEP1_DOCUMENTS,
+  ONBOARDING_STEP_COUNT,
+  ONBOARDING_STEP_NAMES,
   VENDOR_EVENTS,
   assessAcceptance,
   categoryConfig,
   compare as compareNames,
-  type AcknowledgeCocInput,
+  fieldSourceLabel,
+  panGstinMismatch,
+  vendorDocumentLabel,
   type CancelOnboardingInput,
+  type DocumentExtractionResult,
+  type ExtractedFieldMap,
   type InviteVendorInput,
   type OnboardingStep1,
   type OnboardingStep2,
   type OnboardingStep3,
-  type OnboardingStep5,
-  type OnboardingStep6,
   type RenameVendorInput,
   type ReturnForInfoInput,
   type SaveStepInput,
   type SelfRegistrationInput,
+  type VendorDocumentType,
 } from '@procureflow/shared';
 
 import { ApprovalRoutingService } from '../approvals/approval-routing.service';
@@ -37,8 +44,14 @@ import { MailService } from '../common/mail/mail.service';
 import { StorageService } from '../common/storage/storage.service';
 import type { Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
+import { VendorKycService } from './vendor-kyc.service';
 import { VendorScorecardService } from './vendor-scorecard.service';
 import { VendorVerificationService } from './vendor-verification.service';
+import {
+  IFSC_PROVIDER,
+  type IIfscProvider,
+  type IfscDetails,
+} from './verification/ifsc.provider';
 import {
   PENNY_DROP_PROVIDER,
   type IPennyDropProvider,
@@ -69,6 +82,15 @@ interface WizardState {
   currentStep: number;
   completionPct: number;
   steps: Record<string, { done: boolean; data: Record<string, unknown> }>;
+  /**
+   * Provenance of every auto-filled field: the value, where it came from, and
+   * whether anything outside the uploaded document agreed with it. Kept on the
+   * onboarding rather than only on the vendor master so the *source* survives
+   * alongside the value — which is what a later dispute ("who typed this bank
+   * name?") actually turns on. Written by recordExtraction, read by the wizard
+   * to badge and lock fields, and enforced on save.
+   */
+  extracted?: ExtractedFieldMap;
 }
 
 /** The columns the duplicate-invite guard needs to explain itself to the user. */
@@ -102,10 +124,10 @@ export interface UploadedDocumentView {
 
 /**
  * VendorOnboardingService (Slice 7 §2). Buyer-invite and self-registration both
- * land in one review queue: invite → wizard (6 steps, auto-triggered
- * verifications) → submit → Slice 2 approval → activation. Reuses the approval
- * engine (VENDOR_ONBOARDING) and reads Slice 5 GRN data for the cold-start
- * scorecard on activation.
+ * land in one review queue: invite → wizard (4 steps, document-driven auto-fill
+ * and auto-triggered verifications) → submit → Slice 2 approval → activation.
+ * Reuses the approval engine (VENDOR_ONBOARDING) and reads Slice 5 GRN data for
+ * the cold-start scorecard on activation.
  */
 @Injectable()
 export class VendorOnboardingService implements OnModuleInit {
@@ -117,10 +139,12 @@ export class VendorOnboardingService implements OnModuleInit {
     private readonly routing: ApprovalRoutingService,
     private readonly verification: VendorVerificationService,
     private readonly scorecard: VendorScorecardService,
+    private readonly kyc: VendorKycService,
     private readonly mail: MailService,
     private readonly storage: StorageService,
     private readonly config: ConfigService<Env, true>,
     @Inject(PENNY_DROP_PROVIDER) private readonly pennyDrop: IPennyDropProvider,
+    @Inject(IFSC_PROVIDER) private readonly ifsc: IIfscProvider,
     @Inject(CAPTCHA_PROVIDER) private readonly captcha: ICaptchaProvider,
   ) {}
 
@@ -412,17 +436,26 @@ export class VendorOnboardingService implements OnModuleInit {
       );
     }
 
-    await this.persistStep(vendorId, vendor.tenantId, stepNumber, stepData);
-
     const state =
       (onboarding.wizardState as unknown as WizardState) ?? this.initialWizardState();
+    state.steps = state.steps ?? {};
+    await this.assertStepAcceptable(vendorId, vendor, state, stepNumber, stepData);
+
+    await this.persistStep(vendorId, vendor.tenantId, stepNumber, stepData);
+
     state.steps[`step${stepNumber}`] = {
       done: true,
       data: stepData as Record<string, unknown>,
     };
-    const doneCount = Object.values(state.steps).filter((s) => s.done).length;
-    state.completionPct = Math.round((doneCount / 6) * 100);
-    state.currentStep = Math.min(6, stepNumber + 1);
+    // Counted over the steps that exist *now*. An onboarding started under the
+    // old six-step wizard carries step5/step6 entries; counting every key would
+    // report it 150% complete.
+    const doneCount = Array.from(
+      { length: ONBOARDING_STEP_COUNT },
+      (_, i) => state.steps[`step${i + 1}`]?.done === true,
+    ).filter(Boolean).length;
+    state.completionPct = Math.round((doneCount / ONBOARDING_STEP_COUNT) * 100);
+    state.currentStep = Math.min(ONBOARDING_STEP_COUNT, stepNumber + 1);
     await this.prisma.client.vendorOnboarding.update({
       where: { id: onboarding.id },
       data: {
@@ -442,30 +475,221 @@ export class VendorOnboardingService implements OnModuleInit {
     return { ok: true };
   }
 
-  async acknowledgeCoc(
+  /**
+   * Record what a just-uploaded GST certificate / PAN card yielded.
+   *
+   * Extraction results live on the wizard, not on the vendor master: nothing is
+   * written to the vendor record until the vendor has seen the values and saved
+   * the step. What is stored here is the *attribution* — value, source, verified
+   * flag — which is what later lets anyone answer "where did this legal name
+   * come from" without re-reading the document.
+   */
+  async recordExtraction(
     userId: string,
-    input: AcknowledgeCocInput,
-    ip: string | null,
-    device: string | null,
-  ): Promise<{ ok: true }> {
+    result: DocumentExtractionResult,
+  ): Promise<ExtractedFieldMap> {
     const vendorId = await this.resolveVendorId(userId);
-    await this.prisma.client.vendor.update({
-      where: { id: vendorId },
-      data: {
-        cocAcknowledgedAt: new Date(),
-        cocAckIp: ip,
-        cocAckDevice: device,
-        dataProcessingConsentAt: new Date(),
-      },
+    // An already-activated vendor re-uploading a certificate has no wizard to
+    // write to. The document is still filed and audited; there is simply no
+    // form left to pre-fill, so this is a no-op rather than a 404.
+    const onboarding = await this.findOnboarding(vendorId);
+    if (!onboarding) return {};
+    const state =
+      (onboarding.wizardState as unknown as WizardState) ?? this.initialWizardState();
+    state.extracted = VendorKycService.merge(state.extracted ?? {}, result.fields);
+    await this.prisma.client.vendorOnboarding.update({
+      where: { id: onboarding.id },
+      data: { wizardState: state as unknown as Prisma.InputJsonValue },
     });
     await this.audit.record({
-      action: 'ONBOARDING_COC_ACKNOWLEDGED',
+      action: 'ONBOARDING_DOCUMENT_EXTRACTED',
       entityType: 'Vendor',
       entityId: vendorId,
       actorId: userId,
-      after: { name: input.name, designation: input.designation, ip },
+      after: {
+        docType: result.docType,
+        fields: Object.fromEntries(
+          Object.entries(result.fields).map(([k, f]) => [
+            k,
+            { value: f.value, source: f.source, verified: f.verified },
+          ]),
+        ),
+        warnings: result.warnings,
+        errors: result.errors,
+      },
     });
-    return { ok: true };
+    return state.extracted;
+  }
+
+  /** The vendor's current statutory identity, for cross-checking a second
+   *  document against the first. Both sources are consulted: a GSTIN extracted
+   *  minutes ago is not on the vendor master yet — the vendor has not saved the
+   *  step — but a PAN card uploaded next still has to agree with it. */
+  async kycContext(
+    vendorId: string,
+  ): Promise<{ gstin: string | null; pan: string | null }> {
+    const vendor = await this.prisma.client.vendor.findUniqueOrThrow({
+      where: { id: vendorId },
+      select: { gstin: true, businessPan: true, pan: true },
+    });
+    const onboarding = await this.findOnboarding(vendorId);
+    const extracted = ((onboarding?.wizardState as unknown as WizardState)?.extracted ??
+      {}) as ExtractedFieldMap;
+    return {
+      gstin: vendor.gstin ?? extracted.gstin?.value ?? null,
+      pan: vendor.businessPan ?? vendor.pan ?? extracted.businessPan?.value ?? null,
+    };
+  }
+
+  /**
+   * Rules a step body has to satisfy beyond its schema — the ones that need the
+   * vendor's other data to judge.
+   *
+   *  - A field an authority verified cannot be quietly overwritten by typing.
+   *    That is the whole point of verifying it: the vendor could previously
+   *    "correct" an API-confirmed legal name into a typo and nobody would know.
+   *    Editing one is not forbidden, it just has to go through the buyer.
+   *  - PAN and GSTIN have to describe the same entity. Characters 3–12 of the
+   *    GSTIN *are* the PAN, so a disagreement is arithmetic, not opinion.
+   *  - Step 4 is only "done" once the mandatory documents are actually on file.
+   */
+  private async assertStepAcceptable(
+    vendorId: string,
+    vendor: { gstin: string | null; businessPan: string | null; pan: string | null },
+    state: WizardState,
+    stepNumber: number,
+    stepData: SaveStepInput,
+  ): Promise<void> {
+    const payload = stepData as unknown as Record<string, unknown>;
+    const extracted = state.extracted ?? {};
+
+    for (const [key, verifiedField] of Object.entries(extracted)) {
+      if (!verifiedField.verified) continue;
+      const submitted = payload[key];
+      if (typeof submitted !== 'string' || submitted.trim() === '') continue;
+      if (submitted.trim().toUpperCase() === verifiedField.value.trim().toUpperCase()) {
+        continue;
+      }
+      throw new VendorValidationError(
+        `${key} is ${fieldSourceLabel(verifiedField.source).toLowerCase()} as ` +
+          `"${verifiedField.value}" and cannot be changed here. If it is wrong, upload ` +
+          'a corrected document or ask your buyer to raise a change request.',
+        { field: key, verifiedValue: verifiedField.value, source: verifiedField.source },
+      );
+    }
+
+    if (stepNumber === 1) {
+      // Documents before typing. Everything on this step is *derivable* from
+      // the GST certificate, and a value the vendor types is a value nobody can
+      // check — which is the failure this whole flow exists to remove. There is
+      // no way round it, because there would be nowhere to go: the same
+      // documents are required to submit, so letting the form through early
+      // would move the same stop later with unverified data saved behind it.
+      const statutory = await this.missingStatutoryDocuments(vendorId);
+      if (statutory.length > 0) {
+        throw new VendorValidationError(
+          `Upload your ${statutory
+            .map(vendorDocumentLabel)
+            .join(' and ')} first — we read your details off them so you do not ` +
+            'have to type them.',
+          { missing: statutory },
+        );
+      }
+
+      const pan = typeof payload.businessPan === 'string' ? payload.businessPan : null;
+      const gstin = vendor.gstin ?? extracted.gstin?.value ?? null;
+      const mismatch = panGstinMismatch(pan, gstin);
+      if (mismatch) throw new VendorValidationError(mismatch, { field: 'businessPan' });
+    }
+
+    if (stepNumber === 2) {
+      const gstin = typeof payload.gstin === 'string' ? payload.gstin : null;
+      const pan =
+        vendor.businessPan ?? vendor.pan ?? extracted.businessPan?.value ?? null;
+      const mismatch = panGstinMismatch(pan, gstin);
+      if (mismatch) throw new VendorValidationError(mismatch, { field: 'gstin' });
+    }
+
+    if (stepNumber === 4) {
+      const missing = await this.missingMandatoryDocuments(vendorId);
+      if (missing.length > 0) {
+        // The statutory pair is collected on step 1, so say so — otherwise this
+        // reads as "upload something you cannot see a picker for".
+        const fromStep1 = missing.filter((d) => ONBOARDING_STEP1_DOCUMENTS.includes(d));
+        throw new VendorValidationError(
+          `Upload ${missing.map(vendorDocumentLabel).join(' and ')} before saving this step.` +
+            (fromStep1.length > 0
+              ? ` The ${fromStep1
+                  .map(vendorDocumentLabel)
+                  .join(
+                    ' and ',
+                  )} can be uploaded here or on step 1, where they also fill in your company details.`
+              : ''),
+          { missing },
+        );
+      }
+    }
+  }
+
+  /** Bank name resolved from the IFSC directory, stored with the same
+   *  provenance shape as the GST/PAN fields so the wizard can badge and lock it. */
+  private async recordBankProvenance(
+    vendorId: string,
+    bankName: string,
+    branch: string | null,
+  ): Promise<void> {
+    const onboarding = await this.findOnboarding(vendorId);
+    if (!onboarding) return;
+    const state =
+      (onboarding.wizardState as unknown as WizardState) ?? this.initialWizardState();
+    state.extracted = {
+      ...(state.extracted ?? {}),
+      bankName: { value: bankName, source: 'IFSC_API', verified: true, confidence: 1 },
+      ...(branch
+        ? {
+            bankBranch: {
+              value: branch,
+              source: 'IFSC_API' as const,
+              verified: true,
+              confidence: 1,
+            },
+          }
+        : {}),
+    };
+    await this.prisma.client.vendorOnboarding.update({
+      where: { id: onboarding.id },
+      data: { wizardState: state as unknown as Prisma.InputJsonValue },
+    });
+  }
+
+  /** IFSC → bank/branch, for the wizard to fill the read-only bank field as the
+   *  vendor types. Returns null for an unknown code; the UI then asks them. */
+  async lookupIfsc(ifsc: string): Promise<IfscDetails | null> {
+    return this.ifsc.lookup(ifsc);
+  }
+
+  /** The step-1 statutory documents still outstanding. */
+  private async missingStatutoryDocuments(
+    vendorId: string,
+  ): Promise<VendorDocumentType[]> {
+    const docs = await this.prisma.client.vendorDocument.findMany({
+      where: { vendorId, docType: { in: [...ONBOARDING_STEP1_DOCUMENTS] } },
+      select: { docType: true },
+    });
+    const uploaded = new Set(docs.map((d) => d.docType));
+    return ONBOARDING_STEP1_DOCUMENTS.filter((d) => !uploaded.has(d));
+  }
+
+  /** Mandatory documents the vendor has not uploaded yet. */
+  private async missingMandatoryDocuments(
+    vendorId: string,
+  ): Promise<VendorDocumentType[]> {
+    const docs = await this.prisma.client.vendorDocument.findMany({
+      where: { vendorId },
+      select: { docType: true },
+    });
+    const uploaded = new Set(docs.map((d) => d.docType));
+    return ONBOARDING_MANDATORY_DOCUMENTS.filter((d) => !uploaded.has(d));
   }
 
   async submitOnboarding(userId: string): Promise<{ ok: true }> {
@@ -476,7 +700,6 @@ export class VendorOnboardingService implements OnModuleInit {
       include: { documents: true },
     });
     const state = onboarding.wizardState as unknown as WizardState;
-    const config = categoryConfig(onboarding.categoryConfigKey);
 
     // The portal hides Submit once a vendor is through or waiting on a review;
     // this is the same rule enforced server-side, for stale tabs and direct calls.
@@ -490,25 +713,43 @@ export class VendorOnboardingService implements OnModuleInit {
     }
 
     // Guards.
-    const requiredSteps = [1, 2, 3, 5, 6];
-    for (const s of requiredSteps) {
-      if (!state.steps[`step${s}`]?.done) {
-        throw new VendorValidationError(`Step ${s} is not complete.`, { step: s });
+    for (let step = 1; step <= ONBOARDING_STEP_COUNT; step += 1) {
+      if (!state?.steps?.[`step${step}`]?.done) {
+        throw new VendorValidationError(
+          `Step ${step} (${ONBOARDING_STEP_NAMES[step - 1]}) is not complete.`,
+          { step },
+        );
       }
     }
-    if (config) {
-      const uploaded = new Set(vendor.documents.map((d) => d.docType));
-      const missing = config.requiredDocuments.filter((d) => !uploaded.has(d));
-      if (missing.length > 0) {
-        throw new VendorValidationError('Mandatory documents are missing.', { missing });
-      }
+    // One mandatory set for every category: the two statutory documents that
+    // drive step 1's auto-fill, plus the two collected on step 4. Category
+    // configs still list the extra certificates a buyer may want, but those are
+    // chased during review rather than blocking the vendor's submission.
+    const uploaded = new Set(vendor.documents.map((d) => d.docType));
+    const missing = ONBOARDING_MANDATORY_DOCUMENTS.filter((d) => !uploaded.has(d));
+    if (missing.length > 0) {
+      throw new VendorValidationError(
+        `Upload ${missing.map(vendorDocumentLabel).join(', ')} before submitting.`,
+        { missing },
+      );
     }
-    if (!vendor.cocAcknowledgedAt) {
-      throw new VendorValidationError('The code of conduct must be acknowledged.');
+    // Last line of defence on the identity check. The wizard blocks a mismatch
+    // step by step, but a vendor who saved a PAN before uploading the GST
+    // certificate could otherwise still arrive here inconsistent.
+    const identityMismatch = panGstinMismatch(
+      vendor.businessPan ?? vendor.pan,
+      vendor.gstin,
+    );
+    if (identityMismatch) {
+      throw new VendorValidationError(identityMismatch, { field: 'businessPan' });
     }
-    if (!vendor.dataProcessingConsentAt) {
-      throw new VendorValidationError('Data-processing consent is required.');
-    }
+
+    // Sanctions screening used to be triggered by saving the UBO step, which no
+    // longer exists. It runs here instead — every category config requires it,
+    // and submission is the last moment it can run before a reviewer sees the
+    // file. A provider outage yields an ERROR screening for manual follow-up,
+    // so this never blocks the vendor.
+    await this.verification.runScreening(vendorId, 'SANCTIONS_OFAC', 'system');
 
     const slaHours = vendor.isMsme ? 48 : onboarding.slaTargetHours;
     await this.prisma.client.vendorOnboarding.update({
@@ -752,6 +993,7 @@ export class VendorOnboardingService implements OnModuleInit {
       where: { id: vendorId },
       include: { screenings: true, documents: true },
     });
+    await this.assertOnboardingComplete(vendor);
     // Guards: no un-reviewed FLAGGED screenings; no PENDING/FAILED mandatory docs.
     const openFlags = vendor.screenings.filter(
       (s) =>
@@ -793,6 +1035,122 @@ export class VendorOnboardingService implements OnModuleInit {
     return { ok: true };
   }
 
+  /**
+   * Refuse to activate a vendor who has not actually completed onboarding.
+   *
+   * `submitOnboarding` enforces all of this already, so under the normal flow
+   * this never fires. It exists because activation has a second door: the
+   * approval engine calls it on APPROVE, and the review screen offers that
+   * button off a *prospective* approval chain — the preview of who would sign
+   * off — which is drawn before the vendor has typed anything. An officer could
+   * therefore activate a 0%-complete vendor with no GSTIN, no bank account and
+   * no documents, and nothing objected. A vendor record in that state goes on to
+   * receive purchase orders and raise invoices.
+   *
+   * Vendors with no onboarding at all (seeded, or migrated from before the
+   * wizard) are left alone — there is nothing to have completed.
+   */
+  private async assertOnboardingComplete(vendor: {
+    id: string;
+    name: string;
+    documents: { docType: string }[];
+  }): Promise<void> {
+    const onboarding = await this.findOnboarding(vendor.id);
+    if (!onboarding) return;
+    const state = onboarding.wizardState as unknown as WizardState | null;
+
+    if (!onboarding.submittedAt) {
+      const pct = state?.completionPct ?? 0;
+      throw new VendorStateError(
+        `${vendor.name} has not submitted their onboarding yet (${pct}% complete), so ` +
+          'there is nothing to approve. They are notified when it is their turn; use ' +
+          'Return for info if you need to prompt them.',
+        { vendorId: vendor.id, completionPct: pct },
+      );
+    }
+
+    const incomplete: string[] = [];
+    for (let step = 1; step <= ONBOARDING_STEP_COUNT; step += 1) {
+      if (!state?.steps?.[`step${step}`]?.done) {
+        incomplete.push(`${step}. ${ONBOARDING_STEP_NAMES[step - 1]}`);
+      }
+    }
+    if (incomplete.length > 0) {
+      throw new VendorStateError(
+        `Cannot activate ${vendor.name} — these wizard steps are not complete: ${incomplete.join(', ')}.`,
+        { vendorId: vendor.id, incomplete },
+      );
+    }
+
+    const uploaded = new Set(vendor.documents.map((d) => d.docType));
+    const missing = ONBOARDING_MANDATORY_DOCUMENTS.filter((d) => !uploaded.has(d));
+    if (missing.length > 0) {
+      throw new VendorStateError(
+        `Cannot activate ${vendor.name} — missing ${missing.map(vendorDocumentLabel).join(', ')}.`,
+        { vendorId: vendor.id, missing },
+      );
+    }
+
+    // A bank account whose holder name the bank did not confirm is the one field
+    // on this record that moves money. It was being stored with the failed match
+    // and shown to nobody, so activation proceeded and the first payment run
+    // discovered it. Either the buyer accepts it in writing, or it does not pass.
+    const bank = await this.prisma.client.vendorBank.findFirst({
+      where: { vendorId: vendor.id, isArchived: false },
+    });
+    if (bank && !bank.isVerified && !bank.manualOverrideReason) {
+      throw new VendorStateError(
+        `Cannot activate ${vendor.name} — the bank could not confirm "${bank.holderName}" ` +
+          `holds account ••••${bank.accountNoEncrypted.slice(-4)}` +
+          (bank.pennyDropNameReturned
+            ? ` (it returned "${bank.pennyDropNameReturned}")`
+            : '') +
+          '. Check the cancelled cheque and either accept the account with a reason, or ' +
+          'return the onboarding for corrected bank details.',
+        {
+          vendorId: vendor.id,
+          holderName: bank.holderName,
+          returnedName: bank.pennyDropNameReturned,
+          nameMatchScore: bank.nameMatchScore ? Number(bank.nameMatchScore) : null,
+        },
+      );
+    }
+  }
+
+  /**
+   * A buyer accepts a bank account the penny drop could not confirm — after
+   * eyeballing the cancelled cheque, which is the document that settles it. The
+   * reason is stored on the account and audited: this is the record of who let
+   * an unverified payment destination through, and why.
+   */
+  async overrideBankVerification(
+    vendorId: string,
+    reason: string,
+    actorId: string,
+  ): Promise<{ ok: true }> {
+    const bank = await this.prisma.client.vendorBank.findFirst({
+      where: { vendorId, isArchived: false },
+    });
+    if (!bank) throw new NotFoundException('No bank account on file for this vendor');
+    await this.prisma.client.vendorBank.update({
+      where: { id: bank.id },
+      data: { manualOverrideReason: reason, overriddenBy: actorId },
+    });
+    await this.audit.record({
+      action: 'VENDOR_BANK_OVERRIDE',
+      entityType: 'Vendor',
+      entityId: vendorId,
+      actorId,
+      before: {
+        isVerified: bank.isVerified,
+        nameMatchScore: bank.nameMatchScore ? Number(bank.nameMatchScore) : null,
+        pennyDropNameReturned: bank.pennyDropNameReturned,
+      },
+      after: { manualOverrideReason: reason },
+    });
+    return { ok: true };
+  }
+
   // ── internals ──────────────────────────────────────────────────────────────
 
   private async persistStep(
@@ -808,6 +1166,12 @@ export class VendorOnboardingService implements OnModuleInit {
         data: {
           legalEntityType: s.legalEntityType,
           legalEntityName: s.legalEntityName,
+          // The display name follows the trade name once we have it from the
+          // certificate: the buyer's invite label was their best guess at who
+          // they were writing to, and GSTN's trade name is what the business
+          // actually calls itself. The legal name is left alone — it is what the
+          // PAN and penny-drop checks match against.
+          ...(s.tradeName?.trim() ? { name: s.tradeName.trim() } : {}),
           businessPan: s.businessPan,
           pan: s.businessPan,
           dateOfIncorporation: s.dateOfIncorporation
@@ -823,60 +1187,41 @@ export class VendorOnboardingService implements OnModuleInit {
       });
     } else if (stepNumber === 3) {
       const s = stepData as OnboardingStep3;
+      // The bank is a property of the IFSC, not an opinion. Resolving it here
+      // ends the "HDFC" / "HDFC Bank Ltd" / "hdfc bank" spread that made vendor
+      // bank names impossible to reconcile against a statement — and a code the
+      // directory does not know is the one case where the vendor's own typing
+      // is still needed.
+      const directory = await this.ifsc.lookup(s.ifsc);
+      const bankName = directory?.bank ?? s.bankName?.trim();
+      if (!bankName) {
+        throw new VendorValidationError(
+          `We could not identify a bank from IFSC ${s.ifsc}. Check the code, or ` +
+            'enter your bank name and branch so your buyer can confirm it.',
+          { field: 'ifsc' },
+        );
+      }
       await this.prisma.client.vendorBank.deleteMany({ where: { vendorId } });
       await this.prisma.client.vendorBank.create({
         data: {
           id: newId('vendorBank'),
           tenantId,
           vendorId,
-          bankName: s.bankName,
+          bankName,
           accountNoEncrypted: `enc:xxxx${s.accountNumber.slice(-4)}`,
           ifsc: s.ifsc,
           holderName: s.holderName,
         },
       });
-    } else if (stepNumber === 5) {
-      const s = stepData as OnboardingStep5;
-      await this.prisma.client.vendor.update({
-        where: { id: vendorId },
-        data: {
-          categoryTags: s.categoryTags,
-          capabilityTags: s.capabilityTags,
-          employeeCountBracket: s.employeeCountBracket,
-          annualTurnoverDeclared: s.annualTurnoverDeclared
-            ? new Prisma.Decimal(s.annualTurnoverDeclared)
-            : null,
-        },
-      });
-    } else if (stepNumber === 6) {
-      const s = stepData as OnboardingStep6;
-      await this.prisma.client.vendorBeneficialOwner.deleteMany({ where: { vendorId } });
-      for (const o of s.beneficialOwners) {
-        await this.prisma.client.vendorBeneficialOwner.create({
-          data: {
-            id: newId('vendorBeneficialOwner'),
-            tenantId,
-            vendorId,
-            ownerName: o.ownerName,
-            ownerPan: o.ownerPan,
-            ownerDob: o.ownerDob ? new Date(o.ownerDob) : null,
-            ownershipPct: new Prisma.Decimal(o.ownershipPct),
-            ownershipType: o.ownershipType,
-            countryOfResidence: o.countryOfResidence,
-            isPep: o.isPep,
-            pepDetails: o.pepDetails ?? null,
-            declaredBy: 'vendor',
-          },
-        });
+      // Remember where the name came from, so the field shows the same badge on
+      // return as the ones filled from the GST certificate.
+      if (directory) {
+        await this.recordBankProvenance(vendorId, bankName, directory.branch);
       }
-      await this.prisma.client.vendor.update({
-        where: { id: vendorId },
-        data: {
-          isRelatedParty: s.isRelatedParty,
-          relatedPartyDisclosure: s.relatedPartyDisclosure ?? null,
-        },
-      });
     }
+    // Step 4 stores nothing of its own: the documents were persisted by the
+    // upload endpoint as the vendor picked them, and saving the step only
+    // asserts they are complete (enforced in assertStepAcceptable).
   }
 
   private async autoVerify(
@@ -911,8 +1256,6 @@ export class VendorOnboardingService implements OnModuleInit {
           },
         });
       }
-    } else if (stepNumber === 6) {
-      await this.verification.runScreening(vendorId, 'SANCTIONS_OFAC', 'system');
     }
   }
 
@@ -942,8 +1285,8 @@ export class VendorOnboardingService implements OnModuleInit {
         byEmail.lifecycleStatus === 'BLACKLISTED'
           ? `${byEmail.name} (${byEmail.code}) is blacklisted — this contact cannot be invited.`
           : `${input.email} is already the contact for ${byEmail.name} (${byEmail.code}). ` +
-            'Resend that invitation or add the category to the existing vendor — a second ' +
-            'record would share the same vendor login.',
+              'Resend that invitation or add the category to the existing vendor — a second ' +
+              'record would share the same vendor login.',
         await this.duplicateContext(byEmail, 'EMAIL', false),
       );
     }
@@ -1142,6 +1485,17 @@ export class VendorOnboardingService implements OnModuleInit {
       }));
     if (!contact) throw new ForbiddenException('No vendor linked to this account');
     return contact.vendorId;
+  }
+
+  /** The vendor's latest onboarding, or null — for callers that can carry on
+   *  without one. `requireActiveOnboarding` is the throwing version. */
+  private async findOnboarding(
+    vendorId: string,
+  ): Promise<Prisma.VendorOnboardingGetPayload<Record<string, never>> | null> {
+    return this.prisma.client.vendorOnboarding.findFirst({
+      where: { vendorId },
+      orderBy: { startedAt: 'desc' },
+    });
   }
 
   private async requireActiveOnboarding(

@@ -70,6 +70,9 @@ const EnvSchema = z.object({
   // Slice 10b — banking. Unset → labelled sandbox simulator (no bank contract).
   BANK_API_URL: z.string().default(''),
   PENNY_DROP_API_URL: z.string().default(''),
+  /** IFSC directory base URL (e.g. https://ifsc.razorpay.com). Unset falls
+   *  back to resolving the bank from the IFSC's own bank code. */
+  IFSC_API_URL: z.string().default(''),
   // Slice 10c — vendor verification. Unset → labelled sandbox simulator.
   SCREENING_API_URL: z.string().default(''),
   RECAPTCHA_SECRET: z.string().default(''), // unset → sandbox captcha stub
