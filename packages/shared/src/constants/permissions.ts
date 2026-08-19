@@ -428,10 +428,14 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     PERMISSIONS.COMPLIANCE_RUN,
     PERMISSIONS.INTEGRATION_READ,
     // AP pays these vendors, so it reads the master and watches the onboarding
-    // pipeline. Strictly read-only: no invite, no lifecycle action, and the
-    // queue view without VENDOR_ONBOARDING_REVIEW's approve/reject authority.
+    // pipeline. It also holds the approve/reject decision on onboarding, because
+    // the matrix routes VENDOR_ONBOARDING to FINANCE_OFFICER: the inbox decide
+    // endpoint only needs APPROVAL_DECIDE, but the onboarding decision panel
+    // posts to /vendors/onboarding/:id/decision, which is _REVIEW-gated. Still
+    // no invite, no vendor master edit, and no document verification.
     ...VENDOR_READ_ONLY,
     PERMISSIONS.VENDOR_ONBOARDING_READ,
+    PERMISSIONS.VENDOR_ONBOARDING_REVIEW,
     ...PROCURE_READ,
     ...CONTRACT_READ_ONLY,
   ],

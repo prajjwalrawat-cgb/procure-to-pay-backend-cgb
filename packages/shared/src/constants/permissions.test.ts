@@ -48,16 +48,31 @@ describe('vendor onboarding queue visibility', () => {
 
   /**
    * Finance reads the vendor master and watches the onboarding pipeline because
-   * it pays these vendors — it must not pick up authority over them on the way.
+   * it pays these vendors. It must not pick up *master* authority on the way —
+   * no invite, no edit, no document verification — even where it now decides.
    */
-  it('gives finance the vendor master and the queue, read-only', () => {
+  it('gives finance the vendor master and the queue, without master authority', () => {
     for (const role of [ROLES.FINANCE_OFFICER, ROLES.FINANCE_HEAD] as const) {
       expect(ROLE_PERMISSIONS[role]).toContain(PERMISSIONS.VENDOR_READ);
       expect(ROLE_PERMISSIONS[role]).toContain(PERMISSIONS.VENDOR_ONBOARDING_READ);
-      expect(ROLE_PERMISSIONS[role]).not.toContain(PERMISSIONS.VENDOR_ONBOARDING_REVIEW);
       expect(ROLE_PERMISSIONS[role]).not.toContain(PERMISSIONS.VENDOR_INVITE);
       expect(ROLE_PERMISSIONS[role]).not.toContain(PERMISSIONS.VENDOR_UPDATE);
       expect(ROLE_PERMISSIONS[role]).not.toContain(PERMISSIONS.VENDOR_DOC_VERIFY);
     }
+  });
+
+  /**
+   * The onboarding decision is the AP officer's when the matrix routes
+   * VENDOR_ONBOARDING to FINANCE_OFFICER — the queue's Approve/Reject panel
+   * posts to a _REVIEW-gated route, so APPROVAL_DECIDE alone would 403. Finance
+   * *head* stays a watcher: it is not on that chain.
+   */
+  it('gives the onboarding decision to the finance officer, not the head', () => {
+    expect(ROLE_PERMISSIONS[ROLES.FINANCE_OFFICER]).toContain(
+      PERMISSIONS.VENDOR_ONBOARDING_REVIEW,
+    );
+    expect(ROLE_PERMISSIONS[ROLES.FINANCE_HEAD]).not.toContain(
+      PERMISSIONS.VENDOR_ONBOARDING_REVIEW,
+    );
   });
 });
