@@ -136,10 +136,13 @@ export interface OnboardingDetailResponse {
   screenings: VendorScreeningView[];
   beneficialOwners: BeneficialOwnerView[];
   riskLights: RiskTrafficLight[];
-  cocAcknowledgedAt: string | null;
   canReview: boolean;
   myApprovalId: string | null;
   returnForInfoItems: string[];
+  /** The account the vendor will be paid into, with the outcome of the
+   *  penny-drop name match. Shown at review because money moves against this and
+   *  a failed match used to be stored where nobody saw it. */
+  bank: OnboardingBankView | null;
 }
 
 export interface VendorScorecardView {
@@ -192,6 +195,22 @@ export interface Vendor360Response {
   documents: VendorDocumentView[];
   suspensions: VendorSuspensionView[];
   changeRequests: VendorChangeRequestView[];
+}
+
+export interface OnboardingBankView {
+  bankName: string;
+  /** Only ever the last four digits — the account number is stored encrypted. */
+  accountNoLast4: string;
+  ifsc: string;
+  /** The name the vendor declared as the account holder. */
+  holderName: string;
+  /** What the bank returned for that account, when a penny drop ran. */
+  pennyDropNameReturned: string | null;
+  /** 0..1 similarity between the two names above; null if no check has run. */
+  nameMatchScore: number | null;
+  isVerified: boolean;
+  /** A buyer's written reason for accepting an unverified account. */
+  manualOverrideReason: string | null;
 }
 
 export interface VendorSuspensionView {

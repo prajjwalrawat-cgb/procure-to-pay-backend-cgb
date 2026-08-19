@@ -10,7 +10,7 @@
  */
 import { hash } from 'argon2';
 import { Prisma, PrismaClient } from '@prisma/client';
-import { VENDOR_CATEGORY_CONFIGS } from '@procureflow/shared';
+import { ONBOARDING_STEP_COUNT, VENDOR_CATEGORY_CONFIGS } from '@procureflow/shared';
 
 import { newId } from '../src/ids';
 
@@ -31,7 +31,7 @@ interface OnboardingSpec {
   source: 'BUYER_INVITE_RFQ' | 'BUYER_INVITE_SPOT' | 'SELF_REGISTRATION';
   isMsme: boolean;
   lifecycleStatus: 'INVITED' | 'SELF_REGISTERED' | 'IN_ONBOARDING' | 'UNDER_REVIEW';
-  completedSteps: number; // 0..6
+  completedSteps: number; // 0..ONBOARDING_STEP_COUNT
   submitted: boolean;
   contactEmail: string;
   contactName: string;
@@ -46,7 +46,7 @@ const ONBOARDINGS: OnboardingSpec[] = [
     source: 'BUYER_INVITE_RFQ',
     isMsme: false,
     lifecycleStatus: 'UNDER_REVIEW',
-    completedSteps: 6,
+    completedSteps: 4,
     submitted: true,
     contactEmail: 'onboarding@steeltech.example',
     contactName: 'N. Kulkarni',
@@ -59,7 +59,7 @@ const ONBOARDINGS: OnboardingSpec[] = [
     source: 'SELF_REGISTRATION',
     isMsme: true,
     lifecycleStatus: 'IN_ONBOARDING',
-    completedSteps: 4,
+    completedSteps: 3,
     submitted: false,
     contactEmail: 'accounts@bengalchem.example',
     contactName: 'S. Ghosh',
@@ -440,9 +440,9 @@ async function seedOnboarding(
   for (let i = 1; i <= spec.completedSteps; i += 1) {
     steps[`step${i}`] = { done: true, data: {} };
   }
-  const completionPct = Math.round((spec.completedSteps / 6) * 100);
+  const completionPct = Math.round((spec.completedSteps / ONBOARDING_STEP_COUNT) * 100);
   const wizardState = {
-    currentStep: Math.min(6, spec.completedSteps + 1),
+    currentStep: Math.min(ONBOARDING_STEP_COUNT, spec.completedSteps + 1),
     completionPct,
     steps,
   };

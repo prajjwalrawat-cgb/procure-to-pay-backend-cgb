@@ -1,7 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@procureflow/db';
 import {
-  categoryConfig,
+  ONBOARDING_MANDATORY_DOCUMENTS,
+  ONBOARDING_STEP_NAMES,
   type OnboardingDetailResponse,
   type VendorRiskGrade,
   type OnboardingListItem,
@@ -27,14 +28,6 @@ import { PrismaService } from '../prisma/prisma.service';
 const ACTIVE_PO_STATUSES: Prisma.PurchaseOrderWhereInput['status'] = {
   in: ['ISSUED', 'ACKNOWLEDGED', 'PARTIALLY_RECEIVED', 'PARTIALLY_INVOICED'],
 };
-const WIZARD_STEP_NAMES = [
-  'Company basics',
-  'Statutory identity',
-  'Banking',
-  'Certifications',
-  'Capabilities',
-  'Ownership & UBO',
-];
 const COLD_START_MIN = 3;
 
 interface WizardState {
@@ -183,8 +176,10 @@ export class VendorQueryService {
     const now = Date.now();
     const items = onboardings.map((ob): OnboardingListItem => {
       const state = ob.wizardState as unknown as WizardState;
-      const config = categoryConfig(ob.categoryConfigKey);
-      const docsRequired = config?.requiredDocuments.length ?? 0;
+      // What the vendor actually has to produce to submit — the same set the
+      // wizard enforces. Counting the category's extra certificates here made
+      // every onboarding look permanently short of documents.
+      const docsRequired = ONBOARDING_MANDATORY_DOCUMENTS.length;
       const docsVerified = ob.vendor.documents.filter(
         (d) =>
           d.verificationStatus === 'AUTO_VERIFIED' ||
@@ -237,6 +232,7 @@ export class VendorQueryService {
             documents: { orderBy: { uploadedAt: 'desc' } },
             screenings: { orderBy: { requestedAt: 'desc' } },
             beneficialOwners: true,
+            banks: { where: { isArchived: false }, take: 1 },
           },
         },
       },
@@ -244,6 +240,7 @@ export class VendorQueryService {
     if (!ob) throw new NotFoundException('Onboarding not found');
     const v = ob.vendor;
     const state = ob.wizardState as unknown as WizardState;
+    const bank = v.banks[0] ?? null;
     const now = Date.now();
 
     const chain = await this.routing.getLiveChain('VENDOR_ONBOARDING', onboardingId);
@@ -251,7 +248,7 @@ export class VendorQueryService {
       (s) => s.approverId === viewerId && s.decision === 'PENDING' && s.isCurrent,
     );
 
-    const steps: WizardStepSummary[] = WIZARD_STEP_NAMES.map((name, i) => {
+    const steps: WizardStepSummary[] = ONBOARDING_STEP_NAMES.map((name, i) => {
       const key = `step${i + 1}`;
       const s = state?.steps?.[key];
       return {
@@ -290,10 +287,27 @@ export class VendorQueryService {
         sanctionsScreeningStatus: o.sanctionsScreeningStatus,
       })),
       riskLights: this.riskLights(v),
-      cocAcknowledgedAt: v.cocAcknowledgedAt?.toISOString() ?? null,
-      canReview: !!myStep,
+      /* A *real* pending approval, not a prospective one. getLiveChain falls
+       * back to a preview of who would approve when no approval exists yet, and
+       * those steps carry approvalId: null — so an officer was being offered
+       * Approve/Reject on an onboarding the vendor had not started, let alone
+       * submitted. The server refuses that too (assertOnboardingComplete); this
+       * is what stops the button being drawn in the first place. */
+      canReview: !!myStep?.approvalId,
       myApprovalId: myStep?.approvalId ?? null,
       returnForInfoItems: (ob.returnForInfoItems as string[] | null) ?? [],
+      bank: bank
+        ? {
+            bankName: bank.bankName,
+            accountNoLast4: bank.accountNoEncrypted.slice(-4),
+            ifsc: bank.ifsc,
+            holderName: bank.holderName,
+            pennyDropNameReturned: bank.pennyDropNameReturned,
+            nameMatchScore: bank.nameMatchScore ? Number(bank.nameMatchScore) : null,
+            isVerified: bank.isVerified,
+            manualOverrideReason: bank.manualOverrideReason,
+          }
+        : null,
     };
   }
 
@@ -469,7 +483,6 @@ export class VendorQueryService {
     );
   }
 }
-
 
 function toScreeningView(
   s: Prisma.VendorScreeningGetPayload<Record<string, never>>,

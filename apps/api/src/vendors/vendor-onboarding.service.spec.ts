@@ -8,6 +8,7 @@ import type { MailService } from '../common/mail/mail.service';
 import type { DomainEventService } from '../common/events/domain-event.service';
 import type { StorageService } from '../common/storage/storage.service';
 import type { PrismaService } from '../prisma/prisma.service';
+import type { VendorKycService } from './vendor-kyc.service';
 import type { VendorScorecardService } from './vendor-scorecard.service';
 import type { VendorVerificationService } from './vendor-verification.service';
 import type { ICaptchaProvider } from './verification/captcha.provider';
@@ -122,6 +123,7 @@ function makeService(fixture: Fixture = {}): {
     { onApproved: vi.fn(), submit: vi.fn() } as unknown as ApprovalRoutingService,
     {} as unknown as VendorVerificationService,
     {} as unknown as VendorScorecardService,
+    {} as unknown as VendorKycService,
     { send: vi.fn().mockResolvedValue(undefined) } as unknown as MailService,
     {} as unknown as StorageService,
     { get: vi.fn().mockReturnValue('http://localhost:3000') } as never,

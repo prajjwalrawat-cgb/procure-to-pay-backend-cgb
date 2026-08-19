@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { newId } from '@procureflow/db';
 import {
+  ONBOARDING_MANDATORY_DOCUMENTS,
   VENDOR_EVENTS,
   categoryConfig,
   type VendorDocumentUpload,
@@ -10,18 +11,6 @@ import { AuditLogService } from '../audit/audit.service';
 import { DomainEventService } from '../common/events/domain-event.service';
 import { NotificationService } from '../approvals/notification.service';
 import { PrismaService } from '../prisma/prisma.service';
-
-/** Doc types the mock providers can auto-verify on upload (Slice 7). */
-const AUTO_VERIFIABLE = new Set([
-  'GST_CERT',
-  'PAN_CARD',
-  'MSME_UDYAM',
-  'ISO_9001',
-  'ISO_14001',
-  'ISO_45001',
-  'ISO_27001',
-  'CANCELLED_CHEQUE',
-]);
 
 /**
  * VendorDocumentService (Slice 7 §4). Upload (with ClamAV virus scan — stubbed
@@ -37,16 +26,28 @@ export class VendorDocumentService {
     private readonly notifications: NotificationService,
   ) {}
 
+  /**
+   * @param confirmed Whether something outside the file agreed it is the
+   *   document it was filed as — the registry accepted its GSTIN, the PAN
+   *   matched, the IFSC resolved (see DocumentExtractionResult.confirmsDocument).
+   *
+   *   This used to be a list of document *types*: anything filed as a PAN card
+   *   was stamped AUTO_VERIFIED on arrival, whatever the file contained. A blank
+   *   page earned the same green badge as a real card, and a reviewer had no way
+   *   to tell them apart. Verification is now something a document earns, and a
+   *   file nobody could check waits for a human.
+   */
   async uploadDocument(
     vendorId: string,
     input: VendorDocumentUpload,
     actorId: string,
+    confirmed = false,
   ): Promise<{ id: string }> {
     const vendor = await this.prisma.client.vendor.findUniqueOrThrow({
       where: { id: vendorId },
     });
     // ClamAV virus scan (docker-compose service) is stubbed in Slice 7 — assume clean.
-    const autoVerified = AUTO_VERIFIABLE.has(input.docType);
+    const autoVerified = confirmed;
     const id = newId('vendorDocument');
     await this.prisma.client.vendorDocument.create({
       data: {
@@ -169,7 +170,16 @@ export class VendorDocumentService {
     return { warned, expired, suspended };
   }
 
+  /**
+   * Whether an expired document is serious enough to suspend the vendor over.
+   *
+   * The union of the two "required" sets: everything onboarding makes mandatory
+   * for every vendor, plus whatever their category additionally asks for. A
+   * category document is only ever on file because it was asked for, so letting
+   * it lapse still matters even though it no longer blocks submission.
+   */
   private isMandatory(categoryKey: string | null, docType: string): boolean {
+    if (ONBOARDING_MANDATORY_DOCUMENTS.includes(docType as never)) return true;
     const config = categoryKey ? categoryConfig(categoryKey) : undefined;
     return config ? config.requiredDocuments.includes(docType as never) : false;
   }
