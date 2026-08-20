@@ -1,10 +1,11 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import {
   AcceptInviteInputSchema,
   SelfRegistrationInputSchema,
   VENDOR_CATEGORY_CONFIGS,
   VerifyEmailInputSchema,
+  type VendorCategoryOption,
   type AcceptInviteInput,
   type SelfRegistrationInput,
   type VerifyEmailInput,
@@ -12,6 +13,8 @@ import {
 
 import { Public } from '../auth/decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
+import { PrismaService } from '../prisma/prisma.service';
+import { VendorCategoriesService } from '../settings/vendor-categories.service';
 import { VendorOnboardingService } from './vendor-onboarding.service';
 
 /**
@@ -24,16 +27,28 @@ import { VendorOnboardingService } from './vendor-onboarding.service';
 @Throttle({ default: { limit: 5, ttl: 60_000 } })
 @Controller('public/vendors')
 export class PublicRegistrationController {
-  constructor(private readonly onboarding: VendorOnboardingService) {}
+  constructor(
+    private readonly onboarding: VendorOnboardingService,
+    private readonly categories: VendorCategoriesService,
+    private readonly prisma: PrismaService,
+  ) {}
 
+  /**
+   * Categories the registration form offers. `tenant` is the id the buyer-issued
+   * link carries; with it the vendor sees that organisation's own categories,
+   * and without it (a link that lost its query string) the shipped starter set,
+   * so the form still renders rather than showing an empty dropdown.
+   */
   @Public()
   @Get('categories')
-  categories(): Array<{ key: string; displayName: string; slaHours: number }> {
-    return VENDOR_CATEGORY_CONFIGS.map((c) => ({
-      key: c.categoryKey,
-      displayName: c.displayName,
-      slaHours: c.slaHours,
-    }));
+  async listCategories(
+    @Query('tenant') tenantId?: string,
+  ): Promise<VendorCategoryOption[]> {
+    if (!tenantId) return shippedCategoryOptions();
+    // No JWT here, so the tenant context has to be opened explicitly for RLS.
+    return this.prisma
+      .runInTenantContext(tenantId, () => this.categories.options(tenantId))
+      .catch(() => shippedCategoryOptions());
   }
 
   @Public()
@@ -60,4 +75,15 @@ export class PublicRegistrationController {
   ): Promise<{ email: string }> {
     return this.onboarding.acceptInvite(dto.tenantId, dto.token, dto.password);
   }
+}
+
+/** Fallback for a registration link with no tenant on it. */
+function shippedCategoryOptions(): VendorCategoryOption[] {
+  return VENDOR_CATEGORY_CONFIGS.map((c) => ({
+    key: c.categoryKey,
+    displayName: c.displayName,
+    slaHours: c.slaHours,
+    requiredDocuments: c.requiredDocuments,
+    optionalDocuments: c.optionalDocuments,
+  }));
 }

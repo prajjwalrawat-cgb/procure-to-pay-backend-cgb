@@ -27,6 +27,7 @@ export * from './schemas/stock';
 export * from './schemas/inventory';
 export * from './schemas/sourcing';
 export * from './schemas/sourcing-responses';
+export * from './schemas/vendor-category';
 export * from './schemas/vendor-onboarding';
 export * from './schemas/vendor-responses';
 export * from './schemas/events';

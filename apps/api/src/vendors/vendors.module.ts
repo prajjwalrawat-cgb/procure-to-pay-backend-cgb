@@ -6,6 +6,7 @@ import { CircuitBreaker } from '../common/integrations/circuit-breaker';
 import { StorageService } from '../common/storage/storage.service';
 import type { Env } from '../config/env';
 import { IntegrationUsageService } from '../integrations/integration-usage.service';
+import { SettingsModule } from '../settings/settings.module';
 import { PublicRegistrationController } from './public-registration.controller';
 import {
   CAPTCHA_PROVIDER,
@@ -55,7 +56,9 @@ import { VendorsController } from './vendors.controller';
  * performance and risk scorecards.
  */
 @Module({
-  imports: [ApprovalsModule],
+  // SettingsModule for VendorCategoriesService — the category list an invite is
+  // validated against is tenant data an admin maintains there.
+  imports: [ApprovalsModule, SettingsModule],
   controllers: [
     VendorsController,
     VendorOnboardingController,

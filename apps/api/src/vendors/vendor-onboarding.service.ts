@@ -17,7 +17,6 @@ import {
   ONBOARDING_STEP_NAMES,
   VENDOR_EVENTS,
   assessAcceptance,
-  categoryConfig,
   compare as compareNames,
   fieldSourceLabel,
   panGstinMismatch,
@@ -44,6 +43,7 @@ import { MailService } from '../common/mail/mail.service';
 import { StorageService } from '../common/storage/storage.service';
 import type { Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
+import { VendorCategoriesService } from '../settings/vendor-categories.service';
 import { VendorKycService } from './vendor-kyc.service';
 import { VendorScorecardService } from './vendor-scorecard.service';
 import { VendorVerificationService } from './vendor-verification.service';
@@ -146,6 +146,7 @@ export class VendorOnboardingService implements OnModuleInit {
     @Inject(PENNY_DROP_PROVIDER) private readonly pennyDrop: IPennyDropProvider,
     @Inject(IFSC_PROVIDER) private readonly ifsc: IIfscProvider,
     @Inject(CAPTCHA_PROVIDER) private readonly captcha: ICaptchaProvider,
+    private readonly categories: VendorCategoriesService,
   ) {}
 
   onModuleInit(): void {
@@ -161,7 +162,9 @@ export class VendorOnboardingService implements OnModuleInit {
     actorId: string,
   ): Promise<{ vendorId: string; onboardingId: string }> {
     const tenantId = this.tenantId();
-    const config = categoryConfig(input.categoryKey);
+    // Categories are tenant data (Settings → Vendor categories), so what counts
+    // as a valid one is a lookup, not an enum.
+    const config = await this.categories.findActive(tenantId, input.categoryKey);
     if (!config)
       throw new VendorValidationError('Unknown vendor category.', {
         key: input.categoryKey,
@@ -310,8 +313,6 @@ export class VendorOnboardingService implements OnModuleInit {
     if (!captcha.ok) {
       throw new VendorValidationError(captcha.reason ?? 'Captcha verification failed.');
     }
-    const config = categoryConfig(input.categoryKey);
-    if (!config) throw new VendorValidationError('Unknown vendor category.');
     // Bind to the tenant named in the (buyer-issued) registration link — never
     // an arbitrary/first tenant (audit: multi-tenancy self-registration gap).
     const tenant = await this.prisma.tenant.findUnique({
@@ -319,6 +320,10 @@ export class VendorOnboardingService implements OnModuleInit {
     });
     if (!tenant) throw new VendorValidationError('Unknown registration link.');
     return this.prisma.runInTenantContext(tenant.id, async () => {
+      // Inside the tenant context: the categories offered are that tenant's own,
+      // and reading them is an RLS-scoped query.
+      const config = await this.categories.findActive(tenant.id, input.categoryKey);
+      if (!config) throw new VendorValidationError('Unknown vendor category.');
       const created = await this.createVendorShell(tenant.id, {
         legalEntityName: input.legalEntityName,
         name: input.legalEntityName,

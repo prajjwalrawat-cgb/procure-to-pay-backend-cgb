@@ -19,6 +19,8 @@ import {
   CustomFieldUpdateInputSchema,
   OrganisationUpdateInputSchema,
   PERMISSIONS,
+  VendorCategoryCreateInputSchema,
+  VendorCategoryUpdateInputSchema,
   type Branch,
   type BranchInput,
   type CustomFieldCreateInput,
@@ -27,6 +29,10 @@ import {
   type CustomFieldUpdateInput,
   type OrganisationSettings,
   type OrganisationUpdateInput,
+  type VendorCategory,
+  type VendorCategoryCreateInput,
+  type VendorCategoryOption,
+  type VendorCategoryUpdateInput,
 } from '@procureflow/shared';
 
 import type { AuthUser } from '../auth/auth.types';
@@ -38,18 +44,20 @@ import {
 } from '../common/upload/upload-options';
 import { CustomFieldsService } from './custom-fields.service';
 import { SettingsService } from './settings.service';
+import { VendorCategoriesService } from './vendor-categories.service';
 
 /**
- * Organisation settings. Tenant identity, GST registrations and admin-defined
- * document fields are administered here instead of being fixed in code, so the
- * letterhead, place of supply and forms follow whichever organisation is
- * signed in.
+ * Organisation settings. Tenant identity, GST registrations, admin-defined
+ * document fields and the tenant's own vendor categories are administered here
+ * instead of being fixed in code, so the letterhead, place of supply, forms and
+ * classification lists follow whichever organisation is signed in.
  */
 @Controller('settings')
 export class SettingsController {
   constructor(
     private readonly settings: SettingsService,
     private readonly customFields: CustomFieldsService,
+    private readonly vendorCategories: VendorCategoriesService,
   ) {}
 
   @Get('organisation')
@@ -153,6 +161,49 @@ export class SettingsController {
     const parsed = CustomFieldEntitySchema.safeParse(entityType);
     if (!parsed.success) throw new BadRequestException('Unknown entity type');
     return this.customFields.list(user.tenantId, parsed.data as CustomFieldEntity);
+  }
+
+  // ── Vendor categories ────────────────────────────────────────────────────
+
+  /** Every category in the tenant, retired ones included — the admin screen
+   *  needs them to offer "restore". */
+  @Get('vendor-categories')
+  @RequirePermission(PERMISSIONS.SETTINGS_READ)
+  async listVendorCategories(@CurrentUser() user: AuthUser): Promise<VendorCategory[]> {
+    return this.vendorCategories.list(user.tenantId, { includeInactive: true });
+  }
+
+  /**
+   * The categories a dropdown should offer. Open to any signed-in user: a buyer
+   * inviting a vendor, and the vendor themselves in the onboarding wizard, both
+   * need the list without holding settings permissions.
+   */
+  @Get('vendor-categories/options')
+  async vendorCategoryOptions(
+    @CurrentUser() user: AuthUser,
+  ): Promise<VendorCategoryOption[]> {
+    return this.vendorCategories.options(user.tenantId);
+  }
+
+  @Post('vendor-categories')
+  @RequirePermission(PERMISSIONS.SETTINGS_WRITE)
+  async createVendorCategory(
+    @CurrentUser() user: AuthUser,
+    @Body(new ZodValidationPipe(VendorCategoryCreateInputSchema))
+    dto: VendorCategoryCreateInput,
+  ): Promise<VendorCategory> {
+    return this.vendorCategories.create(user.tenantId, dto, user.userId);
+  }
+
+  @Patch('vendor-categories/:id')
+  @RequirePermission(PERMISSIONS.SETTINGS_WRITE)
+  async updateVendorCategory(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(VendorCategoryUpdateInputSchema))
+    dto: VendorCategoryUpdateInput,
+  ): Promise<VendorCategory> {
+    return this.vendorCategories.update(user.tenantId, id, dto, user.userId);
   }
 
   // ── Branding ─────────────────────────────────────────────────────────────

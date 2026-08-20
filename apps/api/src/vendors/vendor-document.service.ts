@@ -3,7 +3,6 @@ import { newId } from '@procureflow/db';
 import {
   ONBOARDING_MANDATORY_DOCUMENTS,
   VENDOR_EVENTS,
-  categoryConfig,
   type VendorDocumentUpload,
 } from '@procureflow/shared';
 
@@ -11,6 +10,7 @@ import { AuditLogService } from '../audit/audit.service';
 import { DomainEventService } from '../common/events/domain-event.service';
 import { NotificationService } from '../approvals/notification.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { VendorCategoriesService } from '../settings/vendor-categories.service';
 
 /**
  * VendorDocumentService (Slice 7 §4). Upload (with ClamAV virus scan — stubbed
@@ -24,6 +24,7 @@ export class VendorDocumentService {
     private readonly audit: AuditLogService,
     private readonly events: DomainEventService,
     private readonly notifications: NotificationService,
+    private readonly categories: VendorCategoriesService,
   ) {}
 
   /**
@@ -137,7 +138,11 @@ export class VendorDocumentService {
             data: { verificationStatus: 'EXPIRED' },
           });
           expired += 1;
-          const mandatory = this.isMandatory(doc.vendor.categoryConfigKey, doc.docType);
+          const mandatory = await this.isMandatory(
+            tenantId,
+            doc.vendor.categoryConfigKey,
+            doc.docType,
+          );
           await this.events.emit(VENDOR_EVENTS.DOCUMENT_EXPIRED, {
             vendorId: doc.vendorId,
             documentId: doc.id,
@@ -178,9 +183,15 @@ export class VendorDocumentService {
    * category document is only ever on file because it was asked for, so letting
    * it lapse still matters even though it no longer blocks submission.
    */
-  private isMandatory(categoryKey: string | null, docType: string): boolean {
+  private async isMandatory(
+    tenantId: string,
+    categoryKey: string | null,
+    docType: string,
+  ): Promise<boolean> {
     if (ONBOARDING_MANDATORY_DOCUMENTS.includes(docType as never)) return true;
-    const config = categoryKey ? categoryConfig(categoryKey) : undefined;
+    const config = categoryKey
+      ? await this.categories.find(tenantId, categoryKey)
+      : undefined;
     return config ? config.requiredDocuments.includes(docType as never) : false;
   }
 

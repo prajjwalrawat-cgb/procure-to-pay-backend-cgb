@@ -19,13 +19,22 @@ export interface VendorCategoryConfig {
   slaHours: number;
 }
 
-const BASE_DOCS: VendorDocumentType[] = ['GST_CERT', 'PAN_CARD', 'CANCELLED_CHEQUE'];
-const BASE_SCREENINGS: ScreeningType[] = [
+/** The statutory minimum, asked of every vendor whatever they supply — also
+ *  the starting point for a category a tenant admin creates themselves. */
+export const DEFAULT_CATEGORY_REQUIRED_DOCUMENTS: VendorDocumentType[] = [
+  'GST_CERT',
+  'PAN_CARD',
+  'CANCELLED_CHEQUE',
+];
+export const DEFAULT_CATEGORY_REQUIRED_SCREENINGS: ScreeningType[] = [
   'GSTIN_STATUS',
   'PAN_STATUS',
   'SANCTIONS_OFAC',
   'CREDIT_BUREAU',
 ];
+
+const BASE_DOCS = DEFAULT_CATEGORY_REQUIRED_DOCUMENTS;
+const BASE_SCREENINGS = DEFAULT_CATEGORY_REQUIRED_SCREENINGS;
 
 export const VENDOR_CATEGORY_CONFIGS: VendorCategoryConfig[] = [
   {

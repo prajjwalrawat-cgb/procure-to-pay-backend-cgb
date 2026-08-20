@@ -8,10 +8,12 @@ import type { MailService } from '../common/mail/mail.service';
 import type { DomainEventService } from '../common/events/domain-event.service';
 import type { StorageService } from '../common/storage/storage.service';
 import type { PrismaService } from '../prisma/prisma.service';
+import type { VendorCategoriesService } from '../settings/vendor-categories.service';
 import type { VendorKycService } from './vendor-kyc.service';
 import type { VendorScorecardService } from './vendor-scorecard.service';
 import type { VendorVerificationService } from './vendor-verification.service';
 import type { ICaptchaProvider } from './verification/captcha.provider';
+import type { IIfscProvider } from './verification/ifsc.provider';
 import type { IPennyDropProvider } from './verification/penny-drop.provider';
 import { DuplicateVendorError, VendorStateError } from './vendor.errors';
 import {
@@ -128,7 +130,13 @@ function makeService(fixture: Fixture = {}): {
     {} as unknown as StorageService,
     { get: vi.fn().mockReturnValue('http://localhost:3000') } as never,
     {} as unknown as IPennyDropProvider,
+    {} as unknown as IIfscProvider,
     {} as unknown as ICaptchaProvider,
+    // Categories are tenant data; the invite only needs the SLA off the one it
+    // resolves, so a stub standing in for "this tenant offers it" is enough.
+    {
+      findActive: vi.fn().mockResolvedValue({ categoryKey: 'RAW_MATERIALS', slaHours: 120 }),
+    } as unknown as VendorCategoriesService,
   );
   return {
     svc,
