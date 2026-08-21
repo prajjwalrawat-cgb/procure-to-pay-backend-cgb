@@ -12,6 +12,20 @@ import { InventoryQueryService } from './inventory-query.service';
 import { InventoryReceiptService } from './inventory-receipt.service';
 import { LocationService } from './location.service';
 import { ProductService } from './product.service';
+import { BoxMovementService } from './box/box-movement.service';
+import { BoxController, ProductLocationController } from './box/box.controller';
+import { BoxService } from './box/box.service';
+import { LocationPathService } from './box/location-path.service';
+import { FefoService } from './scan/fefo.service';
+import { ScanBatchSyncService } from './scan/scan-batch-sync.service';
+import { ScanController } from './scan/scan.controller';
+import { ScanCycleCountService } from './scan/scan-cycle-count.service';
+import { ScanMovementService } from './scan/scan-movement.service';
+import { ScanPickService } from './scan/scan-pick.service';
+import { ScanPutawayService } from './scan/scan-putaway.service';
+import { ScanReceiveService } from './scan/scan-receive.service';
+import { ScanResolveService } from './scan/scan-resolve.service';
+import { ScanTransferService } from './scan/scan-transfer.service';
 
 /**
  * InventoryModule (Slice 12) — the native warehouse inventory module.
@@ -24,7 +38,13 @@ import { ProductService } from './product.service';
  */
 @Module({
   imports: [AuditModule],
-  controllers: [InventoryController, BulkImportsController],
+  controllers: [
+    InventoryController,
+    BulkImportsController,
+    ScanController,
+    BoxController,
+    ProductLocationController,
+  ],
   providers: [
     ProductService,
     LocationService,
@@ -35,6 +55,20 @@ import { ProductService } from './product.service';
     InventoryOrderService,
     BulkImportService,
     BulkImportProcessor,
+    // Slice 13 mobile scanner
+    ScanResolveService,
+    FefoService,
+    ScanMovementService,
+    ScanReceiveService,
+    ScanPutawayService,
+    ScanPickService,
+    ScanCycleCountService,
+    ScanTransferService,
+    ScanBatchSyncService,
+    // Slice 14 physical box tracking
+    LocationPathService,
+    BoxService,
+    BoxMovementService,
   ],
   exports: [InventoryLedgerService, InventoryQueryService, ProductService, LocationService],
 })

@@ -14,6 +14,10 @@ export const STOCK_TXN_TYPE = [
   'CUSTOMER_RETURN_IN',
   'DAMAGE_WRITE_OFF',
   'ADJUSTMENT',
+  // Slice 13 — the two legs of a bin-to-bin transfer. Always posted as a pair
+  // in one transaction, so they net to zero across the warehouse.
+  'TRANSFER_OUT',
+  'TRANSFER_IN',
 ] as const;
 export type StockTxnType = (typeof STOCK_TXN_TYPE)[number];
 
@@ -36,6 +40,8 @@ export const STOCK_TXN_DIRECTION: Record<StockTxnType, 1 | -1> = {
   CUSTOMER_RETURN_IN: 1,
   DAMAGE_WRITE_OFF: -1,
   ADJUSTMENT: 1, // sign carried by the caller's signed qty — see directionFor()
+  TRANSFER_OUT: -1,
+  TRANSFER_IN: 1,
 };
 
 /**
@@ -121,3 +127,32 @@ export function categoryPrefix(category: string): string {
 export function formatProductCode(prefix: string, sequence: number): string {
   return `${prefix}-${String(sequence).padStart(6, '0')}`;
 }
+
+// ══════════════════ Mobile scanner (Slice 13) ══════════════════
+
+/** The five floor operations the PWA scanner supports. */
+export const SCAN_TYPE = ['RECEIVE', 'PUTAWAY', 'PICK', 'CYCLE_COUNT', 'TRANSFER'] as const;
+export type ScanType = (typeof SCAN_TYPE)[number];
+
+/**
+ * How a barcode was matched. Surfaced to the operator so a fuzzy hit reads as
+ * "we think this is it" rather than a silent certainty.
+ */
+export const BARCODE_MATCH_TYPE = ['exact_barcode', 'exact_sku_code', 'fuzzy_gtin'] as const;
+export type BarcodeMatchType = (typeof BARCODE_MATCH_TYPE)[number];
+
+export const CYCLE_COUNT_STATUS = ['IN_PROGRESS', 'PENDING_REVIEW', 'APPROVED'] as const;
+export type CycleCountStatus = (typeof CYCLE_COUNT_STATUS)[number];
+
+export const PICK_LIST_STATUS = ['OPEN', 'IN_PROGRESS', 'PICKED', 'CANCELLED'] as const;
+export type PickListStatus = (typeof PICK_LIST_STATUS)[number];
+
+/** Per-item outcome of an offline batch sync. */
+export const SYNC_ITEM_STATUS = ['success', 'error', 'duplicate'] as const;
+export type SyncItemStatus = (typeof SYNC_ITEM_STATUS)[number];
+
+// ══════════════════ Physical box tracking (Slice 14) ══════════════════
+
+/** Which level of the warehouse hierarchy a Location row represents. */
+export const LOCATION_KIND = ['WAREHOUSE', 'RACK', 'SECTION', 'DOCK', 'OTHER'] as const;
+export type LocationKind = (typeof LOCATION_KIND)[number];

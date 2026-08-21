@@ -92,6 +92,8 @@ export class InventoryReceiptService {
       taxPct: this.decimal(input.taxPct),
       qcStatus: input.qcStatus,
       damageQty: input.damageQty,
+      batchNumber: input.batchNumber ?? null,
+      expiryDate: input.expiryDate ? new Date(input.expiryDate) : null,
       performedById: actorId,
       remark,
       txnDate: input.txnDate ? new Date(input.txnDate) : null,

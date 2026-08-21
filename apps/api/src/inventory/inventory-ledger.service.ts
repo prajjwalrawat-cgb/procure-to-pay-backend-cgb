@@ -38,6 +38,24 @@ export interface LedgerPostInput {
   taxPct?: Prisma.Decimal | null;
   qcStatus?: 'PENDING' | 'OK' | 'REJECTED' | null;
   damageQty?: number | null;
+  /** Slice 13 — supplier batch/lot, captured at receipt and carried for FEFO. */
+  batchNumber?: string | null;
+  /**
+   * Slice 13 — expiry of *this* consignment (not the product-level warranty
+   * date). Never defaulted: a batch-tracked receipt without one is rejected
+   * upstream rather than silently posted with a guessed date.
+   */
+  expiryDate?: Date | null;
+  /**
+   * Slice 14 — the box this movement went into or came out of. Null means the
+   * stock is loose at the location, which is the normal case for most rows.
+   *
+   * Note for callers: `stockAt` and the outward sufficiency check below are
+   * *location*-level and deliberately blind to boxes. Anything moving stock
+   * between a box and the shelf it sits on must run its own box-aware check —
+   * see BoxMovementService.
+   */
+  boxId?: string | null;
 
   issueDept?: 'PHOTOSHOOT' | 'SALES' | 'OTHER' | null;
   issuedToName?: string | null;
@@ -128,6 +146,9 @@ export class InventoryLedgerService {
         taxPct: input.taxPct ?? null,
         qcStatus: input.qcStatus ?? null,
         damageQty: input.damageQty ?? 0,
+        batchNumber: input.batchNumber ?? null,
+        expiryDate: input.expiryDate ?? null,
+        boxId: input.boxId ?? null,
         issueDept: input.issueDept ?? null,
         issuedToName: input.issuedToName ?? null,
         approvedById: input.approvedById ?? null,

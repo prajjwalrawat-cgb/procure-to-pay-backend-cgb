@@ -104,6 +104,15 @@ export const ID_PREFIX = {
   stockLedgerEntry: 'sle',
   importBatch: 'imb',
   importRow: 'imr',
+  // Slice 13 mobile scanner
+  scanEvent: 'scn',
+  cycleCountSession: 'ccs',
+  cycleCountVariance: 'ccv',
+  pickList: 'pkl',
+  pickListLine: 'pll',
+  // Slice 14 physical box tracking
+  box: 'box',
+  boxMove: 'bxm',
   // Slice 11 organisation settings
   customFieldDefinition: 'cfd',
 } as const;

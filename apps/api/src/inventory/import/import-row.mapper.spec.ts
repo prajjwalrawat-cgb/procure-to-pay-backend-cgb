@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   cleaned,
   field,
+  normaliseBarcode,
   mapProductMasterRow,
   mapStockLedgerRow,
   parseBoolOrNull,
@@ -334,5 +335,32 @@ describe('mapProductMasterRow — opening stock semantics', () => {
   it('still rejects a non-numeric stock value', () => {
     const res = mapProductMasterRow({ product_name: 'X', current_stock: 'lots' });
     expect(res.ok).toBe(false);
+  });
+});
+
+describe('normaliseBarcode — spreadsheets mangle long numbers', () => {
+  it('keeps a clean EAN as typed', () => {
+    expect(normaliseBarcode('8901234567890')).toBe('8901234567890');
+  });
+
+  it('recovers a barcode Excel turned into scientific notation', () => {
+    // Excel shows a 13-digit EAN as 8.90123456789E+12 and exports it that way.
+    // Imported literally it would be a value no scanner can ever produce.
+    expect(normaliseBarcode('8.90123456789E+12')).toBe('8901234567890');
+  });
+
+  it('drops the trailing .0 Excel adds to whole numbers', () => {
+    expect(normaliseBarcode('8901234567890.0')).toBe('8901234567890');
+  });
+
+  it('accepts an internal alphanumeric code', () => {
+    expect(normaliseBarcode('UC-000102')).toBe('UC-000102');
+  });
+
+  it('discards junk rather than importing an unscannable value', () => {
+    expect(normaliseBarcode('')).toBeNull();
+    expect(normaliseBarcode('   ')).toBeNull();
+    expect(normaliseBarcode('N/A')).toBeNull();
+    expect(normaliseBarcode('not a barcode!')).toBeNull();
   });
 });

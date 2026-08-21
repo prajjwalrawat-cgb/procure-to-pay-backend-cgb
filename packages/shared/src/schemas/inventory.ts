@@ -5,6 +5,7 @@ import {
   IMPORT_TYPE,
   INVENTORY_QC_STATUS,
   ISSUE_DEPT,
+  LOCATION_KIND,
   STOCK_TXN_TYPE,
 } from '../constants/inventory-status';
 
@@ -17,6 +18,17 @@ const positiveQty = z.number().int().positive('quantity must be greater than zer
 export const ProductCreateInputSchema = z.object({
   name: z.string().min(1).max(200),
   category: z.string().min(1).max(80),
+  /**
+   * Slice 13 — the EAN/UPC printed on the pack. Without one the product cannot
+   * be found by camera at all, only by typing its code, so this is the single
+   * most useful field on the form for a warehouse that scans.
+   */
+  barcode: z.string().max(120).nullish(),
+  /**
+   * Slice 13 — when set, a scanned receipt must carry a batch number and expiry
+   * date, and FEFO picking will draw the oldest batch first.
+   */
+  requiresBatchTracking: z.boolean().default(false),
   colour: z.string().max(80).nullish(),
   imageUrl: z.string().url().max(1000).nullish(),
   unit: z.string().min(1).max(20).default('pcs'),
@@ -55,6 +67,18 @@ export const LocationCreateInputSchema = z.object({
   name: z.string().min(1).max(120),
   rackNo: z.string().max(120).nullish(),
   parentId: z.string().max(60).nullish(),
+  /**
+   * Slice 13 — the label stuck on the shelf, scanned during putaway, transfer
+   * and cycle count. Only leaf locations normally carry one: nobody scans "Main
+   * Warehouse", they scan the section they are standing at.
+   */
+  barcode: z.string().max(120).nullish(),
+  /**
+   * Slice 14 — which level of the hierarchy this row is. Defaults to OTHER so
+   * an existing tenant's free-text locations keep working untouched; set it to
+   * get warehouse → rack → section paths on the scanner.
+   */
+  kind: z.enum(LOCATION_KIND).default('OTHER'),
 });
 export type LocationCreateInput = z.infer<typeof LocationCreateInputSchema>;
 
@@ -96,6 +120,10 @@ export const ReceiptCreateInputSchema = z
     qcStatus: z.enum(INVENTORY_QC_STATUS).default('PENDING'),
     /** Damaged-on-arrival portion of `qty`; never posts to sellable stock. */
     damageQty: z.number().int().min(0).default(0),
+    /** Slice 13 — supplier batch/lot code, required for batch-tracked products. */
+    batchNumber: z.string().max(120).nullish(),
+    /** Slice 13 — this consignment's expiry, the input FEFO allocation reads. */
+    expiryDate: z.string().datetime().nullish(),
   })
   .refine((v) => v.nonPoReceipt || !!v.purchaseOrderId, {
     message:
@@ -324,6 +352,10 @@ export interface ProductListItem {
   name: string;
   category: string;
   colour: string | null;
+  /** Null until someone captures the pack's EAN or prints an internal label. */
+  barcode: string | null;
+  /** When true, a scanned receipt must carry a batch number and expiry. */
+  requiresBatchTracking: boolean;
   imageUrl: string | null;
   unit: string;
   reorderPoint: number | null;
@@ -372,6 +404,8 @@ export interface LocationView {
   rackNo: string | null;
   parentId: string | null;
   parentName: string | null;
+  barcode: string | null;
+  kind: (typeof LOCATION_KIND)[number];
   active: boolean;
   /** Distinct products currently holding stock here. */
   productCount: number;
