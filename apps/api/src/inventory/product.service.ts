@@ -39,6 +39,7 @@ export class ProductService {
     const colour = this.normaliseColour(input.colour);
 
     await this.assertNoDuplicate(input.name, colour);
+    await this.assertBarcodeFree(input.barcode?.trim() || null);
     if (input.itemId) await this.assertItemExists(input.itemId);
 
     const id = newId('product');
@@ -53,6 +54,8 @@ export class ProductService {
           name: input.name.trim(),
           category,
           colour,
+          barcode: input.barcode?.trim() || null,
+          requiresBatchTracking: input.requiresBatchTracking ?? false,
           imageUrl: input.imageUrl ?? null,
           unit: input.unit || 'pcs',
           reorderPoint: input.reorderPoint ?? null,
@@ -90,6 +93,9 @@ export class ProductService {
       await this.assertNoDuplicate(name, colour, productId);
     }
     if (input.itemId) await this.assertItemExists(input.itemId);
+    if (input.barcode !== undefined) {
+      await this.assertBarcodeFree(input.barcode?.trim() || null, productId);
+    }
 
     await this.prisma.client.product.update({
       where: { id: productId },
@@ -99,6 +105,10 @@ export class ProductService {
         // migration backfill value rather than silently clearing the column.
         category: input.category ? this.normaliseCategory(input.category) : undefined,
         colour: input.colour === undefined ? undefined : colour,
+        // Barcodes are usually added *after* the catalogue exists — a tenant
+        // adopting the scanner labels products it already sells.
+        barcode: input.barcode === undefined ? undefined : (input.barcode?.trim() || null),
+        requiresBatchTracking: input.requiresBatchTracking ?? undefined,
         imageUrl: input.imageUrl === undefined ? undefined : (input.imageUrl ?? null),
         unit: input.unit ?? undefined,
         reorderPoint:
@@ -175,6 +185,25 @@ export class ProductService {
   }
 
   // ── internals ──────────────────────────────────────────────────────────────
+
+  /**
+   * A barcode resolves to exactly one product, so the scanner can never be
+   * ambiguous about what was just scanned. Reported as a validation error
+   * naming the other product rather than left to the unique index.
+   */
+  private async assertBarcodeFree(barcode: string | null, exceptId?: string): Promise<void> {
+    if (!barcode) return;
+    const clash = await this.prisma.client.product.findFirst({
+      where: { barcode, ...(exceptId ? { id: { not: exceptId } } : {}) },
+      select: { code: true, name: true },
+    });
+    if (clash) {
+      throw new InventoryValidationError(
+        `Barcode "${barcode}" is already on ${clash.code} — ${clash.name}.`,
+        { barcode },
+      );
+    }
+  }
 
   /** Legacy nulls become "Uncategorized" — category is required going forward. */
   private normaliseCategory(category: string | null | undefined): string {

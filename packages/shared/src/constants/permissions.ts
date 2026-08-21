@@ -171,6 +171,15 @@ export const PERMISSIONS = {
   INVENTORY_ISSUE: 'inventory:issue', // internal issue / return (photoshoot, sales, other)
   INVENTORY_FULFILL: 'inventory:fulfill', // customer order-out + customer return intake
   INVENTORY_ADJUST: 'inventory:adjust', // damage write-off, adjustments, corrections
+  /**
+   * Slice 13 — operating the mobile scanner: putaway, bin transfer, and running
+   * a cycle count. Deliberately NOT a blanket "scanner" grant: scan-receive
+   * still needs `stores:receive_goods`, scan-pick still needs
+   * `inventory:fulfill`, and approving a count variance — the only scanner
+   * action that moves stock without a physical movement behind it — needs
+   * `inventory:adjust`. The device changes; the authority does not.
+   */
+  INVENTORY_SCAN: 'inventory:scan',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -215,6 +224,7 @@ const INVENTORY_OPS: Permission[] = [
   PERMISSIONS.INVENTORY_ISSUE,
   PERMISSIONS.INVENTORY_FULFILL,
   PERMISSIONS.INVENTORY_ADJUST,
+  PERMISSIONS.INVENTORY_SCAN,
 ];
 
 /** Raise + manage own requisitions — Slice 4. */

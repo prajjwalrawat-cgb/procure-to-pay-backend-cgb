@@ -33,6 +33,8 @@
     "seed:slice8": "tsx seed/slice8.ts",
     "seed:slice9": "tsx seed/slice9.ts",
     "seed:slice10a": "tsx seed/slice10a.ts",
+    "seed:slice13": "tsx seed/slice13-scanner.ts",
+    "seed:slice14": "tsx seed/slice14-boxes.ts",
     "seed:load": "tsx seed/load-test.ts",
     "index:audit": "tsx scripts/index-audit.ts",
     "n1:probe": "tsx scripts/n1-probe.ts",

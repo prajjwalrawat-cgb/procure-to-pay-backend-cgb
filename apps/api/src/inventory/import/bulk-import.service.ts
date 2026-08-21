@@ -260,6 +260,11 @@ export class BulkImportService {
         existing.id,
         {
           category: v.category,
+          // Re-uploading the sheet is how a catalogue gets barcoded in bulk, so
+          // a value here updates the product. A blank cell leaves the existing
+          // barcode alone rather than wiping it — a sheet exported before the
+          // barcode column existed must not silently unlabel 600 products.
+          ...(v.barcode ? { barcode: v.barcode } : {}),
           imageUrl: v.imageUrl,
           unit: v.unit,
           reorderPoint: v.reorderPoint,
@@ -278,8 +283,13 @@ export class BulkImportService {
           name: v.name,
           category: v.category,
           colour: v.colour,
+          barcode: v.barcode,
           imageUrl: v.imageUrl,
           unit: v.unit,
+          // Batch tracking stays off on import: it changes what a receipt is
+          // allowed to omit, and that is a per-product decision somebody makes
+          // deliberately, not a default a spreadsheet should set for 600 rows.
+          requiresBatchTracking: false,
           reorderPoint: v.reorderPoint,
           expiryOrWarrantyDate: v.expiryOrWarrantyDate?.toISOString() ?? null,
           remark: v.remark,
@@ -502,6 +512,7 @@ export class BulkImportService {
           category: input.category ?? 'Uncategorized',
           colour: mapped.value.colour,
           unit: 'pcs',
+          requiresBatchTracking: false,
         },
         actorId,
         { importBatchId: batchId },

@@ -10,6 +10,10 @@ const ALIASES: Record<string, string[]> = {
   name: ['name', 'product_name', 'productname', 'product'],
   category: ['category'],
   colour: ['colour', 'color'],
+  // Slice 13 — the pack's printed EAN/UPC. Accepted from the spreadsheet
+  // because capturing barcodes for a catalogue of hundreds is a bulk job:
+  // editing them one product at a time is not a realistic rollout path.
+  barcode: ['barcode', 'bar_code', 'ean', 'upc', 'gtin'],
   imageUrl: ['image_url', 'image_link', 'image'],
   unit: ['unit', 'uom'],
   reorderPoint: ['reorder_point', 'reorder_level', 'min_qty'],
@@ -166,6 +170,32 @@ export function parseDecimalOrNull(value: string): string | null {
  * and Excel serial numbers, which is what an unformatted date cell exports as
  * ("46028" = 2026-01-13).
  */
+/**
+ * Clean a barcode coming out of a spreadsheet.
+ *
+ * Excel treats a 13-digit EAN as a number, so a column of barcodes routinely
+ * arrives as "8.90123E+12" (scientific notation) or "8901234567890.0". Both
+ * would import as a value the scanner can never match, and the failure would
+ * only surface months later at a shelf. Scientific notation is expanded, a
+ * trailing ".0" is dropped, and anything still not a plain code is discarded.
+ */
+export function normaliseBarcode(value: string): string | null {
+  const raw = (value ?? '').trim();
+  if (!raw) return null;
+
+  // "8.9012345678901E+12" → the integer it was before Excel got hold of it.
+  if (/^\d(\.\d+)?[eE][+-]?\d+$/.test(raw)) {
+    const expanded = Number(raw);
+    if (!Number.isFinite(expanded)) return null;
+    return BigInt(Math.round(expanded)).toString();
+  }
+  // "8901234567890.0" → "8901234567890"
+  const trimmed = raw.replace(/\.0+$/, '');
+  // Digits, letters, hyphens: covers EAN/UPC and internal codes alike.
+  if (!/^[A-Za-z0-9-]{4,120}$/.test(trimmed)) return null;
+  return trimmed;
+}
+
 export function parseDateOrNull(value: string): Date | null {
   const v = cleaned(value);
   if (v === '') return null;
@@ -234,6 +264,8 @@ export interface ProductMasterRow {
   name: string;
   category: string;
   colour: string | null;
+  /** The pack's printed EAN/UPC, when the spreadsheet carries one. */
+  barcode: string | null;
   imageUrl: string | null;
   unit: string;
   reorderPoint: number | null;
@@ -304,6 +336,11 @@ export function mapProductMasterRow(
       name,
       category: normaliseCategory(field(raw, 'category')),
       colour: cleaned(field(raw, 'colour')) || null,
+      // Spreadsheets store long barcodes as numbers, which arrive as
+      // "8901234567890" or, worse, "8.90123e+12". Anything that is not a clean
+      // run of digits or a plain alphanumeric code is dropped rather than
+      // imported as a value no scanner will ever produce.
+      barcode: normaliseBarcode(field(raw, 'barcode')),
       imageUrl: cleaned(field(raw, 'imageUrl')) || null,
       unit: cleaned(field(raw, 'unit')) || 'pcs',
       reorderPoint,

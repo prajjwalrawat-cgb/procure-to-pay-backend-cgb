@@ -519,6 +519,16 @@ model Tenant {
   customFieldDefinitions CustomFieldDefinition[]
   importBatches          ImportBatch[]
   importRows             ImportRow[]
+  // Slice 13 mobile scanner
+  scanEvents             ScanEvent[]
+  cycleCountSessions     CycleCountSession[]
+  cycleCountVariances    CycleCountVariance[]
+  // (cycle-count actor ids are plain columns — see User)
+  pickLists              PickList[]
+  pickListLines          PickListLine[]
+  // Slice 14 physical box tracking
+  boxes                  Box[]
+  boxMoves               BoxMove[]
 }
 
 // Per-tenant 3-way match tolerances (Master Context §9 defaults, overridable).
@@ -562,6 +572,9 @@ model User {
   userRoles    UserRole[]
   sessions     Session[]
   requisitions Requisition[] @relation("RequisitionRequester")
+  // Slice 13 mobile scanner. Cycle-count counter/approver ids are plain columns,
+  // following `StockLedgerEntry.performedById` — actor ids are not FKs here.
+  scanEvents   ScanEvent[]
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -3199,6 +3212,8 @@ enum StockTxnType {
   CUSTOMER_RETURN_IN // Return Inventory — customer return intake
   DAMAGE_WRITE_OFF // damage removed from sellable stock
   ADJUSTMENT // opening stock, migration seeding, stock counts, corrections
+  TRANSFER_OUT // Slice 13 — leg 1 of a bin-to-bin move (leaves the source bin)
+  TRANSFER_IN // Slice 13 — leg 2 of a bin-to-bin move (arrives at the destination)
 }
 
 /// Which internal team an INTERNAL_ISSUE went to (source sheets are per-team).
@@ -3227,6 +3242,14 @@ model Product {
   code                     String
   legacyProductId          String?   @map("legacy_product_id")
   legacySku                String?   @map("legacy_sku")
+  /// Slice 13 — EAN/UPC/GTIN printed on the pack, the primary key the mobile
+  /// scanner resolves against. Nullable: the 625 legacy rows carry no barcode,
+  /// and an unbarcoded product is still a perfectly valid warehouse SKU.
+  barcode                  String?
+  /// Slice 13 — when set, a scan-receive MUST carry batch + expiry (FEFO).
+  /// Mirrors `Item.requiresBatch` for products with no procurement bridge; the
+  /// effective flag is the OR of the two, resolved in ScanResolveService.
+  requiresBatchTracking    Boolean   @default(false) @map("requires_batch_tracking")
   name                     String
   /// Required going forward; legacy nulls are backfilled as "Uncategorized"
   /// (601 of 625 source rows have no category).
@@ -3251,8 +3274,14 @@ model Product {
   tenant        Tenant             @relation(fields: [tenantId], references: [id])
   item          Item?              @relation(fields: [itemId], references: [id])
   ledgerEntries StockLedgerEntry[]
+  scanEvents    ScanEvent[]
+  pickListLines PickListLine[]
+  countVariances CycleCountVariance[]
 
   @@unique([tenantId, code])
+  /// A barcode resolves to exactly one product within a tenant. Partial index
+  /// (in the migration SQL) so the many NULL-barcode legacy rows don't collide.
+  @@unique([tenantId, barcode])
   /// Migration matching key from the legacy sheet — verified unique across all
   /// 625 source rows. A partial index in the migration SQL closes the NULL-colour
   /// hole that Postgres would otherwise leave open.
@@ -3260,6 +3289,22 @@ model Product {
   @@index([tenantId])
   @@index([tenantId, category])
   @@index([tenantId, active])
+}
+
+/// Where a location sits in the physical hierarchy (Slice 14). The tree itself
+/// already existed via `Location.parentId`; this only names the levels, so a
+/// query can ask for "the rack this section belongs to" instead of counting
+/// parent hops.
+///
+/// OTHER is the default because the 625 migrated legacy rows are free text
+/// ("Confrance Room-600 & -B2-205"). Classifying them is a data exercise, not
+/// something a migration can infer.
+enum LocationKind {
+  WAREHOUSE
+  RACK
+  SECTION
+  DOCK
+  OTHER
 }
 
 /// Physical storage location. Stock lives in several locations per SKU
@@ -3271,6 +3316,11 @@ model Location {
   name      String
   rackNo    String?  @map("rack_no")
   parentId  String?  @map("parent_id")
+  /// Slice 13 — the label stuck on the shelf/bin, scanned during putaway and
+  /// transfer. A "bin" is simply a leaf Location; no parallel Bin entity exists.
+  barcode   String?
+  /// Slice 14 — which level of the warehouse hierarchy this row represents.
+  kind      LocationKind @default(OTHER)
   active    Boolean  @default(true)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
@@ -3278,8 +3328,16 @@ model Location {
   parent        Location?          @relation("LocationTree", fields: [parentId], references: [id])
   children      Location[]         @relation("LocationTree")
   ledgerEntries StockLedgerEntry[]
+  scanEvents    ScanEvent[]
+  countSessions CycleCountSession[]
+  boxes         Box[]
+  boxMovesFrom  BoxMove[]          @relation("BoxMoveFrom")
+  boxMovesTo    BoxMove[]          @relation("BoxMoveTo")
 
   @@unique([tenantId, name, rackNo])
+  /// Partial-unique in the migration SQL — most locations have no label yet.
+  @@unique([tenantId, barcode])
+  @@index([tenantId, kind])
   @@index([tenantId])
   @@index([parentId])
 }
@@ -3311,6 +3369,25 @@ model StockLedgerEntry {
   taxPct          Decimal?  @map("tax_pct") @db.Decimal(6, 4)
   qcStatus        QcStatus? @map("qc_status")
   damageQty       Int?      @default(0) @map("damage_qty")
+
+  // ── batch / expiry (Slice 13) ────────────────────────────────────────────
+  /// Supplier batch or lot code, captured at receipt. Null for products that
+  /// are not batch-tracked — the overwhelming majority of the legacy rows.
+  batchNumber String?   @map("batch_number")
+  /// Per-receipt expiry. Distinct from `Product.expiryOrWarrantyDate`, which is
+  /// a product-level attribute: FEFO needs the expiry of *this* consignment.
+  /// Never defaulted or inferred — a batch-tracked receipt without one is a 422.
+  expiryDate  DateTime? @map("expiry_date") @db.Timestamptz(6)
+
+  /// Slice 14 — the box this movement went into or came out of, when the stock
+  /// is boxed. Null for loose stock on a shelf, which stays perfectly valid.
+  ///
+  /// This is what makes box contents *derived* rather than stored: contents are
+  /// SUM(qty * direction) over the rows carrying this box id, the same rule
+  /// every other quantity in the module follows. A BoxContent table with its own
+  /// quantity column would be a second source of truth and would drift the first
+  /// time anything wrote to one and not the other.
+  boxId       String?   @map("box_id")
 
   // ── internal issue refs ──────────────────────────────────────────────────
   issueDept           IssueDept? @map("issue_dept")
@@ -3361,10 +3438,19 @@ model StockLedgerEntry {
   issueEntry    StockLedgerEntry?  @relation("IssueReturn", fields: [issueEntryId], references: [id])
   returns       StockLedgerEntry[] @relation("IssueReturn")
   importBatch   ImportBatch?       @relation(fields: [importBatchId], references: [id])
+  scanEvents    ScanEvent[]
+  box           Box?               @relation(fields: [boxId], references: [id])
 
   @@unique([importBatchId, sourceRowRef])
   @@index([tenantId])
   @@index([productId, locationId])
+  /// "What is in this box" — the contents aggregate.
+  @@index([boxId, productId])
+  /// "Where is this product" — the reverse lookup.
+  @@index([productId, boxId])
+  /// FEFO allocation scans this: batches for a product at a location, oldest
+  /// expiry first. Nulls sort last in the allocator, never first.
+  @@index([productId, locationId, expiryDate])
   @@index([txnType, txnDate])
   @@index([tenantId, txnType, txnDate])
   @@index([tenantId, orderId])
@@ -3432,4 +3518,260 @@ model ImportRow {
 
   @@index([batchId, status])
   @@index([tenantId])
+}
+
+// ═══════════════ Mobile Scanner (Slice 13, ADR-037) ═══════════════
+// Scan-driven warehouse operations from a PWA on the floor. Every scan is
+// recorded as a ScanEvent — an audit trail of what the operator physically
+// did — and the stock consequence (if any) is a normal insert into the Slice 12
+// immutable ledger, linked back through `ledgerEntryId`. ScanEvent NEVER
+// carries stock arithmetic of its own: delete every scan row and the on-hand
+// numbers are unchanged.
+
+/// The five floor operations the scanner supports.
+enum ScanType {
+  RECEIVE
+  PUTAWAY
+  PICK
+  CYCLE_COUNT
+  TRANSFER
+}
+
+/// Cycle counts never auto-adjust stock — a variance is a proposal until a
+/// user holding `inventory:adjust` approves it.
+enum CycleCountStatus {
+  IN_PROGRESS
+  PENDING_REVIEW
+  APPROVED
+}
+
+enum PickListStatus {
+  OPEN
+  IN_PROGRESS
+  PICKED
+  CANCELLED
+}
+
+/// One physical scan. Insert-only in practice, but deliberately NOT covered by
+/// an immutability trigger: `syncedAt` flips from null when a queued offline
+/// scan reaches the server, and `ledgerEntryId` is stamped in the same
+/// transaction that writes the ledger row.
+model ScanEvent {
+  id         String   @id
+  tenantId   String   @map("tenant_id") @db.Uuid
+  productId  String   @map("product_id")
+  scanType   ScanType @map("scan_type")
+  /// Exactly what came off the camera, before any GTIN normalisation — the
+  /// only way to diagnose a mis-scan after the fact.
+  barcodeRaw String   @map("barcode_raw")
+  quantity   Int
+  /// Where the scan happened / applies. Optional because a bare resolve-and-go
+  /// scan (a lookup that produced no movement) has no location yet.
+  locationId String?  @map("location_id")
+  /// Raw bin label as scanned, kept alongside the resolved `locationId` for the
+  /// same reason as `barcodeRaw`. Bins are leaf Locations; there is no Bin model.
+  binId      String?  @map("bin_id")
+  deviceId   String   @map("device_id")
+  userId     String   @map("user_id")
+  gpsLat     Float?   @map("gps_lat")
+  gpsLng     Float?   @map("gps_lng")
+  /// The ledger row this scan produced, when it produced one. Null for
+  /// CYCLE_COUNT scans (which never touch the ledger); a TRANSFER links its
+  /// OUT leg here and reaches the IN leg through the ledger pair.
+  ledgerEntryId String? @map("ledger_entry_id")
+  /// Set on CYCLE_COUNT scans — the session this count belongs to.
+  sessionId     String? @map("session_id")
+  /// Slice 14 — the box involved in this scan, when one was scanned.
+  boxId         String? @map("box_id")
+  /// Client-generated idempotency key (UUIDv4). A replayed scan — the offline
+  /// queue retrying after a dropped response — returns the original result
+  /// rather than posting a second ledger row.
+  clientUuid      String    @map("client_uuid")
+  /// When the device recorded the scan, which may be long before it synced.
+  clientTimestamp DateTime? @map("client_timestamp") @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  /// Null while queued on the device; stamped when the server accepts it.
+  syncedAt        DateTime? @map("synced_at") @db.Timestamptz(6)
+
+  tenant      Tenant             @relation(fields: [tenantId], references: [id])
+  product     Product            @relation(fields: [productId], references: [id])
+  location    Location?          @relation(fields: [locationId], references: [id])
+  user        User               @relation(fields: [userId], references: [id])
+  ledgerEntry StockLedgerEntry?  @relation(fields: [ledgerEntryId], references: [id])
+  session     CycleCountSession? @relation(fields: [sessionId], references: [id])
+  box         Box?               @relation(fields: [boxId], references: [id])
+
+  /// Idempotency. Scoped by tenant rather than global: every lookup runs under
+  /// RLS inside one tenant anyway, and a global unique would let one tenant
+  /// collide with another and leak an existence signal.
+  @@unique([tenantId, clientUuid])
+  @@index([tenantId])
+  @@index([productId, createdAt])
+  @@index([deviceId, syncedAt])
+  @@index([sessionId])
+  @@index([boxId])
+}
+
+/// A bin count in progress. Scans accumulate against the session and touch
+/// nothing; `complete` computes variances; `approve` is the only step that
+/// writes to the ledger.
+model CycleCountSession {
+  id           String           @id
+  tenantId     String           @map("tenant_id") @db.Uuid
+  locationId   String           @map("location_id")
+  status       CycleCountStatus @default(IN_PROGRESS)
+  /// Actor ids are plain columns, following `StockLedgerEntry.performedById`.
+  countedById  String           @map("counted_by_id")
+  approvedById String?          @map("approved_by_id")
+  startedAt    DateTime         @default(now()) @map("started_at") @db.Timestamptz(6)
+  completedAt  DateTime?        @map("completed_at") @db.Timestamptz(6)
+  approvedAt   DateTime?        @map("approved_at") @db.Timestamptz(6)
+  notes        String?
+
+  tenant    Tenant               @relation(fields: [tenantId], references: [id])
+  location  Location             @relation(fields: [locationId], references: [id])
+  scans     ScanEvent[]
+  variances CycleCountVariance[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([locationId, startedAt])
+}
+
+/// One product's counted-vs-expected gap within a session. `expectedQty` is
+/// snapshotted from the ledger at completion time so the review shows what the
+/// system believed at the moment of the count, not at the moment of approval.
+model CycleCountVariance {
+  id          String @id
+  tenantId    String @map("tenant_id") @db.Uuid
+  sessionId   String @map("session_id")
+  productId   String @map("product_id")
+  /// Ledger-derived on-hand at this bin when the session was completed.
+  expectedQty Int    @map("expected_qty")
+  /// Sum of the session's CYCLE_COUNT scans for this product.
+  countedQty  Int    @map("counted_qty")
+  /// counted - expected. Positive = found more than the books say.
+  deltaQty    Int    @map("delta_qty")
+  /// The ADJUSTMENT entry created on approval. Null until approved, and null
+  /// forever for a zero-delta line (nothing to post).
+  ledgerEntryId String?  @map("ledger_entry_id")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant  Tenant            @relation(fields: [tenantId], references: [id])
+  session CycleCountSession @relation(fields: [sessionId], references: [id])
+  product Product           @relation(fields: [productId], references: [id])
+
+  @@unique([sessionId, productId])
+  @@index([tenantId])
+}
+
+/// A pick list for one outbound order. Minimal by design: `orderRef` is the
+/// same free-text marketplace reference the ledger already carries on
+/// `StockLedgerEntry.orderId`, so this model adds only the per-line quantities
+/// the scanner needs to render a checklist — not an order subsystem.
+model PickList {
+  id           String         @id
+  tenantId     String         @map("tenant_id") @db.Uuid
+  orderRef     String         @map("order_ref")
+  platform     String?
+  status       PickListStatus @default(OPEN)
+  customerName String?        @map("customer_name")
+  createdById  String         @map("created_by_id")
+  createdAt    DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  completedAt  DateTime?      @map("completed_at") @db.Timestamptz(6)
+
+  tenant Tenant         @relation(fields: [tenantId], references: [id])
+  lines  PickListLine[]
+
+  @@unique([tenantId, orderRef])
+  @@index([tenantId])
+  @@index([tenantId, status])
+}
+
+model PickListLine {
+  id          String @id
+  tenantId    String @map("tenant_id") @db.Uuid
+  pickListId  String @map("pick_list_id")
+  productId   String @map("product_id")
+  qtyRequired Int    @map("qty_required")
+  /// Advanced by scan-pick only, never set directly by a client.
+  qtyPicked   Int    @default(0) @map("qty_picked")
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  pickList PickList @relation(fields: [pickListId], references: [id])
+  product  Product  @relation(fields: [productId], references: [id])
+
+  @@unique([pickListId, productId])
+  @@index([tenantId])
+}
+
+// ═══════════════ Physical box tracking (Slice 14, ADR-038) ═══════════════
+// Warehouse → Rack → Section is the existing Location tree, now labelled by
+// `Location.kind`. A Box is deliberately NOT part of that tree.
+//
+// The distinction that drives the whole design: a warehouse, rack or section is
+// a *fixed place* — a ledger row saying "12 units moved into Section A1" stays
+// true forever. A box is not a place. It travels, and it takes its contents
+// with it. Modelling it as a Location node would mean re-parenting that node on
+// every move, silently rewriting where every historical movement claims to have
+// happened.
+
+/// A physical box, carton or tote — a movable container of stock.
+model Box {
+  id       String @id
+  tenantId String @map("tenant_id") @db.Uuid
+  /// Auto-generated human label, BOX-000123.
+  code     String
+  /// The printed barcode/QR on the box. Required: an unlabelled box cannot be
+  /// scanned, and being scannable is the entire point of this model.
+  barcode  String
+  /// The section it currently sits in. Null means in transit or not yet placed.
+  ///
+  /// A cache, deliberately: the authority is the most recent BoxMove row, and
+  /// this is written in the same transaction as that row. It exists so "list
+  /// the boxes in Section A1" is an indexed lookup rather than a lateral join
+  /// against move history on every page load.
+  locationId  String?  @map("location_id")
+  active      Boolean  @default(true)
+  notes       String?
+  createdById String   @map("created_by_id")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant        Tenant             @relation(fields: [tenantId], references: [id])
+  location      Location?          @relation(fields: [locationId], references: [id])
+  ledgerEntries StockLedgerEntry[]
+  scanEvents    ScanEvent[]
+  moves         BoxMove[]
+
+  @@unique([tenantId, code])
+  @@unique([tenantId, barcode])
+  @@index([tenantId])
+  @@index([locationId])
+}
+
+/// Append-only history of where a box has been.
+///
+/// Needed even though moving a *full* box also writes ledger rows: an empty box
+/// moved from the dock to a rack produces no stock movement at all, and without
+/// this its history would simply be missing.
+model BoxMove {
+  id             String   @id
+  tenantId       String   @map("tenant_id") @db.Uuid
+  boxId          String   @map("box_id")
+  fromLocationId String?  @map("from_location_id")
+  toLocationId   String   @map("to_location_id")
+  /// How many ledger rows the move produced — 0 for an empty box.
+  entriesPosted  Int      @default(0) @map("entries_posted")
+  movedById      String   @map("moved_by_id")
+  movedAt        DateTime @default(now()) @map("moved_at") @db.Timestamptz(6)
+
+  tenant       Tenant    @relation(fields: [tenantId], references: [id])
+  box          Box       @relation(fields: [boxId], references: [id])
+  fromLocation Location? @relation("BoxMoveFrom", fields: [fromLocationId], references: [id])
+  toLocation   Location  @relation("BoxMoveTo", fields: [toLocationId], references: [id])
+
+  @@index([tenantId])
+  @@index([boxId, movedAt])
 }

@@ -54,7 +54,11 @@ DECLARE
     -- Slice 12 inventory (native warehouse module)
     'Product', 'Location', 'StockLedgerEntry', 'ImportBatch', 'ImportRow',
     -- Slice 11 organisation settings
-    'CustomFieldDefinition'
+    'CustomFieldDefinition',
+    -- Slice 13 mobile scanner
+    'ScanEvent', 'CycleCountSession', 'CycleCountVariance', 'PickList', 'PickListLine',
+    -- Slice 14 physical box tracking
+    'Box', 'BoxMove'
   ];
 BEGIN
   FOREACH t IN ARRAY tenanted_tables LOOP

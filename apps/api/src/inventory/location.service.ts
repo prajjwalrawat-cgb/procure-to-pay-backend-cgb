@@ -51,6 +51,8 @@ export class LocationService {
         rackNo: r.rackNo,
         parentId: r.parentId,
         parentName: r.parent?.name ?? null,
+        barcode: r.barcode,
+        kind: r.kind,
         active: r.active,
         productCount: Number(t?.products ?? 0),
         totalQty: Number(t?.qty ?? 0),
@@ -64,6 +66,7 @@ export class LocationService {
     const rackNo = input.rackNo?.trim() || null;
     if (input.parentId) await this.require(input.parentId);
     await this.assertNoDuplicate(name, rackNo);
+    await this.assertBarcodeFree(input.barcode?.trim() || null);
 
     const id = newId('location');
     await this.prisma.client.location.create({
@@ -73,6 +76,8 @@ export class LocationService {
         name,
         rackNo,
         parentId: input.parentId ?? null,
+        barcode: input.barcode?.trim() || null,
+        kind: input.kind ?? 'OTHER',
       },
     });
     await this.audit.record({
@@ -80,7 +85,7 @@ export class LocationService {
       entityType: 'Location',
       entityId: id,
       actorId,
-      after: { name, rackNo },
+      after: { name, rackNo, barcode: input.barcode?.trim() || null, kind: input.kind ?? 'OTHER' },
     });
     return { id };
   }
@@ -104,6 +109,9 @@ export class LocationService {
       await this.require(input.parentId);
       await this.assertNoCycle(locationId, input.parentId);
     }
+    if (input.barcode !== undefined) {
+      await this.assertBarcodeFree(input.barcode?.trim() || null, locationId);
+    }
 
     await this.prisma.client.location.update({
       where: { id: locationId },
@@ -111,6 +119,11 @@ export class LocationService {
         name: input.name?.trim() ?? undefined,
         rackNo: input.rackNo === undefined ? undefined : rackNo,
         parentId: input.parentId === undefined ? undefined : (input.parentId ?? null),
+        // Labelling an existing shelf is the common case: a tenant adopting the
+        // scanner walks the racks sticking barcodes on locations that already
+        // hold stock, so these must be editable, not create-only.
+        barcode: input.barcode === undefined ? undefined : (input.barcode?.trim() || null),
+        kind: input.kind ?? undefined,
         active: input.active ?? undefined,
       },
     });
@@ -198,6 +211,25 @@ export class LocationService {
   }
 
   // ── internals ──────────────────────────────────────────────────────────────
+
+  /**
+   * A shelf label points at exactly one location. Caught here rather than left
+   * to the unique index, so a warehouse re-using a printed label gets told
+   * which location already has it instead of a 500.
+   */
+  private async assertBarcodeFree(barcode: string | null, exceptId?: string): Promise<void> {
+    if (!barcode) return;
+    const clash = await this.prisma.client.location.findFirst({
+      where: { barcode, ...(exceptId ? { id: { not: exceptId } } : {}) },
+      select: { name: true },
+    });
+    if (clash) {
+      throw new InventoryValidationError(
+        `Barcode "${barcode}" is already on location "${clash.name}".`,
+        { barcode },
+      );
+    }
+  }
 
   private async assertNoDuplicate(
     name: string,

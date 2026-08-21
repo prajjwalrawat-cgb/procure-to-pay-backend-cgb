@@ -25,6 +25,8 @@ export * from './schemas/grn';
 export * from './schemas/rma';
 export * from './schemas/stock';
 export * from './schemas/inventory';
+export * from './schemas/scan';
+export * from './schemas/box';
 export * from './schemas/sourcing';
 export * from './schemas/sourcing-responses';
 export * from './schemas/vendor-category';
