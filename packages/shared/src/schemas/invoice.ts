@@ -250,6 +250,25 @@ export interface VendorPoOption {
     hsnCode: string | null;
     uom: string;
     qtyOrdered: string;
+    /** Accepted on posted goods receipts against this line. */
+    qtyReceived: string;
+    /**
+     * Already billed by other live invoices — summed from their lines, the same
+     * way the matcher does it, because `PurchaseOrderLine.qtyInvoiced` is read
+     * in three places and written by nothing.
+     */
+    qtyInvoiced: string;
+    /**
+     * What the supplier can still bill without tripping QTY_VARIANCE: received
+     * where anything has been received, else ordered, less what is already
+     * billed. Clamped at zero.
+     *
+     * The submit form seeds the quantity from this rather than from
+     * `qtyOrdered`. Seeding the full order on a part-billed PO hands the
+     * supplier a number the matcher is guaranteed to reject — the form would be
+     * walking them into an exception it had the data to prevent.
+     */
+    qtyBillable: string;
     unitPrice: string;
     /** Fraction, e.g. "0.05" for 5% — the rate the PO was raised at. */
     taxRate: string;

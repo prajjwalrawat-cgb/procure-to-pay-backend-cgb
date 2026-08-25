@@ -38,6 +38,10 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends openssl ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
+# pnpm is needed at RUNTIME too, not just to build: the entrypoint runs the
+# db package's migrate:deploy script before the API starts.
+RUN corepack enable && corepack prepare pnpm@9.1.0 --activate
+
 ENV NODE_ENV=production
 WORKDIR /app
 
@@ -46,6 +50,12 @@ WORKDIR /app
 # with `pnpm deploy --prod` if image size becomes a concern.
 COPY --from=build /app ./
 
-# Railway injects $PORT; main.ts binds it (falls back to API_PORT locally).
+# The host injects $PORT; main.ts binds it (falls back to API_PORT locally).
+# The entrypoint applies pending migrations, then execs the API. Booting
+# straight into the server would leave a deploy running new code against an
+# old schema — see docker-entrypoint.sh for why that fails silently.
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 EXPOSE 3001
-CMD ["node", "apps/api/dist/main.js"]
+CMD ["/usr/local/bin/docker-entrypoint.sh"]
