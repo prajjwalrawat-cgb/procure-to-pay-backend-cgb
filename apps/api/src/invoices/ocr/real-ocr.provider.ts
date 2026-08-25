@@ -17,8 +17,18 @@ interface OcrApiResponse {
     unit_price?: string | null;
     tax_rate?: string | null;
   }[];
-  /** Grand total printed on the document, incl. tax. */
-  grand_total?: string | null;
+  /**
+   * Grand total printed on the document, incl. tax.
+   *
+   * Named `total_amount` because that is what the service actually returns —
+   * it maps Azure Document Intelligence's `InvoiceTotal` (and the LLM path's
+   * `InvoiceAmount`) straight through. Both are the printed grand total.
+   *
+   * Its default is 0.0 rather than null, so "nothing was read" arrives as zero;
+   * `positiveAmount` below rejects that, and the matcher then skips the check
+   * rather than comparing the lines against nothing.
+   */
+  total_amount?: number | string | null;
   confidence?: number;
 }
 
@@ -94,7 +104,9 @@ export class RealOcrProvider implements IOcrProvider {
       const n = Number(v);
       return v != null && v !== '' && Number.isFinite(n) ? String(n) : fallback;
     };
-    const positiveAmount = (v: string | null | undefined): string | undefined => {
+    const positiveAmount = (
+      v: number | string | null | undefined,
+    ): string | undefined => {
       const n = Number(v);
       return v != null && v !== '' && Number.isFinite(n) && n > 0 ? String(n) : undefined;
     };
@@ -114,7 +126,7 @@ export class RealOcrProvider implements IOcrProvider {
       // matcher skips the check and the invoice reads as unverified. Coercing
       // it to the line sum here would manufacture the very agreement the check
       // exists to test for.
-      declaredTotal: positiveAmount(body.grand_total),
+      declaredTotal: positiveAmount(body.total_amount),
       confidence: Math.max(0, Math.min(1, body.confidence ?? 0)),
     };
   }
