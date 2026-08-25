@@ -191,12 +191,29 @@ function checkQty(
     : new Decimal(poLine.qtyOrdered);
   const alreadyInvoiced = new Decimal(poLine.qtyAlreadyInvoiced ?? '0');
   const basis = Decimal.max(received.minus(alreadyInvoiced), new Decimal(0));
-  const diff = invQty.minus(basis).abs();
+
+  /*
+   * One-sided: only billing MORE than remains is a finding.
+   *
+   * The comparison used to be symmetric, which made sense when the basis was
+   * the whole received quantity — billing a different amount than was received
+   * was worth a look either way. It stopped making sense the moment the basis
+   * became what is still UNBILLED, because then billing less than the remainder
+   * is just a partial invoice, and a supplier is entitled to send several. Under
+   * the symmetric test the first invoice on any part-billed order flagged: 200
+   * against 1000 remaining reads as an 800 variance, which is not a variance at
+   * all, it is 800 still to come.
+   *
+   * Under-billing is also not a risk worth an exception. The buyer is charged
+   * less than they could have been; the balance stays available on the line and
+   * shows up in the billed/remaining figures on the invoice and the PO.
+   */
+  const over = invQty.minus(basis);
   const tolerance = Decimal.max(
     basis.times(t.qtyVariancePct),
     new Decimal(t.qtyVarianceAbs),
   );
-  if (diff.greaterThan(tolerance)) {
+  if (over.greaterThan(tolerance)) {
     const invUnit = compare.unitPrice;
     const expected = basis.times(invUnit);
     const actual = invQty.times(invUnit);

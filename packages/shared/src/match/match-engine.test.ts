@@ -680,6 +680,111 @@ describe('runMatch — 3-way match engine', () => {
     });
   });
 
+  describe('partial billing', () => {
+    // The case that reached production: no test covered billing LESS than the
+    // basis, so a symmetric comparison flagged every partial invoice and none
+    // of the 47 tests noticed.
+    const po1000 = () =>
+      po([{ id: 'p1', itemDesc: 'Thermo', qtyOrdered: '1000', unitPrice: '450' }]);
+
+    it('accepts a first partial invoice against an untouched order', () => {
+      const result = runMatch({
+        tolerances: TOL,
+        po: po1000(),
+        grn: null,
+        invoice: inv([
+          { poLineId: 'p1', itemDesc: 'Thermo', qty: '200', unitPrice: '450' },
+        ]),
+      });
+      // GRN_MISSING is expected here; a quantity variance is not.
+      expect(result.exceptions.map((e) => e.type)).toEqual(['GRN_MISSING']);
+    });
+
+    it('accepts a second partial invoice on a part-billed line', () => {
+      const result = runMatch({
+        tolerances: TOL,
+        po: po([
+          {
+            id: 'p1',
+            itemDesc: 'Thermo',
+            qtyOrdered: '1000',
+            unitPrice: '450',
+            qtyAlreadyInvoiced: '200',
+          },
+        ]),
+        grn: null,
+        invoice: inv([
+          { poLineId: 'p1', itemDesc: 'Thermo', qty: '200', unitPrice: '450' },
+        ]),
+      });
+      expect(result.exceptions.map((e) => e.type)).toEqual(['GRN_MISSING']);
+    });
+
+    it('accepts an invoice for exactly what remains', () => {
+      const result = runMatch({
+        tolerances: TOL,
+        po: po([
+          {
+            id: 'p1',
+            qtyOrdered: '1000',
+            unitPrice: '450',
+            qtyAlreadyInvoiced: '600',
+          },
+        ]),
+        grn: grn([{ poLineId: 'p1', qtyAccepted: '1000' }]),
+        invoice: inv([{ poLineId: 'p1', qty: '400', unitPrice: '450' }]),
+      });
+      expect(result.exceptions).toEqual([]);
+    });
+
+    it('still catches billing past what remains', () => {
+      const result = runMatch({
+        tolerances: TOL,
+        po: po([
+          {
+            id: 'p1',
+            qtyOrdered: '1000',
+            unitPrice: '450',
+            qtyAlreadyInvoiced: '900',
+          },
+        ]),
+        grn: grn([{ poLineId: 'p1', qtyAccepted: '1000' }]),
+        invoice: inv([{ poLineId: 'p1', qty: '250', unitPrice: '450' }]),
+      });
+      expect(result.exceptions.map((e) => e.type)).toEqual(['QTY_VARIANCE']);
+      expect(result.exceptions[0].details).toContain('exceeds');
+    });
+
+    it('still catches billing a fully-consumed line', () => {
+      const result = runMatch({
+        tolerances: TOL,
+        po: po([
+          {
+            id: 'p1',
+            qtyOrdered: '100',
+            unitPrice: '450',
+            qtyAlreadyInvoiced: '100',
+          },
+        ]),
+        grn: grn([{ poLineId: 'p1', qtyAccepted: '100' }]),
+        invoice: inv([{ poLineId: 'p1', qty: '100', unitPrice: '450' }]),
+      });
+      expect(result.exceptions.map((e) => e.type)).toEqual(['QTY_VARIANCE']);
+    });
+
+    it('accepts billing less than was received', () => {
+      // Under-billing costs the buyer nothing and the balance stays visible on
+      // the line. Not worth an exception someone has to clear.
+      const result = runMatch({
+        tolerances: TOL,
+        po: po([{ id: 'p1', qtyOrdered: '100', unitPrice: '450' }]),
+        grn: grn([{ poLineId: 'p1', qtyAccepted: '100' }]),
+        invoice: inv([{ poLineId: 'p1', qty: '40', unitPrice: '450' }]),
+      });
+      expect(result.exceptions).toEqual([]);
+    });
+  });
+
   it('a clean invoice still matches with every new check wired in', () => {
     const result = runMatch({
       tolerances: TOL,
