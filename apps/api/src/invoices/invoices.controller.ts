@@ -38,7 +38,11 @@ import { newId } from '@procureflow/db';
 
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser, RequirePermission } from '../auth/decorators';
-import { INVOICE_READ_SCOPES, invoiceScope } from './invoice-scope';
+import {
+  INVOICE_OPERATE_SCOPES,
+  INVOICE_READ_SCOPES,
+  invoiceScope,
+} from './invoice-scope';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { StorageService } from '../common/storage/storage.service';
 import { InvoiceQueryService } from './invoice-query.service';
@@ -122,7 +126,7 @@ export class InvoicesController {
   }
 
   @Post(':id/assign')
-  @RequirePermission(PERMISSIONS.INVOICE_RESOLVE_EXCEPTION)
+  @RequirePermission(INVOICE_OPERATE_SCOPES)
   async assign(
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,
@@ -134,7 +138,7 @@ export class InvoicesController {
   }
 
   @Post(':id/hold')
-  @RequirePermission(PERMISSIONS.INVOICE_RESOLVE_EXCEPTION)
+  @RequirePermission(INVOICE_OPERATE_SCOPES)
   async hold(
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,
@@ -146,7 +150,7 @@ export class InvoicesController {
   }
 
   @Post(':id/comments')
-  @RequirePermission(PERMISSIONS.INVOICE_RESOLVE_EXCEPTION)
+  @RequirePermission(INVOICE_OPERATE_SCOPES)
   async comment(
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,
@@ -192,10 +196,7 @@ export class InvoicesController {
    * the one harmless thing that would free it.
    */
   @Post(':id/ocr/retry')
-  @RequirePermission([
-    PERMISSIONS.INVOICE_INTAKE_MANAGE,
-    PERMISSIONS.INVOICE_RESOLVE_EXCEPTION,
-  ])
+  @RequirePermission(INVOICE_OPERATE_SCOPES)
   async retryOcr(
     @Param('id') id: string,
     @CurrentUser() user: AuthUser,
@@ -204,7 +205,7 @@ export class InvoicesController {
   }
 
   @Post(':id/match/run')
-  @RequirePermission(PERMISSIONS.INVOICE_RESOLVE_EXCEPTION)
+  @RequirePermission(INVOICE_OPERATE_SCOPES)
   async runMatch(
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,

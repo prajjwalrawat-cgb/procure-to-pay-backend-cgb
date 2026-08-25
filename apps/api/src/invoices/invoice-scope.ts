@@ -19,6 +19,31 @@ export const INVOICE_READ_SCOPES = [
   PERMISSIONS.INVOICE_READ_TEAM,
 ];
 
+/**
+ * Working an invoice without deciding anything about it.
+ *
+ * Six routes were gated on `invoice:resolve_exception`, which is not one
+ * permission's worth of authority. That permission is what lets somebody
+ * override a HIGH match exception — accept a rate variance, wave through a
+ * missing goods receipt — and a tenant admin deliberately does not hold it:
+ * administering the system and approving invoices that failed matching are
+ * separate duties.
+ *
+ * But leaving a comment, assigning an owner, putting an invoice on hold and
+ * re-running the match are none of those things. They inform, organise, protect
+ * or recompute; not one of them can move money or let money move. Gating them
+ * on override authority meant an admin could read every invoice in the tenant
+ * and not write a note on one.
+ *
+ * The line: anything that can let a payment proceed keeps the stricter
+ * permission — resolving an exception, and routing for approval. Everything
+ * else accepts either.
+ */
+export const INVOICE_OPERATE_SCOPES = [
+  PERMISSIONS.INVOICE_INTAKE_MANAGE,
+  PERMISSIONS.INVOICE_RESOLVE_EXCEPTION,
+];
+
 /** A caller's read scope. `null` means the whole tenant — no narrowing at all. */
 export interface InvoiceScope {
   userId: string;
