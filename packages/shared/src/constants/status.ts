@@ -247,6 +247,16 @@ export const EXCEPTION_TYPE = [
   'DUPLICATE',
   'GSTIN_INACTIVE',
   'GSTR2B_MISMATCH',
+  // Slice 15 — controls that were named in the enum's spirit but never checked.
+  // Until these existed a document could disagree with its PO on unit of
+  // measure, predate the order it bills against, bill a cancelled PO, or carry
+  // a printed total that disagreed with its own line items, and the matcher
+  // returned MATCHED.
+  'UOM_MISMATCH',
+  'DATE_SEQUENCE',
+  'PO_NOT_OPEN',
+  'AMOUNT_MISMATCH',
+  'VENDOR_BLOCKED',
 ] as const;
 export type ExceptionType = (typeof EXCEPTION_TYPE)[number];
 

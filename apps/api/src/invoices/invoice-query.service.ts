@@ -381,7 +381,20 @@ export class InvoiceQueryService {
         irn: inv.irn,
         ewaybillNo: inv.ewaybillNo,
         gstr2bStatus: inv.gstr2bStatus,
-        gstinStatus: 'ACTIVE', // stub until Slice 10
+        /**
+         * Never checked, and now says so.
+         *
+         * This was hardcoded to 'ACTIVE', which rendered a green ACTIVE pill on
+         * every invoice in the system — including vendors whose registration had
+         * lapsed or been suspended. Nothing anywhere writes a GSTIN_INACTIVE
+         * exception either, so the reassuring pill was the only signal a
+         * reviewer got, and it was a literal.
+         *
+         * A real answer needs a GSTN lookup at match time through the GSP, which
+         * is still on the sandbox credential. Until that is live this reports
+         * NOT_CHECKED — which renders warn, not success.
+         */
+        gstinStatus: 'NOT_CHECKED',
       },
       attachments,
       comments: inv.comments.map((c) => ({

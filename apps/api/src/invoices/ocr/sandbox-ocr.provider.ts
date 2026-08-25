@@ -10,6 +10,10 @@ import type { IOcrProvider, OcrExtraction } from './ocr.provider';
  *   • name contains 'ocrfail'  → throws (permanent provider failure → OCR_FAILED)
  *   • name contains 'lowconf' / 'blurry' → confidence 0.55 (→ manual review)
  *   • name contains 'patel'    → high-confidence canned invoice data
+ *   • name contains 'badtotal' → a printed total that disagrees with the lines,
+ *     as if a line item had been dropped (→ AMOUNT_MISMATCH)
+ *   • name contains 'nototal'  → no printed total at all (→ check skipped, and
+ *     the invoice reports as unverified rather than clean)
  *   • otherwise                → a generic high-confidence single-line extraction
  * Swapping in the real provider is a config change (`OCR_API_URL`), not a code one.
  */
@@ -23,6 +27,22 @@ export class SandboxOcrProvider implements IOcrProvider {
     }
 
     const lowConf = name.includes('lowconf') || name.includes('blurry');
+
+    /**
+     * The total the simulated document claims to print. Faithful by default —
+     * a simulator that always disagreed with itself would make the check look
+     * broken — with two named branches so both failure modes are demonstrable:
+     * a total that contradicts the lines, and no total at all.
+     */
+    const declared = (lineSum: string): string | undefined => {
+      if (name.includes('nototal')) return undefined;
+      if (name.includes('badtotal')) {
+        // As if one line had been dropped from the extraction: the document
+        // foots higher than the lines we managed to read.
+        return (Number(lineSum) + 47_200).toFixed(2);
+      }
+      return lineSum;
+    };
 
     if (name.includes('patel')) {
       return {
@@ -51,6 +71,8 @@ export class SandboxOcrProvider implements IOcrProvider {
             taxRate: '0.18',
           },
         ],
+        // (8×18900 + 2×11200 + 8400) × 1.18
+        declaredTotal: declared('214760.00'),
         confidence: lowConf ? 0.55 : 0.96,
       };
     }
@@ -66,6 +88,8 @@ export class SandboxOcrProvider implements IOcrProvider {
           taxRate: '0.18',
         },
       ],
+      // 10000 × 1.18
+      declaredTotal: declared('11800.00'),
       confidence: lowConf ? 0.52 : 0.88,
     };
   }

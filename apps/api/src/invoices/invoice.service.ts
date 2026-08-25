@@ -254,6 +254,12 @@ export class InvoiceService {
         data: {
           status: belowFloor ? 'OCR_LOW_CONFIDENCE' : 'OCR_DONE',
           ocrConfidence: new Prisma.Decimal(extraction.confidence.toFixed(4)),
+          // Stored verbatim, never derived. Left null when the provider gave no
+          // total, so the matcher can tell "the document says the same thing"
+          // apart from "we never read what the document says".
+          ...(extraction.declaredTotal
+            ? { ocrDeclaredTotal: new Prisma.Decimal(extraction.declaredTotal) }
+            : {}),
           ...(extraction.irn ? { irn: extraction.irn } : {}),
           ...(extraction.ewaybillNo ? { ewaybillNo: extraction.ewaybillNo } : {}),
         },
@@ -456,9 +462,7 @@ export class InvoiceService {
     vendorGstin: string | null,
     lines: Array<Pick<InvoiceLineInput, 'qty' | 'unitPrice' | 'taxRate'>>,
   ): Promise<Totals> {
-    const plant = await this.prisma.client.plant.findFirst(
-      defaultPlantQuery(tenantId),
-    );
+    const plant = await this.prisma.client.plant.findFirst(defaultPlantQuery(tenantId));
     const tenantState = plant?.stateCode ?? null;
     const vendorState = vendorGstin ? vendorGstin.slice(0, 2) : null;
     const taxKind: Totals['taxKind'] =

@@ -17,6 +17,8 @@ interface OcrApiResponse {
     unit_price?: string | null;
     tax_rate?: string | null;
   }[];
+  /** Grand total printed on the document, incl. tax. */
+  grand_total?: string | null;
   confidence?: number;
 }
 
@@ -92,6 +94,10 @@ export class RealOcrProvider implements IOcrProvider {
       const n = Number(v);
       return v != null && v !== '' && Number.isFinite(n) ? String(n) : fallback;
     };
+    const positiveAmount = (v: string | null | undefined): string | undefined => {
+      const n = Number(v);
+      return v != null && v !== '' && Number.isFinite(n) && n > 0 ? String(n) : undefined;
+    };
     return {
       vendorInvoiceRef: body.vendor_invoice_ref,
       invoiceDate: body.invoice_date,
@@ -104,6 +110,11 @@ export class RealOcrProvider implements IOcrProvider {
         unitPrice: num(l.unit_price, '0'),
         taxRate: num(l.tax_rate, '0'),
       })),
+      // No fallback: an absent or unusable total must stay absent so the
+      // matcher skips the check and the invoice reads as unverified. Coercing
+      // it to the line sum here would manufacture the very agreement the check
+      // exists to test for.
+      declaredTotal: positiveAmount(body.grand_total),
       confidence: Math.max(0, Math.min(1, body.confidence ?? 0)),
     };
   }

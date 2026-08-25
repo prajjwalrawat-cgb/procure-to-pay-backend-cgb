@@ -2,6 +2,8 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, newId } from '@procureflow/db';
 import Decimal from 'decimal.js';
 import {
+  hasConversion,
+  convertQty,
   runMatch,
   type ExceptionResolutionAction,
   type MatchInput,
@@ -16,6 +18,8 @@ const DEFAULT_TOLERANCES: MatchInput['tolerances'] = {
   qtyVariancePct: '0.02',
   qtyVarianceAbs: '1',
   taxExact: true,
+  amountRoundingAbs: '1',
+  dateGraceDays: '1',
 };
 
 /** Orchestrates the pure match engine against persisted PO/GRN/invoice data. */
@@ -32,8 +36,14 @@ export class MatchService {
       where: { id: invoiceId },
       include: {
         lines: true,
-        po: { include: { lines: true, grns: { include: { lines: true } } } },
+        po: {
+          include: {
+            lines: { include: { item: { include: { uomConversions: true } } } },
+            grns: { include: { lines: true } },
+          },
+        },
         exceptions: true,
+        vendor: { select: { lifecycleStatus: true } },
       },
     });
     if (!invoice) throw new NotFoundException('Invoice not found');
@@ -47,6 +57,9 @@ export class MatchService {
           qtyVariancePct: config.qtyVariancePct.toString(),
           qtyVarianceAbs: config.qtyVarianceAbs.toString(),
           taxExact: config.taxExact,
+          // Not yet tenant-configurable; the engine defaults apply.
+          amountRoundingAbs: DEFAULT_TOLERANCES.amountRoundingAbs,
+          dateGraceDays: DEFAULT_TOLERANCES.dateGraceDays,
         }
       : DEFAULT_TOLERANCES;
 
@@ -85,12 +98,24 @@ export class MatchService {
       );
     }
 
+    const poLineById = new Map((invoice.po?.lines ?? []).map((l) => [l.id, l]));
+
     const grnLines = invoice.po?.grns.flatMap((g) => g.lines) ?? [];
+    // Earliest receipt on the order, not the latest: on a part-delivered PO an
+    // invoice legitimately predates later receipts, so only predating the first
+    // one means nothing had arrived when it was raised.
+    const firstReceivedAt = (invoice.po?.grns ?? [])
+      .map((g) => g.receivedAt)
+      .reduce<Date | null>((min, d) => (min === null || d < min ? d : min), null);
+
     const input: MatchInput = {
       tolerances,
       isDuplicate: duplicates > 0,
+      vendor: { lifecycleStatus: invoice.vendor.lifecycleStatus },
       po: invoice.po
         ? {
+            status: invoice.po.status,
+            issuedAt: invoice.po.issuedAt?.toISOString() ?? null,
             allowFreightLines:
               (invoice.po.termsSnapshot as { allow_freight_lines?: boolean } | null)
                 ?.allow_freight_lines === true,
@@ -102,13 +127,16 @@ export class MatchService {
               qtyOrdered: l.qtyOrdered.toString(),
               unitPrice: l.unitPrice.toString(),
               taxRate: l.taxRate.toString(),
-              qtyAlreadyInvoiced: (invoicedByPoLine.get(l.id) ?? new Decimal(0)).toString(),
+              qtyAlreadyInvoiced: (
+                invoicedByPoLine.get(l.id) ?? new Decimal(0)
+              ).toString(),
             })),
           }
         : null,
       grn:
         invoice.po && grnLines.length > 0
           ? {
+              firstReceivedAt: firstReceivedAt?.toISOString() ?? null,
               lines: grnLines.map((l) => ({
                 poLineId: l.poLineId,
                 qtyAccepted: l.qtyAccepted.toString(),
@@ -117,6 +145,11 @@ export class MatchService {
             }
           : null,
       invoice: {
+        invoiceDate: invoice.invoiceDate.toISOString(),
+        // The total printed on the document, captured by OCR — NOT the stored
+        // grossAmount, which is computed from these same lines and so agrees
+        // with them whatever they say. Null when the provider gave no total.
+        declaredTotal: invoice.ocrDeclaredTotal?.toString() ?? null,
         lines: invoice.lines.map((l) => ({
           id: l.id,
           lineNo: l.lineNo,
@@ -126,6 +159,7 @@ export class MatchService {
           unitPrice: l.unitPrice.toString(),
           taxRate: l.taxRate.toString(),
           poLineId: l.poLineId,
+          qtyInPoUom: qtyInPoUom(l, poLineById.get(l.poLineId ?? '')),
         })),
       },
     };
@@ -256,6 +290,48 @@ export class MatchService {
 
     // Re-run match; the resolved exception is now suppressed.
     await this.runFor(invoiceId, actorId);
+  }
+}
+
+type PoLineWithItem = {
+  uom: string;
+  item: {
+    uomConversions: { fromUom: string; toUom: string; factor: Prisma.Decimal }[];
+  } | null;
+};
+
+/**
+ * The invoice quantity restated in the PO line's unit, or null when the units
+ * already agree or nothing can bridge them.
+ *
+ * Mirrors what GRN does for a receipt booked in a different unit
+ * (`GrnLine.uomConversionFactor`): the item's own conversion edges decide, and
+ * the engine is handed the converted number rather than doing lookups itself.
+ * Null is not "no problem" — the engine reads it as "these quantities are not
+ * comparable" and raises UOM_MISMATCH.
+ *
+ * Only lines with an explicit `poLineId` can be converted. A line the engine
+ * matches by item description is unknown here, so one billed in a different
+ * unit is reported rather than converted. That fails closed — a human looks at
+ * it — which is the right direction for a line we could not identify anyway.
+ */
+function qtyInPoUom(
+  line: { uom: string; qty: Prisma.Decimal },
+  poLine: PoLineWithItem | undefined,
+): string | null {
+  if (!poLine) return null;
+  const conversions = (poLine.item?.uomConversions ?? []).map((c) => ({
+    fromUom: c.fromUom,
+    toUom: c.toUom,
+    factor: c.factor.toString(),
+  }));
+  if (!hasConversion(line.uom, poLine.uom, conversions)) return null;
+  try {
+    return convertQty(line.qty.toString(), line.uom, poLine.uom, conversions);
+  } catch {
+    // hasConversion already cleared the path; treat any residual failure as
+    // "cannot reconcile" rather than letting it abort the whole match run.
+    return null;
   }
 }
 
