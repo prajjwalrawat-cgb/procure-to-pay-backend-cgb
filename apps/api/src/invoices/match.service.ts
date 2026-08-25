@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, newId } from '@procureflow/db';
+import Decimal from 'decimal.js';
 import {
   runMatch,
   type ExceptionResolutionAction,
@@ -57,6 +58,33 @@ export class MatchService {
       },
     });
 
+    /**
+     * How much each PO line has already been billed by OTHER invoices.
+     *
+     * REJECTED invoices are excluded — a rejected claim frees its quantity back
+     * up. Everything else counts, including invoices still awaiting approval:
+     * quantity is committed the moment a claim is live, or two invoices racing
+     * through the matcher would each see the other as absent and both pass.
+     */
+    const priorLines = invoice.poId
+      ? await this.prisma.client.invoiceLine.findMany({
+          where: {
+            poLine: { poId: invoice.poId },
+            invoiceId: { not: invoice.id },
+            invoice: { status: { notIn: ['REJECTED'] } },
+          },
+          select: { poLineId: true, qty: true },
+        })
+      : [];
+    const invoicedByPoLine = new Map<string, Decimal>();
+    for (const l of priorLines) {
+      if (!l.poLineId) continue;
+      invoicedByPoLine.set(
+        l.poLineId,
+        (invoicedByPoLine.get(l.poLineId) ?? new Decimal(0)).plus(l.qty.toString()),
+      );
+    }
+
     const grnLines = invoice.po?.grns.flatMap((g) => g.lines) ?? [];
     const input: MatchInput = {
       tolerances,
@@ -74,6 +102,7 @@ export class MatchService {
               qtyOrdered: l.qtyOrdered.toString(),
               unitPrice: l.unitPrice.toString(),
               taxRate: l.taxRate.toString(),
+              qtyAlreadyInvoiced: (invoicedByPoLine.get(l.id) ?? new Decimal(0)).toString(),
             })),
           }
         : null,

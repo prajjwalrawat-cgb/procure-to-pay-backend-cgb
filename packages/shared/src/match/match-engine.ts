@@ -126,10 +126,25 @@ function checkQty(
   out: MatchException[],
 ): void {
   const invQty = new Decimal(line.qty);
-  // Basis = accepted quantity on the GRN if received, else the PO quantity.
-  const basis = grnLine
+  // Basis = accepted quantity on the GRN if received, else the PO quantity —
+  // MINUS whatever other live invoices have already billed against this line.
+  //
+  // The subtraction is what makes this a real three-way match. Scoring each
+  // invoice against the full received/ordered quantity treats every invoice as
+  // if it were the first: 200 billed against 200 received passes, and so does
+  // the next 200, and the next. Netting off prior billing means a line can be
+  // invoiced up to what was actually received and no further, which is the
+  // control that stops both over-billing and the same receipt being billed
+  // twice. Legitimate partial billing is unaffected — each delivery opens up
+  // exactly its own quantity.
+  //
+  // Clamped at zero: a line already fully billed has no remaining basis, so any
+  // further invoice is the full quantity over.
+  const received = grnLine
     ? new Decimal(grnLine.qtyAccepted)
     : new Decimal(poLine.qtyOrdered);
+  const alreadyInvoiced = new Decimal(poLine.qtyAlreadyInvoiced ?? '0');
+  const basis = Decimal.max(received.minus(alreadyInvoiced), new Decimal(0));
   const diff = invQty.minus(basis).abs();
   const tolerance = Decimal.max(
     basis.times(t.qtyVariancePct),
@@ -150,7 +165,10 @@ function checkQty(
         ? undefined
         : invQty.minus(basis).dividedBy(basis).toFixed(4),
       impactWithTax: actual.minus(expected).times(taxFactor(line.taxRate)).toFixed(4),
-      details: `Invoiced qty ${invQty.toFixed(2)} differs from received/ordered qty ${basis.toFixed(2)}.`,
+      details: alreadyInvoiced.isZero()
+        ? `Invoiced qty ${invQty.toFixed(2)} differs from received/ordered qty ${basis.toFixed(2)}.`
+        : `Invoiced qty ${invQty.toFixed(2)} exceeds the ${basis.toFixed(2)} still unbilled on this line ` +
+          `(${received.toFixed(2)} received/ordered, ${alreadyInvoiced.toFixed(2)} already invoiced).`,
     });
   }
 }

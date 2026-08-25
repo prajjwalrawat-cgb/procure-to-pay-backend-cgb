@@ -21,6 +21,7 @@ function po(lines: Partial<MatchPoLine>[], allowFreightLines = false): MatchInpu
       qtyOrdered: l.qtyOrdered ?? '1',
       unitPrice: l.unitPrice ?? '100',
       taxRate: l.taxRate ?? '0.18',
+      qtyAlreadyInvoiced: l.qtyAlreadyInvoiced,
     })),
   };
 }
@@ -179,6 +180,58 @@ describe('runMatch — 3-way match engine', () => {
       invoice: inv([{ poLineId: 'p1', qty: '1', unitPrice: '100' }]),
     });
     expect(result.exceptions.map((e) => e.type)).toEqual(['DUPLICATE']);
+  });
+
+  // ── Cumulative billing (three-way match, not two-way) ───────────────────
+  // Each invoice used to be scored against the full received/ordered quantity,
+  // so a vendor could bill the same receipt repeatedly and every invoice passed
+  // on its own. These cover the netting-off.
+
+  it('partial billing against a larger PO → clean', () => {
+    const result = runMatch({
+      tolerances: TOL,
+      po: po([{ id: 'p1', qtyOrdered: '1000', unitPrice: '450' }]),
+      grn: grn([{ poLineId: 'p1', qtyAccepted: '200' }]),
+      invoice: inv([{ poLineId: 'p1', qty: '200', unitPrice: '450' }]),
+    });
+    expect(result.exceptions.map((e) => e.type)).not.toContain('QTY_VARIANCE');
+  });
+
+  it('second invoice billing the same receipt again → QTY_VARIANCE', () => {
+    const result = runMatch({
+      tolerances: TOL,
+      po: po([
+        { id: 'p1', qtyOrdered: '1000', unitPrice: '450', qtyAlreadyInvoiced: '200' },
+      ]),
+      grn: grn([{ poLineId: 'p1', qtyAccepted: '200' }]),
+      invoice: inv([{ poLineId: 'p1', qty: '200', unitPrice: '450' }]),
+    });
+    expect(result.exceptions.map((e) => e.type)).toContain('QTY_VARIANCE');
+  });
+
+  it('a further delivery opens up its own quantity → clean', () => {
+    const result = runMatch({
+      tolerances: TOL,
+      po: po([
+        { id: 'p1', qtyOrdered: '1000', unitPrice: '450', qtyAlreadyInvoiced: '200' },
+      ]),
+      // 400 received in total now; 200 already billed leaves 200 billable.
+      grn: grn([{ poLineId: 'p1', qtyAccepted: '400' }]),
+      invoice: inv([{ poLineId: 'p1', qty: '200', unitPrice: '450' }]),
+    });
+    expect(result.exceptions.map((e) => e.type)).not.toContain('QTY_VARIANCE');
+  });
+
+  it('cumulative billing beyond the ordered qty with no GRN → QTY_VARIANCE', () => {
+    const result = runMatch({
+      tolerances: TOL,
+      po: po([
+        { id: 'p1', qtyOrdered: '1000', unitPrice: '450', qtyAlreadyInvoiced: '1000' },
+      ]),
+      grn: null,
+      invoice: inv([{ poLineId: 'p1', qty: '200', unitPrice: '450' }]),
+    });
+    expect(result.exceptions.map((e) => e.type)).toContain('QTY_VARIANCE');
   });
 
   it('freight line allowed when PO metadata permits → clean', () => {

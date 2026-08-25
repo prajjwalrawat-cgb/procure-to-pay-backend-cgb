@@ -140,6 +140,13 @@ export interface InvoiceExceptionView {
   resolved: boolean;
   resolutionAction: string | null;
   resolutionNotes: string | null;
+  /**
+   * Who overrode the exception, and when. An approver needs to see that a
+   * HIGH exception was waved through and by whom — "0 open exceptions" reads
+   * identically whether the match was clean or somebody accepted the risk.
+   */
+  resolvedByName: string | null;
+  resolvedAt: string | null;
 }
 
 export interface InvoiceLineView {

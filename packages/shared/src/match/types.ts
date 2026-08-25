@@ -27,6 +27,15 @@ export interface MatchPoLine {
   qtyOrdered: string;
   unitPrice: string;
   taxRate: string;
+  /**
+   * Quantity already billed against this PO line by OTHER live invoices
+   * (rejected and cancelled ones excluded). Without this the matcher scores
+   * every invoice against the full ordered/received quantity in isolation, so
+   * a vendor can bill 200 against a 1000-unit PO nine times and each invoice
+   * passes on its own — 1800 units paid on a 1000-unit order. Defaults to '0'
+   * so existing callers keep the previous single-invoice behaviour.
+   */
+  qtyAlreadyInvoiced?: string;
 }
 
 export interface MatchGrnLine {

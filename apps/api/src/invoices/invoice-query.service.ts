@@ -223,7 +223,14 @@ export class InvoiceQueryService {
         .filter((e) => !e.resolvedAt && e.invoiceLineId)
         .map((e) => e.invoiceLineId),
     );
-    const authorIds = [...new Set(inv.comments.map((c) => c.authorId))];
+    // Comment authors and exception resolvers are looked up together — the
+    // approver needs a name against an overridden exception, not a user id.
+    const authorIds = [
+      ...new Set([
+        ...inv.comments.map((c) => c.authorId),
+        ...inv.exceptions.map((e) => e.resolvedBy).filter((v): v is string => !!v),
+      ]),
+    ];
     const authors = await this.prisma.client.user.findMany({
       where: { id: { in: authorIds } },
       select: { id: true, name: true },
@@ -335,6 +342,8 @@ export class InvoiceQueryService {
           resolved: e.resolvedAt !== null,
           resolutionAction: e.resolutionAction,
           resolutionNotes: e.resolutionNotes,
+          resolvedByName: e.resolvedBy ? (authorName.get(e.resolvedBy) ?? null) : null,
+          resolvedAt: e.resolvedAt?.toISOString() ?? null,
         };
       }),
       suggestedResolution: suggestResolution(inv.exceptions),
