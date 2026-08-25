@@ -57,12 +57,16 @@ interface FetchResponse {
  * unexercised; the sandbox simulator runs by default.
  */
 /**
- * Ceiling on one extraction call. The provider is reached from a BullMQ worker,
- * and `fetch` has no timeout of its own: a hung OCR service would hold the
- * worker slot open indefinitely and quietly stall the whole queue behind it.
- * Generous, because a large scanned PDF legitimately takes a while.
+ * Fallback ceiling on one extraction call, used when OCR_REQUEST_TIMEOUT_MS is
+ * unset. `fetch` has no timeout of its own, and a hung sidecar would hold a
+ * BullMQ worker slot open indefinitely, stalling the queue behind it.
+ *
+ * Matches the sidecar's own default budget (OCR_LLM_TIMEOUT_SECONDS=300). The
+ * previous 120s was shorter than that, so a self-hosted engine working
+ * normally — RapidOCR feeding a local LLM on a scanned page — would be
+ * aborted at two minutes and filed under OCR_FAILED as if it had broken.
  */
-const REQUEST_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 300_000;
 
 @Injectable()
 export class RealOcrProvider implements IOcrProvider {
@@ -87,7 +91,9 @@ export class RealOcrProvider implements IOcrProvider {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ document_url: url }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(
+        this.config.get('OCR_REQUEST_TIMEOUT_MS', { infer: true }) || DEFAULT_TIMEOUT_MS,
+      ),
     })) as FetchResponse;
     if (!res.ok) {
       throw new Error(`OCR provider returned ${res.status}`);

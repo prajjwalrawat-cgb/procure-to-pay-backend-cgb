@@ -66,6 +66,27 @@ const EnvSchema = z.object({
   // Real provider base URLs. When unset, providers fall back to the clearly
   // labelled in-repo sandbox simulator (ADR-032). Go-live = set these + creds.
   OCR_API_URL: z.string().default(''),
+  /**
+   * How long to wait on the OCR sidecar, per call. Configurable because the
+   * right value depends entirely on the engine behind it: a hosted document-AI
+   * answers in seconds, while a self-hosted RapidOCR feeding a local LLM can
+   * take minutes on a scanned page. The sidecar has its own budget
+   * (OCR_LLM_TIMEOUT_SECONDS, default 300s) and a client that gives up first
+   * turns a slow-but-working extraction into a failure.
+   *
+   * Invoice OCR runs in a BullMQ worker, so a long wait costs a worker slot
+   * and nothing else — it defaults to the sidecar's own budget.
+   */
+  OCR_REQUEST_TIMEOUT_MS: z.coerce.number().default(300_000),
+  /**
+   * The same, for KYC extraction — deliberately shorter and separate.
+   *
+   * That call happens inside the vendor's document-upload request, so the
+   * ceiling is what a person will sit through, not what the engine might need.
+   * On timeout the extraction falls back to the local text-layer parser, which
+   * is degraded but immediate.
+   */
+  KYC_REQUEST_TIMEOUT_MS: z.coerce.number().default(60_000),
   GSP_API_URL: z.string().default(''),
   // Slice 10b — banking. Unset → labelled sandbox simulator (no bank contract).
   BANK_API_URL: z.string().default(''),
