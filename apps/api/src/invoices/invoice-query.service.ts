@@ -250,6 +250,27 @@ export class InvoiceQueryService {
       }
     }
 
+    // The sibling invoices behind that number. Same filter as the quantities
+    // above, so the list and the figure can never disagree.
+    const relatedInvoices = inv.poId
+      ? await this.prisma.client.invoice.findMany({
+          where: {
+            poId: inv.poId,
+            id: { not: inv.id },
+            status: { notIn: ['REJECTED'] },
+          },
+          orderBy: { invoiceDate: 'asc' },
+          select: {
+            id: true,
+            number: true,
+            vendorInvoiceRef: true,
+            status: true,
+            grossAmount: true,
+            invoiceDate: true,
+          },
+        })
+      : [];
+
     // Comment authors and exception resolvers are looked up together — the
     // approver needs a name against an overridden exception, not a user id.
     const authorIds = [
@@ -354,6 +375,14 @@ export class InvoiceQueryService {
         qtyInvoicedElsewhere: (billedElsewhere.get(l.id) ?? new Decimal(0)).toString(),
         unitPrice: l.unitPrice.toString(),
         taxRate: l.taxRate.toString(),
+      })),
+      relatedInvoices: relatedInvoices.map((r) => ({
+        id: r.id,
+        number: r.number,
+        vendorInvoiceRef: r.vendorInvoiceRef,
+        status: r.status,
+        grossAmount: r.grossAmount.toString(),
+        invoiceDate: r.invoiceDate.toISOString(),
       })),
       exceptions: inv.exceptions.map((e) => {
         const d = (e.details ?? {}) as Record<string, string | null>;

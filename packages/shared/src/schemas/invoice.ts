@@ -211,6 +211,25 @@ export interface InvoiceDetailResponse {
     unitPrice: string;
     taxRate: string;
   }[];
+  /**
+   * The other live invoices raised against this invoice's purchase order.
+   *
+   * The match card can say how much has been claimed elsewhere, but not by
+   * whom — and a reviewer who has just been told 100 units are already spoken
+   * for immediately wants to know by which invoice, in what state, for how
+   * much. Without this the only route is to open the PO and read its invoice
+   * list, which is two navigations away from the decision being made.
+   *
+   * REJECTED excluded, so this lists exactly the claims that still count.
+   */
+  relatedInvoices: {
+    id: string;
+    number: string;
+    vendorInvoiceRef: string;
+    status: string;
+    grossAmount: string;
+    invoiceDate: string;
+  }[];
   exceptions: InvoiceExceptionView[];
   suggestedResolution: string | null;
   matchSummary: { poSubtotal: string; invoiceSubtotal: string; varianceTotal: string };
