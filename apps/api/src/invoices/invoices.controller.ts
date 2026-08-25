@@ -177,9 +177,25 @@ export class InvoicesController {
     return { ok: true };
   }
 
-  /** Re-queue extraction for an invoice stuck before the matcher ever ran. */
+  /**
+   * Re-queue extraction for an invoice stuck before the matcher ever ran.
+   *
+   * Gated on intake-manage OR resolve-exception, not resolve-exception alone.
+   * Re-reading a document is an intake recovery, not a financial judgement — it
+   * approves nothing and changes no amount — and `invoice:intake_manage` is the
+   * permission that already covers "email queues + manual OCR review".
+   *
+   * The distinction matters for who ends up able to do it. A tenant admin holds
+   * intake-manage but deliberately NOT resolve-exception: administering the
+   * system and waving through invoice exceptions are separate duties, and the
+   * first gating left an admin able to see a stranded invoice and unable to do
+   * the one harmless thing that would free it.
+   */
   @Post(':id/ocr/retry')
-  @RequirePermission(PERMISSIONS.INVOICE_RESOLVE_EXCEPTION)
+  @RequirePermission([
+    PERMISSIONS.INVOICE_INTAKE_MANAGE,
+    PERMISSIONS.INVOICE_RESOLVE_EXCEPTION,
+  ])
   async retryOcr(
     @Param('id') id: string,
     @CurrentUser() user: AuthUser,
