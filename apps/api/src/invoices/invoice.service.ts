@@ -397,6 +397,25 @@ export class InvoiceService {
         lineTotal: new Prisma.Decimal(new Decimal(l.qty).times(l.unitPrice).toFixed(4)),
       })),
     });
+    // The due date hangs off the invoice date here exactly as it does in
+    // `applyOcr`. Typing a corrected date and leaving the old due date behind
+    // would silently misstate the statutory clock — and this path exists
+    // precisely because OCR could not read the document, so a corrected date is
+    // the expected case rather than the rare one.
+    const typedDate = input.invoiceDate ? new Date(input.invoiceDate) : null;
+    const msmeDueDate =
+      typedDate && !Number.isNaN(typedDate.getTime()) && inv.vendor.isMsme
+        ? this.msme.computeDueDate(
+            typedDate,
+            (
+              await this.prisma.client.tenant.findUniqueOrThrow({
+                where: { id: inv.tenantId },
+                select: { msmePaymentCapDays: true },
+              })
+            ).msmePaymentCapDays,
+          )
+        : null;
+
     await this.prisma.client.invoice.update({
       where: { id: invoiceId },
       data: {
@@ -405,7 +424,13 @@ export class InvoiceService {
         taxAmount: new Prisma.Decimal(totals.taxAmount.toFixed(4)),
         netAmount: new Prisma.Decimal(totals.gross.toFixed(4)),
         ...(input.vendorInvoiceRef ? { vendorInvoiceRef: input.vendorInvoiceRef } : {}),
-        ...(input.invoiceDate ? { invoiceDate: new Date(input.invoiceDate) } : {}),
+        ...(typedDate && !Number.isNaN(typedDate.getTime())
+          ? { invoiceDate: typedDate }
+          : {}),
+        ...(msmeDueDate ? { msmeDueDate } : {}),
+        // A person has now asserted these values, so OCR must never overwrite
+        // them if this invoice is ever re-read.
+        headerAwaitingOcr: false,
       },
     });
     await this.audit.record({
