@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import type { Env } from '../../config/env';
@@ -29,7 +29,7 @@ export interface IrnCheckResult {
  * a dead GSP degrades gracefully rather than blocking invoice/GRN flow.
  */
 @Injectable()
-export class GspClient {
+export class GspClient implements OnModuleInit {
   private readonly logger = new Logger(GspClient.name);
 
   constructor(
@@ -40,8 +40,52 @@ export class GspClient {
     private readonly prisma: PrismaService,
   ) {}
 
+  /**
+   * Whether a real GSP client exists to call.
+   *
+   * It does not. `fetchGstr2bLive`, `validateIrnLive` and `checkEwayLive` are
+   * three `throw` statements awaiting a signed provider contract — the API
+   * shapes differ per GSP, so there is nothing sensible to write until one is
+   * chosen. Flip this to true in the same change that implements them.
+   */
+  private static readonly LIVE_CLIENT_IMPLEMENTED = false;
+
+  /**
+   * Gated on the client existing, not just on the URL being set.
+   *
+   * Without that gate, setting GSP_API_URL was a trap that made the product
+   * lie. `live` would flip true, every live method would throw, `fetchGstr2b`
+   * would swallow it and return an EMPTY dataset — and stamp it
+   * `simulated: false`. Every invoice would then reconcile as NOT_FOUND while
+   * the compliance panel dropped its SANDBOX chip, so the screen would report a
+   * genuine GSTN check finding that no vendor had filed. IRN and e-Way would
+   * not even degrade; they have no catch, so they would throw outward.
+   *
+   * Configuration is not capability. Until the client is written, the URL
+   * changes nothing and the simulator keeps saying so.
+   */
   private get live(): boolean {
-    return Boolean(this.config.get('GSP_API_URL', { infer: true }));
+    return (
+      GspClient.LIVE_CLIENT_IMPLEMENTED &&
+      Boolean(this.config.get('GSP_API_URL', { infer: true }))
+    );
+  }
+
+  /**
+   * Say so at boot rather than letting someone conclude from a missing chip
+   * that the integration went live.
+   */
+  onModuleInit(): void {
+    if (
+      !GspClient.LIVE_CLIENT_IMPLEMENTED &&
+      this.config.get('GSP_API_URL', { infer: true })
+    ) {
+      this.logger.warn(
+        'GSP_API_URL is set but the live GSP client is not implemented — ' +
+          'GSTR-2B, IRN and e-Way are still the labelled sandbox simulator. ' +
+          'Implementing it needs a signed GSP contract; see gsp-client.ts.',
+      );
+    }
   }
 
   /** Fetch the tenant's GSTR-2B dataset for a period. */
