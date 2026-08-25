@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { newId } from '@procureflow/db';
 import type {
   IntegrationProvider,
@@ -29,28 +29,57 @@ export interface UsageEntry {
  */
 @Injectable()
 export class IntegrationUsageService {
+  private readonly logger = new Logger(IntegrationUsageService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async log(entry: UsageEntry): Promise<void> {
     const tenantId = entry.tenantId ?? this.prisma.currentTenantId;
     if (!tenantId) return;
+
+    const data = {
+      id: newId('integrationUsageLog'),
+      tenantId,
+      provider: entry.provider,
+      operation: entry.operation,
+      documentType: entry.documentType ?? null,
+      documentId: entry.documentId ?? null,
+      costMicros: Math.round(entry.costMicros),
+      outcome: entry.outcome ?? 'OK',
+      simulated: entry.simulated ?? true,
+      latencyMs: entry.latencyMs ?? null,
+    };
+
     try {
-      await this.prisma.client.integrationUsageLog.create({
-        data: {
-          id: newId('integrationUsageLog'),
-          tenantId,
-          provider: entry.provider,
-          operation: entry.operation,
-          documentType: entry.documentType ?? null,
-          documentId: entry.documentId ?? null,
-          costMicros: Math.round(entry.costMicros),
-          outcome: entry.outcome ?? 'OK',
-          simulated: entry.simulated ?? true,
-          latencyMs: entry.latencyMs ?? null,
-        },
-      });
-    } catch {
-      // Usage logging is best-effort — never let it break the integration.
+      /*
+       * Opened in a tenant context when there is not already one.
+       *
+       * Passing `tenantId` in the row is not enough: RLS filters on the
+       * `app.tenant_id` session variable, not on the column. Inside a request
+       * that variable is set and the insert lands — which is why every
+       * request-scoped operation (screening, penny-drop, IFSC, kyc.extract)
+       * appears in the usage table.
+       *
+       * Background workers have no such context, so their inserts were rejected
+       * by the policy and thrown away by the empty catch below. That silently
+       * lost every `ocr.extract` and `gstr2b.fetch` row ever written — and since
+       * the SANDBOX badges are inferred from recorded calls, OCR would have gone
+       * on reporting itself simulated no matter how many real documents it read.
+       */
+      if (this.prisma.currentTenantId === tenantId) {
+        await this.prisma.client.integrationUsageLog.create({ data });
+      } else {
+        await this.prisma.runInTenantContext(tenantId, (tx) =>
+          tx.integrationUsageLog.create({ data }),
+        );
+      }
+    } catch (err) {
+      // Still best-effort — a usage row must never break the integration it is
+      // recording. But say so: swallowing this in silence is what let a whole
+      // provider's usage go missing without anyone noticing.
+      this.logger.warn(
+        `Could not record ${entry.provider}/${entry.operation} usage: ${String(err)}`,
+      );
     }
   }
 

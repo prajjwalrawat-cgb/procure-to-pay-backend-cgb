@@ -259,8 +259,22 @@ export class MatchService {
     }
 
     const nextStatus = openCandidates.length > 0 ? 'MATCH_EXCEPTION' : 'OCR_DONE';
-    // Only move within the pre-approval pipeline; never override a routed/posted state.
-    const pipeline = ['RECEIVED', 'OCR_PENDING', 'OCR_DONE', 'MATCH_EXCEPTION'];
+    /*
+     * Only move within the pre-approval pipeline; never override a routed or
+     * posted state.
+     *
+     * OCR_PENDING is deliberately NOT in this list. It means the document has
+     * not been read yet, and a match run does not read it — promoting from here
+     * would claim extraction finished when nothing extracted anything, and the
+     * invoice would then be past the point where OCR can be retried. An invoice
+     * awaiting its document stays awaiting it.
+     *
+     * The normal path is unaffected: applyOcr sets OCR_DONE before calling the
+     * matcher, so by the time this runs the invoice has already left OCR_PENDING
+     * legitimately. RECEIVED stays, because a manually created invoice arrives
+     * with its lines and never goes through OCR at all.
+     */
+    const pipeline = ['RECEIVED', 'OCR_DONE', 'MATCH_EXCEPTION'];
     if (pipeline.includes(invoice.status)) {
       await this.prisma.client.invoice.update({
         where: { id: invoiceId },
