@@ -179,41 +179,66 @@ export class RefsService {
     const billed = new Map(
       billedRows.map((r) => [r.poLineId, new Decimal(r._sum.qty?.toString() ?? '0')]),
     );
-    return pos.map((po) => {
-      const tax = computeDocTax(
-        po.lines.map((l) => ({
-          qty: l.qtyOrdered.toString(),
-          unitPrice: l.unitPrice.toString(),
-          discountPct: l.discountPct.toString(),
-          taxRate: l.taxRate.toString(),
-        })),
-        { plantStateCode: plant?.stateCode ?? '17', vendorGstin: po.vendor.gstin },
-      );
-      return {
-        id: po.id,
-        number: po.number,
-        currency: po.currency,
-        lines: po.lines.map((l) => ({
-          id: l.id,
-          lineNo: l.lineNo,
-          itemDesc: l.itemDesc,
-          hsnCode: l.hsnCode,
-          uom: l.uom,
-          qtyOrdered: l.qtyOrdered.toString(),
-          qtyReceived: l.qtyReceived.toString(),
-          qtyInvoiced: (billed.get(l.id) ?? new Decimal(0)).toString(),
-          qtyBillable: billableQty(l.qtyOrdered, l.qtyReceived, billed.get(l.id)),
-          unitPrice: l.unitPrice.toString(),
-          taxRate: l.taxRate.toString(),
-        })),
-        amounts: {
-          subtotal: tax.subtotal,
-          taxAmount: tax.taxAmount,
-          taxKind: taxKindLabel(tax.taxKind),
-          total: tax.total,
-        },
-      };
-    });
+    return (
+      pos
+        .map((po) => {
+          const tax = computeDocTax(
+            po.lines.map((l) => ({
+              qty: l.qtyOrdered.toString(),
+              unitPrice: l.unitPrice.toString(),
+              discountPct: l.discountPct.toString(),
+              taxRate: l.taxRate.toString(),
+            })),
+            { plantStateCode: plant?.stateCode ?? '17', vendorGstin: po.vendor.gstin },
+          );
+          return {
+            id: po.id,
+            number: po.number,
+            currency: po.currency,
+            /** Nothing left to bill on any line — see `exhausted` below. */
+            fullyInvoiced: po.lines.every((l) =>
+              new Decimal(
+                billableQty(l.qtyOrdered, l.qtyReceived, billed.get(l.id)),
+              ).lessThanOrEqualTo(0),
+            ),
+            lines: po.lines.map((l) => ({
+              id: l.id,
+              lineNo: l.lineNo,
+              itemDesc: l.itemDesc,
+              hsnCode: l.hsnCode,
+              uom: l.uom,
+              qtyOrdered: l.qtyOrdered.toString(),
+              qtyReceived: l.qtyReceived.toString(),
+              qtyInvoiced: (billed.get(l.id) ?? new Decimal(0)).toString(),
+              qtyBillable: billableQty(l.qtyOrdered, l.qtyReceived, billed.get(l.id)),
+              unitPrice: l.unitPrice.toString(),
+              taxRate: l.taxRate.toString(),
+            })),
+            amounts: {
+              subtotal: tax.subtotal,
+              taxAmount: tax.taxAmount,
+              taxKind: taxKindLabel(tax.taxKind),
+              total: tax.total,
+            },
+          };
+        })
+        /*
+         * A purchase order with nothing left to bill is not invoiceable.
+         *
+         * The status filter above already excludes INVOICED — the intent has always
+         * been that a fully-billed order drops out — but nothing in the codebase
+         * ever sets that status: `INVOICED` and `PARTIALLY_INVOICED` appear only in
+         * read filters, never in an update. So an order stayed ISSUED forever and
+         * kept accepting invoices, which is how PO-0498 came to carry 200 units
+         * billed against 100 ordered.
+         *
+         * Filtering on remaining quantity enforces the intent without depending on
+         * a status nothing maintains. A supplier who needs to bill more needs the
+         * order amended — the PO is the authorisation, and billing past it is not
+         * the supplier's call to make.
+         */
+        .filter((po) => !po.fullyInvoiced)
+    );
   }
 }
 

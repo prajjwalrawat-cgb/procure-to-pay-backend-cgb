@@ -243,6 +243,13 @@ export interface VendorPoOption {
   id: string;
   number: string;
   currency: string;
+  /**
+   * Every line fully billed. Options carrying this are filtered out before the
+   * portal sees them; the field stays on the type so a caller that wants to
+   * show exhausted orders (a buyer-side view, say) can tell them apart rather
+   * than inferring it from quantities.
+   */
+  fullyInvoiced: boolean;
   lines: {
     id: string;
     lineNo: number;
