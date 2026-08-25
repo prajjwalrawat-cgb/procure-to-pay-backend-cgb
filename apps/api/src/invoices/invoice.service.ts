@@ -198,6 +198,68 @@ export class InvoiceService {
     }
   }
 
+  /**
+   * Re-queue OCR for an invoice whose extraction never completed.
+   *
+   * Until now there was no way back from OCR_PENDING. The job is enqueued once,
+   * at creation, by a private method — so an invoice whose job is lost sits in
+   * that status permanently: the matcher never runs, `resolveAndRoute` refuses
+   * it forever, and no screen offers an action. Losing a job is not exotic;
+   * these invoices were stranded when the Redis instance was replaced and the
+   * queued jobs did not come across with it.
+   *
+   * Accepted from OCR_PENDING (job lost or never picked up) and OCR_FAILED (the
+   * provider gave up, and may now be configured differently — which is exactly
+   * the case when the sandbox simulator is replaced by a real engine). Refused
+   * from anywhere else: re-reading a document whose lines a person has since
+   * corrected would be destructive, and past OCR the invoice has moved on.
+   */
+  async retryOcr(invoiceId: string, actorId: string): Promise<{ ok: true }> {
+    const inv = await this.prisma.client.invoice.findUnique({
+      where: { id: invoiceId },
+      select: { id: true, tenantId: true, status: true },
+    });
+    if (!inv) throw new NotFoundException('Invoice not found');
+    if (inv.status !== 'OCR_PENDING' && inv.status !== 'OCR_FAILED') {
+      throw new ForbiddenException(
+        `This invoice is ${inv.status}; OCR can only be retried while it is ` +
+          'still awaiting extraction.',
+      );
+    }
+
+    // The document itself, not the create-time argument: a retry can happen
+    // long after, and the attachment is the only durable record of the key.
+    const attachment = await this.prisma.client.invoiceAttachment.findFirst({
+      where: { invoiceId, docType: 'INVOICE_PDF' },
+      orderBy: { uploadedAt: 'desc' },
+      select: { s3Key: true },
+    });
+    if (!attachment) {
+      throw new ForbiddenException(
+        'No document is attached to this invoice, so there is nothing to ' +
+          'extract. Enter the lines manually instead.',
+      );
+    }
+
+    // Back to OCR_PENDING first: retrying an OCR_FAILED invoice must not leave
+    // it reading as failed while a job is in flight for it.
+    await this.prisma.client.invoice.update({
+      where: { id: invoiceId },
+      data: { status: 'OCR_PENDING' },
+    });
+    await this.audit.record({
+      action: 'invoice.ocr_retried',
+      entityType: 'Invoice',
+      entityId: invoiceId,
+      actorId,
+      before: { status: inv.status },
+    });
+    // queueOcr routes its own failure to OCR_FAILED, so a dead queue leaves the
+    // invoice in a state AP can still act on rather than back where it started.
+    await this.queueOcr(inv.tenantId, invoiceId, attachment.s3Key);
+    return { ok: true };
+  }
+
   /** OCR completion callback (from the worker). Runs in its own tenant context. */
   async applyOcr(
     tenantId: string,

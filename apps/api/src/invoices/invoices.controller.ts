@@ -177,6 +177,16 @@ export class InvoicesController {
     return { ok: true };
   }
 
+  /** Re-queue extraction for an invoice stuck before the matcher ever ran. */
+  @Post(':id/ocr/retry')
+  @RequirePermission(PERMISSIONS.INVOICE_RESOLVE_EXCEPTION)
+  async retryOcr(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+  ): Promise<{ ok: true }> {
+    return this.invoices.retryOcr(id, user.userId);
+  }
+
   @Post(':id/match/run')
   @RequirePermission(PERMISSIONS.INVOICE_RESOLVE_EXCEPTION)
   async runMatch(
