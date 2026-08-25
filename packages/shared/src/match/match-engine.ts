@@ -36,7 +36,9 @@ export function runMatch(input: MatchInput): MatchResult {
       type: 'DUPLICATE',
       severity: 'CRITICAL',
       impactWithTax: withTaxSubtotal(invoice.lines),
-      details: 'An invoice with the same vendor reference already exists.',
+      details:
+        'Another invoice from this vendor carries the same reference — either ' +
+        'on the record or as printed on the document itself.',
     });
     return finalize(exceptions, '0', invoiceSubtotal);
   }
@@ -74,6 +76,7 @@ export function runMatch(input: MatchInput): MatchResult {
     exceptions,
   );
   checkDeclaredTotal(invoice.declaredTotal, invoice.lines, tolerances, exceptions);
+  checkDocumentHeader(invoice, exceptions);
 
   for (const line of invoice.lines) {
     const poLine = resolvePoLine(line, poById, poByDesc);
@@ -422,6 +425,53 @@ function reconcileUom(line: MatchInvoiceLine, poLine: MatchPoLine): UomCompare |
   };
 }
 
+/**
+ * What the document says about itself against what this record says about it.
+ *
+ * The record's invoice date and vendor reference are not always claims about the
+ * document: an emailed invoice arrives with the date of receipt and the message
+ * subject standing in until it is read. Where a person did type them, a document
+ * that disagrees is a real finding — a mis-keyed invoice number defeats duplicate
+ * detection, and a mis-keyed date moves an MSME due date and the interest that
+ * hangs off it.
+ *
+ * One exception covering both fields, not one each: two document-level exceptions
+ * of the same type collide in the caller's dedupe key (`type:invoiceLineId:
+ * poLineId`, both null here) and the second silently overwrites the first.
+ */
+function checkDocumentHeader(
+  invoice: MatchInput['invoice'],
+  out: MatchException[],
+): void {
+  const parts: string[] = [];
+
+  const recordDate = parseDate(invoice.invoiceDate);
+  const printedDate = parseDate(invoice.declaredInvoiceDate);
+  if (recordDate && printedDate && !sameUtcDay(recordDate, printedDate)) {
+    parts.push(
+      `it is dated ${fmtDate(printedDate)}, but this record says ` +
+        `${fmtDate(recordDate)}`,
+    );
+  }
+
+  const recordRef = canonicalRef(invoice.vendorInvoiceRef);
+  const printedRef = canonicalRef(invoice.declaredVendorRef);
+  if (recordRef && printedRef && recordRef !== printedRef) {
+    parts.push(
+      `its number reads "${invoice.declaredVendorRef}", but this record says ` +
+        `"${invoice.vendorInvoiceRef}"`,
+    );
+  }
+
+  if (parts.length === 0) return;
+  out.push({
+    type: 'DOCUMENT_MISMATCH',
+    severity: 'HIGH',
+    impactWithTax: '0.0000',
+    details: `The document disagrees with this record: ${parts.join('; ')}.`,
+  });
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────
 
 function resolvePoLine(
@@ -511,6 +561,26 @@ function canonicalUom(uom: string | null | undefined): string | null {
     .replace(/[.\s]+/g, '');
   if (!norm) return null;
   return UOM_SYNONYMS[norm] ?? norm;
+}
+
+/** Calendar-day equality in UTC — a time-of-day difference is not a mismatch. */
+function sameUtcDay(a: Date, b: Date): boolean {
+  return (
+    a.getUTCFullYear() === b.getUTCFullYear() &&
+    a.getUTCMonth() === b.getUTCMonth() &&
+    a.getUTCDate() === b.getUTCDate()
+  );
+}
+
+/**
+ * Invoice numbers for comparison: upper-cased with punctuation and spacing
+ * removed, so "PES/2026/4471" and "PES-2026-4471" are the same reference. Only
+ * an actual difference in the characters that carry meaning is reported.
+ */
+function canonicalRef(ref: string | null | undefined): string | null {
+  if (!ref) return null;
+  const norm = ref.toUpperCase().replace(/[^A-Z0-9]+/g, '');
+  return norm.length > 0 ? norm : null;
 }
 
 /** Parses an ISO date, returning null for absent or unparseable values. */

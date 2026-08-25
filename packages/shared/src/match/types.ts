@@ -111,8 +111,21 @@ export interface MatchInput {
   } | null;
   invoice: {
     lines: MatchInvoiceLine[];
-    /** Date on the document itself, ISO 8601. */
+    /** The operative invoice date on this record, ISO 8601. */
     invoiceDate?: string | null;
+    /** The operative vendor reference on this record. */
+    vendorInvoiceRef?: string | null;
+    /**
+     * Invoice date and vendor reference as PRINTED on the document, from OCR.
+     *
+     * Kept apart from the two above for the same reason `declaredTotal` is kept
+     * apart from the line items: the record's values can be typed by a person or
+     * defaulted by the system, and only the document is evidence of what the
+     * vendor actually issued. Where the two disagree that is the finding —
+     * neither silently wins.
+     */
+    declaredInvoiceDate?: string | null;
+    declaredVendorRef?: string | null;
     /**
      * Grand total printed on the document (incl. tax), as read by OCR. Null when
      * the provider returned none — the check skips rather than assuming a match.

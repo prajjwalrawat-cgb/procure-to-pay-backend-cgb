@@ -597,6 +597,89 @@ describe('runMatch — 3-way match engine', () => {
     });
   });
 
+  describe('document header vs record', () => {
+    const base = {
+      tolerances: TOL,
+      po: po([{ id: 'p1' }]),
+      grn: grn([{ poLineId: 'p1', qtyAccepted: '1' }]),
+    };
+    const header = (extra: Partial<MatchInput['invoice']>): MatchInput['invoice'] => ({
+      ...inv([{ poLineId: 'p1' }]),
+      invoiceDate: '2026-03-10T00:00:00.000Z',
+      vendorInvoiceRef: 'PES/2026/4471',
+      ...extra,
+    });
+
+    it('flags a printed date that disagrees with the record', () => {
+      const result = runMatch({
+        ...base,
+        invoice: header({ declaredInvoiceDate: '2026-02-14T00:00:00.000Z' }),
+      });
+      expect(result.exceptions.map((e) => e.type)).toEqual(['DOCUMENT_MISMATCH']);
+      expect(result.exceptions[0].details).toContain('dated 14/02/2026');
+      expect(result.exceptions[0].details).toContain('10/03/2026');
+    });
+
+    it('flags a printed invoice number that disagrees with the record', () => {
+      const result = runMatch({
+        ...base,
+        invoice: header({ declaredVendorRef: 'PES/2026/9999' }),
+      });
+      expect(result.exceptions.map((e) => e.type)).toEqual(['DOCUMENT_MISMATCH']);
+      expect(result.exceptions[0].details).toContain('PES/2026/9999');
+    });
+
+    it('reports both disagreements as one exception', () => {
+      // Two of the same type at document level would collide in the caller's
+      // dedupe key and the second would be lost.
+      const result = runMatch({
+        ...base,
+        invoice: header({
+          declaredInvoiceDate: '2026-02-14T00:00:00.000Z',
+          declaredVendorRef: 'PES/2026/9999',
+        }),
+      });
+      expect(result.exceptions).toHaveLength(1);
+      expect(result.exceptions[0].details).toContain('14/02/2026');
+      expect(result.exceptions[0].details).toContain('PES/2026/9999');
+    });
+
+    it('ignores punctuation and case in the reference', () => {
+      const result = runMatch({
+        ...base,
+        invoice: header({ declaredVendorRef: 'pes-2026-4471' }),
+      });
+      expect(result.exceptions).toEqual([]);
+    });
+
+    it('ignores time of day on the date', () => {
+      const result = runMatch({
+        ...base,
+        invoice: header({ declaredInvoiceDate: '2026-03-10T18:45:00.000Z' }),
+      });
+      expect(result.exceptions).toEqual([]);
+    });
+
+    it('skips the check when OCR read nothing', () => {
+      // Not the same as agreement. Nothing was compared, and the absence of an
+      // exception here is the reason the UI has to say so.
+      const result = runMatch({ ...base, invoice: header({}) });
+      expect(result.exceptions).toEqual([]);
+    });
+
+    it('does not double-report through the date-sequence check', () => {
+      // DATE_SEQUENCE reads the record's date, not the printed one, so a
+      // back-dated document raises the header finding alone.
+      const result = runMatch({
+        tolerances: TOL,
+        po: { ...po([{ id: 'p1' }])!, issuedAt: '2026-03-01T00:00:00.000Z' },
+        grn: grn([{ poLineId: 'p1', qtyAccepted: '1' }]),
+        invoice: header({ declaredInvoiceDate: '2026-02-14T00:00:00.000Z' }),
+      });
+      expect(result.exceptions.map((e) => e.type)).toEqual(['DOCUMENT_MISMATCH']);
+    });
+  });
+
   it('a clean invoice still matches with every new check wired in', () => {
     const result = runMatch({
       tolerances: TOL,
@@ -613,6 +696,9 @@ describe('runMatch — 3-way match engine', () => {
       invoice: {
         ...inv([{ poLineId: 'p1', uom: 'Tonnes', qty: '10', unitPrice: '5000' }]),
         invoiceDate: '2026-03-06T00:00:00.000Z',
+        vendorInvoiceRef: 'PES/2026/4471',
+        declaredInvoiceDate: '2026-03-06T09:30:00.000Z',
+        declaredVendorRef: 'pes-2026-4471',
         declaredTotal: '59000.00',
       },
     });

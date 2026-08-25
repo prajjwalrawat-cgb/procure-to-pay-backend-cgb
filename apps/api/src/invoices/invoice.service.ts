@@ -140,7 +140,11 @@ export class InvoiceService {
       vendor,
       poId: args.poId ?? null,
       vendorInvoiceRef: args.vendorInvoiceRef,
+      // Stand-ins, not claims about the document: the date of receipt, and from
+      // email intake the message subject. `headerAwaitingOcr` says so, and
+      // `applyOcr` replaces both once the page has actually been read.
       invoiceDate: new Date(),
+      headerAwaitingOcr: true,
       source: args.source ?? 'MANUAL',
       status: 'OCR_PENDING',
       irn: null,
@@ -244,10 +248,37 @@ export class InvoiceService {
       // in the manual-review queue rather than auto-matching against garbage data.
       const tenant = await tx.tenant.findUnique({
         where: { id: tenantId },
-        select: { ocrConfidenceFloorPct: true },
+        select: { ocrConfidenceFloorPct: true, msmePaymentCapDays: true },
       });
       const floorPct = Number(tenant?.ocrConfidenceFloorPct?.toString() ?? '80');
       const belowFloor = extraction.confidence * 100 < floorPct;
+
+      // What the document says about itself. Recorded whether or not it agrees
+      // with this record — the matcher needs both to tell them apart.
+      const printedDate = parseOcrDate(extraction.invoiceDate);
+      const printedRef = extraction.vendorInvoiceRef?.trim() || null;
+
+      /*
+       * Adopt the printed values only over placeholders.
+       *
+       * `createFromUpload` stamps the date of receipt and, from email intake,
+       * the message subject; neither is a claim about the document, and leaving
+       * them in place is how the MSME clock came to run from receipt rather than
+       * from the invoice date. Where a person typed those values instead, OCR
+       * does not overwrite them — the matcher raises DOCUMENT_MISMATCH and a
+       * human decides, because silently rewriting the date an MSME due date was
+       * computed from is not a correction anyone asked for.
+       */
+      const adopt = invoice.headerAwaitingOcr;
+      const nextDate = adopt ? printedDate : null;
+      const nextRef = adopt ? printedRef : null;
+
+      // The due date hangs off the invoice date, so moving one moves the other.
+      // Left alone for non-MSME vendors, who have no statutory clock.
+      const msmeDueDate =
+        nextDate && invoice.vendor.isMsme
+          ? this.msme.computeDueDate(nextDate, tenant?.msmePaymentCapDays ?? 45)
+          : undefined;
 
       await tx.invoice.update({
         where: { id: invoiceId },
@@ -260,6 +291,15 @@ export class InvoiceService {
           ...(extraction.declaredTotal
             ? { ocrDeclaredTotal: new Prisma.Decimal(extraction.declaredTotal) }
             : {}),
+          ...(printedDate ? { ocrInvoiceDate: printedDate } : {}),
+          ...(printedRef ? { ocrVendorInvoiceRef: printedRef } : {}),
+          ...(nextDate ? { invoiceDate: nextDate } : {}),
+          ...(nextRef ? { vendorInvoiceRef: nextRef } : {}),
+          ...(msmeDueDate ? { msmeDueDate } : {}),
+          // Cleared once read, even if the provider returned nothing useful:
+          // the document has had its chance, and a second pass would not find
+          // more. What it could not supply stays as it is and is visible as such.
+          ...(adopt ? { headerAwaitingOcr: false } : {}),
           ...(extraction.irn ? { irn: extraction.irn } : {}),
           ...(extraction.ewaybillNo ? { ewaybillNo: extraction.ewaybillNo } : {}),
         },
@@ -492,6 +532,8 @@ export class InvoiceService {
     lines: InvoiceLineInput[];
     totals: Totals;
     s3Key?: string;
+    /** True when invoiceDate/vendorInvoiceRef are defaults awaiting OCR. */
+    headerAwaitingOcr?: boolean;
   }): Promise<void> {
     const tenant = await this.prisma.client.tenant.findUniqueOrThrow({
       where: { id: args.tenantId },
@@ -516,6 +558,7 @@ export class InvoiceService {
         poId: args.poId,
         vendorInvoiceRef: args.vendorInvoiceRef,
         invoiceDate: args.invoiceDate,
+        headerAwaitingOcr: args.headerAwaitingOcr ?? false,
         status: args.status,
         source: args.source,
         grossAmount: new Prisma.Decimal(args.totals.gross.toFixed(4)),
@@ -620,4 +663,19 @@ export class InvoiceService {
 function genInvoiceNumber(id: string): string {
   const suffix = id.split('_')[1] ?? id;
   return `INV-${suffix.slice(-6).toUpperCase()}`;
+}
+
+/**
+ * An OCR-read date, or null when the provider gave nothing usable.
+ *
+ * Deliberately strict about the year: a provider that returns a malformed or
+ * absurd date must not be allowed to set one, because this value moves the MSME
+ * due date. Null leaves the record's own date standing.
+ */
+function parseOcrDate(value: string | undefined): Date | null {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  const year = d.getUTCFullYear();
+  return year >= 2000 && year <= 2100 ? d : null;
 }

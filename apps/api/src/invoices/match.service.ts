@@ -63,11 +63,29 @@ export class MatchService {
         }
       : DEFAULT_TOLERANCES;
 
+    /*
+     * A duplicate is the same vendor billing the same invoice twice.
+     *
+     * Matching on `vendorInvoiceRef` alone missed it whenever that field was not
+     * the invoice number: email intake fills it with the message subject, so the
+     * same document arriving under two different subjects looked like two
+     * invoices, and two unrelated invoices both titled "Invoice" looked like one.
+     *
+     * The number OCR read off the page does not have that problem, so it counts
+     * too — but only when there is one. The null guard matters: without it every
+     * invoice whose document was never read would match every other, and the
+     * matcher would call them all duplicates.
+     */
     const duplicates = await this.prisma.client.invoice.count({
       where: {
         vendorId: invoice.vendorId,
-        vendorInvoiceRef: invoice.vendorInvoiceRef,
         id: { not: invoice.id },
+        OR: [
+          { vendorInvoiceRef: invoice.vendorInvoiceRef },
+          ...(invoice.ocrVendorInvoiceRef
+            ? [{ ocrVendorInvoiceRef: invoice.ocrVendorInvoiceRef }]
+            : []),
+        ],
       },
     });
 
@@ -146,6 +164,12 @@ export class MatchService {
           : null,
       invoice: {
         invoiceDate: invoice.invoiceDate.toISOString(),
+        vendorInvoiceRef: invoice.vendorInvoiceRef,
+        // What the document printed, as against what this record holds. Null
+        // where OCR never read it — the engine skips rather than assuming they
+        // agree.
+        declaredInvoiceDate: invoice.ocrInvoiceDate?.toISOString() ?? null,
+        declaredVendorRef: invoice.ocrVendorInvoiceRef,
         // The total printed on the document, captured by OCR — NOT the stored
         // grossAmount, which is computed from these same lines and so agrees
         // with them whatever they say. Null when the provider gave no total.

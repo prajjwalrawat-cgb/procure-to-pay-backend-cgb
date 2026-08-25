@@ -265,6 +265,7 @@ enum ExceptionType {
   GSTR2B_MISMATCH
   UOM_MISMATCH
   DATE_SEQUENCE
+  DOCUMENT_MISMATCH
   PO_NOT_OPEN
   AMOUNT_MISMATCH
   VENDOR_BLOCKED
@@ -1517,6 +1518,23 @@ model Invoice {
   /// not return one (older documents, manual entry) — the check then skips
   /// rather than inventing agreement.
   ocrDeclaredTotal       Decimal?      @map("ocr_declared_total") @db.Decimal(18, 4)
+  /// Invoice date and vendor reference as PRINTED on the document, from OCR.
+  /// Stored alongside — never instead of — the operative `invoiceDate` and
+  /// `vendorInvoiceRef`, so a disagreement between what the vendor printed and
+  /// what this record says is visible rather than resolved by whichever one was
+  /// written last.
+  ocrInvoiceDate         DateTime?     @map("ocr_invoice_date") @db.Timestamptz(6)
+  ocrVendorInvoiceRef    String?       @map("ocr_vendor_invoice_ref")
+  /// True while `invoiceDate` / `vendorInvoiceRef` hold system defaults rather
+  /// than anything a person asserted.
+  ///
+  /// `createFromUpload` — every PDF upload and every emailed invoice — stamps
+  /// the date as today and, from email intake, the reference as the message
+  /// subject. Neither is a claim about the document; both are stand-ins until it
+  /// is read. OCR fills them in and clears this flag. Where the flag is false a
+  /// human typed those values, and OCR disagreeing with them raises
+  /// DOCUMENT_MISMATCH instead of overwriting them.
+  headerAwaitingOcr      Boolean       @default(false) @map("header_awaiting_ocr")
   msmeDueDate            DateTime?     @db.Timestamptz(6)
   assignedToId           String?       @map("assigned_to_id")
   holdReason             String?
