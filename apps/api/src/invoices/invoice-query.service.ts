@@ -223,6 +223,33 @@ export class InvoiceQueryService {
         .filter((e) => !e.resolvedAt && e.invoiceLineId)
         .map((e) => e.invoiceLineId),
     );
+    /*
+     * What OTHER live invoices have already billed against each PO line.
+     *
+     * The match card compares this invoice's quantity against the PO's ordered
+     * quantity, which reads as headroom that may not exist: two invoices of 200
+     * against an order for 1000 each look like a fifth of it, and nothing on
+     * either page says the other exists. REJECTED excluded and this invoice
+     * excluded, so the figure is exactly "claimed by someone else".
+     */
+    const billedElsewhere = new Map<string, Decimal>();
+    if (inv.poId) {
+      const rows = await this.prisma.client.invoiceLine.groupBy({
+        by: ['poLineId'],
+        where: {
+          poLine: { poId: inv.poId },
+          invoiceId: { not: inv.id },
+          invoice: { status: { notIn: ['REJECTED'] } },
+        },
+        _sum: { qty: true },
+      });
+      for (const r of rows) {
+        if (r.poLineId) {
+          billedElsewhere.set(r.poLineId, new Decimal(r._sum.qty?.toString() ?? '0'));
+        }
+      }
+    }
+
     // Comment authors and exception resolvers are looked up together — the
     // approver needs a name against an overridden exception, not a user id.
     const authorIds = [
@@ -323,6 +350,8 @@ export class InvoiceQueryService {
         itemDesc: l.itemDesc,
         uom: l.uom,
         qtyOrdered: l.qtyOrdered.toString(),
+        qtyReceived: l.qtyReceived.toString(),
+        qtyInvoicedElsewhere: (billedElsewhere.get(l.id) ?? new Decimal(0)).toString(),
         unitPrice: l.unitPrice.toString(),
         taxRate: l.taxRate.toString(),
       })),

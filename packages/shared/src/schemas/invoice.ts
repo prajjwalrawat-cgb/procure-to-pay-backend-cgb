@@ -197,6 +197,17 @@ export interface InvoiceDetailResponse {
     itemDesc: string;
     uom: string;
     qtyOrdered: string;
+    /** Accepted on posted goods receipts against this line. */
+    qtyReceived: string;
+    /**
+     * Billed against this line by OTHER live invoices — this one excluded.
+     *
+     * Without it the match card shows "1000 ordered" beside "200 invoiced" and
+     * reads as though 800 remain, when two earlier invoices may already have
+     * taken it. The reviewer cannot see the other invoices from here, so the
+     * card has to carry the number.
+     */
+    qtyInvoicedElsewhere: string;
     unitPrice: string;
     taxRate: string;
   }[];
