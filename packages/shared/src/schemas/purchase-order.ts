@@ -297,6 +297,11 @@ export interface PoLineView {
   uom: string;
   qtyOrdered: string;
   qtyReceived: string;
+  /**
+   * Billed by live invoices, summed from their lines. NOT the
+   * `PurchaseOrderLine.qtyInvoiced` column, which is written by nothing and is
+   * zero on every row.
+   */
   qtyInvoiced: string;
   unitPrice: string;
   discountPct: string;
@@ -304,6 +309,32 @@ export interface PoLineView {
   lineTotal: string;
   glAccount: string | null;
   fulfilmentPct: number;
+}
+
+/**
+ * How far a purchase order has got along ONE axis. Receipt and billing move
+ * independently — an order can be fully invoiced with nothing received, which
+ * is precisely the case worth seeing — so they are reported separately rather
+ * than collapsed into `status`.
+ *
+ * `status` itself stays the authorisation/lifecycle state (draft → issued →
+ * acknowledged → closed). It cannot also carry billing: GRN posting already
+ * owns that column for the receipt axis, setting PARTIALLY_RECEIVED/RECEIVED
+ * and reverting to ISSUED when a receipt is reversed. A second writer would
+ * clobber it.
+ *
+ * OVER is reachable on the billing axis only, and means more has been invoiced
+ * than was ever ordered.
+ */
+export type PoProgress = 'NONE' | 'PARTIAL' | 'COMPLETE' | 'OVER';
+
+/** The two independent axes, derived at read time from lines and invoices. */
+export interface PoFulfilment {
+  receipt: PoProgress;
+  billing: PoProgress;
+  /** 0–100, capped at 100 for display; `billing: 'OVER'` carries the overage. */
+  receivedPct: number;
+  billedPct: number;
 }
 
 export interface PoListItem {
@@ -315,6 +346,8 @@ export interface PoListItem {
   status: string;
   poType: string;
   fulfilmentPct: number;
+  /** Receipt and billing progress, independent of `status`. */
+  fulfilment: PoFulfilment;
   expectedDeliveryDate: string | null;
   totalAmount: string;
   currency: string;
@@ -338,6 +371,8 @@ export interface PoDetailResponse {
   id: string;
   number: string;
   status: string;
+  /** Receipt and billing progress, independent of `status`. */
+  fulfilment: PoFulfilment;
   poType: string;
   isAmendmentOf: string | null;
   vendor: {

@@ -263,6 +263,12 @@ enum ExceptionType {
   DUPLICATE
   GSTIN_INACTIVE
   GSTR2B_MISMATCH
+  UOM_MISMATCH
+  DATE_SEQUENCE
+  DOCUMENT_MISMATCH
+  PO_NOT_OPEN
+  AMOUNT_MISMATCH
+  VENDOR_BLOCKED
 }
 
 enum InvoiceSource {
@@ -1503,6 +1509,32 @@ model Invoice {
   gstr2bMatchedAt        DateTime?     @db.Timestamptz(6)
   ocrConfidence          Decimal?      @db.Decimal(5, 4)
   ocrJobId               String?       @map("ocr_job_id")
+  /// Grand total as PRINTED on the document, straight from OCR — deliberately
+  /// not derived from the lines. `grossAmount` is computed by summing the line
+  /// items, so it agrees with them by construction and can never contradict
+  /// them. This is the only value that can: if OCR drops a line or misreads a
+  /// quantity, the recomputed total follows the mistake silently, and only the
+  /// number the vendor actually printed reveals it. Null when the provider did
+  /// not return one (older documents, manual entry) — the check then skips
+  /// rather than inventing agreement.
+  ocrDeclaredTotal       Decimal?      @map("ocr_declared_total") @db.Decimal(18, 4)
+  /// Invoice date and vendor reference as PRINTED on the document, from OCR.
+  /// Stored alongside — never instead of — the operative `invoiceDate` and
+  /// `vendorInvoiceRef`, so a disagreement between what the vendor printed and
+  /// what this record says is visible rather than resolved by whichever one was
+  /// written last.
+  ocrInvoiceDate         DateTime?     @map("ocr_invoice_date") @db.Timestamptz(6)
+  ocrVendorInvoiceRef    String?       @map("ocr_vendor_invoice_ref")
+  /// True while `invoiceDate` / `vendorInvoiceRef` hold system defaults rather
+  /// than anything a person asserted.
+  ///
+  /// `createFromUpload` — every PDF upload and every emailed invoice — stamps
+  /// the date as today and, from email intake, the reference as the message
+  /// subject. Neither is a claim about the document; both are stand-ins until it
+  /// is read. OCR fills them in and clears this flag. Where the flag is false a
+  /// human typed those values, and OCR disagreeing with them raises
+  /// DOCUMENT_MISMATCH instead of overwriting them.
+  headerAwaitingOcr      Boolean       @default(false) @map("header_awaiting_ocr")
   msmeDueDate            DateTime?     @db.Timestamptz(6)
   assignedToId           String?       @map("assigned_to_id")
   holdReason             String?

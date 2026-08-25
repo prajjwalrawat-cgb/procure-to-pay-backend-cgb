@@ -1,5 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@procureflow/db';
 import { computeDocTax, taxKindLabel, type VendorPoOption } from '@procureflow/shared';
+import Decimal from 'decimal.js';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { TdsService } from './domain/tds.service';
@@ -150,37 +152,114 @@ export class RefsService {
     const plant = tenantId
       ? await this.prisma.client.plant.findFirst(defaultPlantQuery(tenantId))
       : null;
-    return pos.map((po) => {
-      const tax = computeDocTax(
-        po.lines.map((l) => ({
-          qty: l.qtyOrdered.toString(),
-          unitPrice: l.unitPrice.toString(),
-          discountPct: l.discountPct.toString(),
-          taxRate: l.taxRate.toString(),
-        })),
-        { plantStateCode: plant?.stateCode ?? '17', vendorGstin: po.vendor.gstin },
-      );
-      return {
-        id: po.id,
-        number: po.number,
-        currency: po.currency,
-        lines: po.lines.map((l) => ({
-          id: l.id,
-          lineNo: l.lineNo,
-          itemDesc: l.itemDesc,
-          hsnCode: l.hsnCode,
-          uom: l.uom,
-          qtyOrdered: l.qtyOrdered.toString(),
-          unitPrice: l.unitPrice.toString(),
-          taxRate: l.taxRate.toString(),
-        })),
-        amounts: {
-          subtotal: tax.subtotal,
-          taxAmount: tax.taxAmount,
-          taxKind: taxKindLabel(tax.taxKind),
-          total: tax.total,
-        },
-      };
-    });
+
+    /*
+     * How much of each line other live invoices have already claimed.
+     *
+     * Summed from invoice lines rather than read from
+     * `PurchaseOrderLine.qtyInvoiced`, which is surfaced in three query
+     * services and incremented by nothing — it is zero on every row in the
+     * database. Mirrors MatchService exactly, REJECTED excluded and everything
+     * else counted, so the quantity this form seeds is precisely the quantity
+     * the matcher will accept. Any other basis and the form and the matcher
+     * disagree about the same PO line.
+     */
+    const poLineIds = pos.flatMap((po) => po.lines.map((l) => l.id));
+    const billedRows =
+      poLineIds.length > 0
+        ? await this.prisma.client.invoiceLine.groupBy({
+            by: ['poLineId'],
+            where: {
+              poLineId: { in: poLineIds },
+              invoice: { status: { notIn: ['REJECTED'] } },
+            },
+            _sum: { qty: true },
+          })
+        : [];
+    const billed = new Map(
+      billedRows.map((r) => [r.poLineId, new Decimal(r._sum.qty?.toString() ?? '0')]),
+    );
+    return (
+      pos
+        .map((po) => {
+          const tax = computeDocTax(
+            po.lines.map((l) => ({
+              qty: l.qtyOrdered.toString(),
+              unitPrice: l.unitPrice.toString(),
+              discountPct: l.discountPct.toString(),
+              taxRate: l.taxRate.toString(),
+            })),
+            { plantStateCode: plant?.stateCode ?? '17', vendorGstin: po.vendor.gstin },
+          );
+          return {
+            id: po.id,
+            number: po.number,
+            currency: po.currency,
+            /** Nothing left to bill on any line — see `exhausted` below. */
+            fullyInvoiced: po.lines.every((l) =>
+              new Decimal(
+                billableQty(l.qtyOrdered, l.qtyReceived, billed.get(l.id)),
+              ).lessThanOrEqualTo(0),
+            ),
+            lines: po.lines.map((l) => ({
+              id: l.id,
+              lineNo: l.lineNo,
+              itemDesc: l.itemDesc,
+              hsnCode: l.hsnCode,
+              uom: l.uom,
+              qtyOrdered: l.qtyOrdered.toString(),
+              qtyReceived: l.qtyReceived.toString(),
+              qtyInvoiced: (billed.get(l.id) ?? new Decimal(0)).toString(),
+              qtyBillable: billableQty(l.qtyOrdered, l.qtyReceived, billed.get(l.id)),
+              unitPrice: l.unitPrice.toString(),
+              taxRate: l.taxRate.toString(),
+            })),
+            amounts: {
+              subtotal: tax.subtotal,
+              taxAmount: tax.taxAmount,
+              taxKind: taxKindLabel(tax.taxKind),
+              total: tax.total,
+            },
+          };
+        })
+        /*
+         * A purchase order with nothing left to bill is not invoiceable.
+         *
+         * The status filter above already excludes INVOICED — the intent has always
+         * been that a fully-billed order drops out — but nothing in the codebase
+         * ever sets that status: `INVOICED` and `PARTIALLY_INVOICED` appear only in
+         * read filters, never in an update. So an order stayed ISSUED forever and
+         * kept accepting invoices, which is how PO-0498 came to carry 200 units
+         * billed against 100 ordered.
+         *
+         * Filtering on remaining quantity enforces the intent without depending on
+         * a status nothing maintains. A supplier who needs to bill more needs the
+         * order amended — the PO is the authorisation, and billing past it is not
+         * the supplier's call to make.
+         */
+        .filter((po) => !po.fullyInvoiced)
+    );
   }
+}
+
+/**
+ * What is still billable on a PO line.
+ *
+ * Basis is what was RECEIVED once anything has been, and what was ORDERED
+ * before then — the same rule the match engine applies, so a supplier billing
+ * the seeded figure clears QTY_VARIANCE rather than tripping it. Services and
+ * advance billing legitimately precede any receipt, which is why nothing has
+ * been received falls back to the order rather than to zero.
+ *
+ * Clamped at zero: a fully billed line offers nothing further.
+ */
+function billableQty(
+  qtyOrdered: Prisma.Decimal,
+  qtyReceived: Prisma.Decimal,
+  alreadyBilled: Decimal | undefined,
+): string {
+  const received = new Decimal(qtyReceived.toString());
+  const basis = received.greaterThan(0) ? received : new Decimal(qtyOrdered.toString());
+  const remaining = basis.minus(alreadyBilled ?? new Decimal(0));
+  return Decimal.max(remaining, new Decimal(0)).toString();
 }

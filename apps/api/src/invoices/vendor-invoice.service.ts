@@ -68,8 +68,45 @@ export class VendorInvoiceService {
   ): Promise<{ id: string }> {
     const vendorId = await this.resolveVendorId(userId);
     await this.assertUploadedKey(tenantId, input.s3Key);
+    await this.assertPoStillBillable(vendorId, input.poId);
     const id = await this.invoices.createFromVendorPortal(tenantId, vendorId, input);
     return { id };
+  }
+
+  /**
+   * Refuse an invoice against a purchase order with nothing left to bill.
+   *
+   * Hiding exhausted orders from the picker is presentation; this is the
+   * control. The portal posts a poId, so a stale tab, a resubmitted request or
+   * a hand-rolled call can still name an order the supplier can no longer bill
+   * against, and the PO is the authorisation — every line of such an invoice
+   * would exceed it.
+   *
+   * Whole-order only, deliberately. A partly-exhausted order stays submittable
+   * and per-line excess is warned about in the form and raised as
+   * QTY_VARIANCE for the buyer to weigh: over-delivery does happen and
+   * accepting it is the buyer's call. An order with nothing billable anywhere
+   * carries no such judgement — there is no quantity that clears — so it is
+   * refused here rather than turned into an exception somebody has to process.
+   */
+  private async assertPoStillBillable(
+    vendorId: string,
+    poId: string | null | undefined,
+  ): Promise<void> {
+    if (!poId) return;
+    const open = await this.refs.vendorOpenPos(vendorId);
+    if (open.some((po) => po.id === poId)) return;
+
+    const po = await this.prisma.client.purchaseOrder.findFirst({
+      where: { id: poId, vendorId },
+      select: { number: true },
+    });
+    throw new BadRequestException(
+      po
+        ? `Everything on ${po.number} has already been invoiced. Ask your buyer ` +
+            'to amend the purchase order if more needs to be billed against it.'
+        : 'That purchase order is not open for invoicing.',
+    );
   }
 
   /**

@@ -383,9 +383,19 @@ interface FetchResponse {
   json(): Promise<unknown>;
 }
 
-/** A scanned certificate can be a large image; generous, but bounded, so a hung
- *  sidecar cannot hold the vendor's upload request open indefinitely. */
-const REQUEST_TIMEOUT_MS = 45_000;
+/**
+ * Fallback ceiling, used when KYC_REQUEST_TIMEOUT_MS is unset. A scanned
+ * certificate can be a large image; generous, but bounded, so a hung sidecar
+ * cannot hold the vendor's upload request open indefinitely.
+ *
+ * Shorter than the invoice path on purpose. This runs inside the vendor's
+ * upload request rather than a worker, so the ceiling is what a person will
+ * sit through. The trade-off is real: with a slow self-hosted engine the call
+ * times out and the local text-layer parser answers instead — degraded, but
+ * immediate, and logged as an ERROR against the integration so the
+ * degradation is visible rather than assumed.
+ */
+const DEFAULT_TIMEOUT_MS = 60_000;
 
 /**
  * RealKycExtractionProvider (mirrors RealOcrProvider, Slice 10a). Posts a
@@ -417,7 +427,10 @@ export class RealKycExtractionProvider implements IKycExtractionProvider {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ document_url: url, doc_type: input.docType }),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(
+          this.config.get('KYC_REQUEST_TIMEOUT_MS', { infer: true }) ||
+            DEFAULT_TIMEOUT_MS,
+        ),
       })) as FetchResponse;
       if (!res.ok) throw new Error(`extract-kyc responded ${res.status}`);
       const body = (await res.json()) as KycApiResponse;

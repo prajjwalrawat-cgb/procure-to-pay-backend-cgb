@@ -223,7 +223,62 @@ export class InvoiceQueryService {
         .filter((e) => !e.resolvedAt && e.invoiceLineId)
         .map((e) => e.invoiceLineId),
     );
-    const authorIds = [...new Set(inv.comments.map((c) => c.authorId))];
+    /*
+     * What OTHER live invoices have already billed against each PO line.
+     *
+     * The match card compares this invoice's quantity against the PO's ordered
+     * quantity, which reads as headroom that may not exist: two invoices of 200
+     * against an order for 1000 each look like a fifth of it, and nothing on
+     * either page says the other exists. REJECTED excluded and this invoice
+     * excluded, so the figure is exactly "claimed by someone else".
+     */
+    const billedElsewhere = new Map<string, Decimal>();
+    if (inv.poId) {
+      const rows = await this.prisma.client.invoiceLine.groupBy({
+        by: ['poLineId'],
+        where: {
+          poLine: { poId: inv.poId },
+          invoiceId: { not: inv.id },
+          invoice: { status: { notIn: ['REJECTED'] } },
+        },
+        _sum: { qty: true },
+      });
+      for (const r of rows) {
+        if (r.poLineId) {
+          billedElsewhere.set(r.poLineId, new Decimal(r._sum.qty?.toString() ?? '0'));
+        }
+      }
+    }
+
+    // The sibling invoices behind that number. Same filter as the quantities
+    // above, so the list and the figure can never disagree.
+    const relatedInvoices = inv.poId
+      ? await this.prisma.client.invoice.findMany({
+          where: {
+            poId: inv.poId,
+            id: { not: inv.id },
+            status: { notIn: ['REJECTED'] },
+          },
+          orderBy: { invoiceDate: 'asc' },
+          select: {
+            id: true,
+            number: true,
+            vendorInvoiceRef: true,
+            status: true,
+            grossAmount: true,
+            invoiceDate: true,
+          },
+        })
+      : [];
+
+    // Comment authors and exception resolvers are looked up together — the
+    // approver needs a name against an overridden exception, not a user id.
+    const authorIds = [
+      ...new Set([
+        ...inv.comments.map((c) => c.authorId),
+        ...inv.exceptions.map((e) => e.resolvedBy).filter((v): v is string => !!v),
+      ]),
+    ];
     const authors = await this.prisma.client.user.findMany({
       where: { id: { in: authorIds } },
       select: { id: true, name: true },
@@ -316,8 +371,18 @@ export class InvoiceQueryService {
         itemDesc: l.itemDesc,
         uom: l.uom,
         qtyOrdered: l.qtyOrdered.toString(),
+        qtyReceived: l.qtyReceived.toString(),
+        qtyInvoicedElsewhere: (billedElsewhere.get(l.id) ?? new Decimal(0)).toString(),
         unitPrice: l.unitPrice.toString(),
         taxRate: l.taxRate.toString(),
+      })),
+      relatedInvoices: relatedInvoices.map((r) => ({
+        id: r.id,
+        number: r.number,
+        vendorInvoiceRef: r.vendorInvoiceRef,
+        status: r.status,
+        grossAmount: r.grossAmount.toString(),
+        invoiceDate: r.invoiceDate.toISOString(),
       })),
       exceptions: inv.exceptions.map((e) => {
         const d = (e.details ?? {}) as Record<string, string | null>;
@@ -335,6 +400,8 @@ export class InvoiceQueryService {
           resolved: e.resolvedAt !== null,
           resolutionAction: e.resolutionAction,
           resolutionNotes: e.resolutionNotes,
+          resolvedByName: e.resolvedBy ? (authorName.get(e.resolvedBy) ?? null) : null,
+          resolvedAt: e.resolvedAt?.toISOString() ?? null,
         };
       }),
       suggestedResolution: suggestResolution(inv.exceptions),
@@ -372,7 +439,20 @@ export class InvoiceQueryService {
         irn: inv.irn,
         ewaybillNo: inv.ewaybillNo,
         gstr2bStatus: inv.gstr2bStatus,
-        gstinStatus: 'ACTIVE', // stub until Slice 10
+        /**
+         * Never checked, and now says so.
+         *
+         * This was hardcoded to 'ACTIVE', which rendered a green ACTIVE pill on
+         * every invoice in the system — including vendors whose registration had
+         * lapsed or been suspended. Nothing anywhere writes a GSTIN_INACTIVE
+         * exception either, so the reassuring pill was the only signal a
+         * reviewer got, and it was a literal.
+         *
+         * A real answer needs a GSTN lookup at match time through the GSP, which
+         * is still on the sandbox credential. Until that is live this reports
+         * NOT_CHECKED — which renders warn, not success.
+         */
+        gstinStatus: 'NOT_CHECKED',
       },
       attachments,
       comments: inv.comments.map((c) => ({

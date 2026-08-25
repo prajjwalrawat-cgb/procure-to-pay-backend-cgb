@@ -140,6 +140,13 @@ export interface InvoiceExceptionView {
   resolved: boolean;
   resolutionAction: string | null;
   resolutionNotes: string | null;
+  /**
+   * Who overrode the exception, and when. An approver needs to see that a
+   * HIGH exception was waved through and by whom — "0 open exceptions" reads
+   * identically whether the match was clean or somebody accepted the risk.
+   */
+  resolvedByName: string | null;
+  resolvedAt: string | null;
 }
 
 export interface InvoiceLineView {
@@ -190,8 +197,38 @@ export interface InvoiceDetailResponse {
     itemDesc: string;
     uom: string;
     qtyOrdered: string;
+    /** Accepted on posted goods receipts against this line. */
+    qtyReceived: string;
+    /**
+     * Billed against this line by OTHER live invoices — this one excluded.
+     *
+     * Without it the match card shows "1000 ordered" beside "200 invoiced" and
+     * reads as though 800 remain, when two earlier invoices may already have
+     * taken it. The reviewer cannot see the other invoices from here, so the
+     * card has to carry the number.
+     */
+    qtyInvoicedElsewhere: string;
     unitPrice: string;
     taxRate: string;
+  }[];
+  /**
+   * The other live invoices raised against this invoice's purchase order.
+   *
+   * The match card can say how much has been claimed elsewhere, but not by
+   * whom — and a reviewer who has just been told 100 units are already spoken
+   * for immediately wants to know by which invoice, in what state, for how
+   * much. Without this the only route is to open the PO and read its invoice
+   * list, which is two navigations away from the decision being made.
+   *
+   * REJECTED excluded, so this lists exactly the claims that still count.
+   */
+  relatedInvoices: {
+    id: string;
+    number: string;
+    vendorInvoiceRef: string;
+    status: string;
+    grossAmount: string;
+    invoiceDate: string;
   }[];
   exceptions: InvoiceExceptionView[];
   suggestedResolution: string | null;
@@ -236,6 +273,13 @@ export interface VendorPoOption {
   id: string;
   number: string;
   currency: string;
+  /**
+   * Every line fully billed. Options carrying this are filtered out before the
+   * portal sees them; the field stays on the type so a caller that wants to
+   * show exhausted orders (a buyer-side view, say) can tell them apart rather
+   * than inferring it from quantities.
+   */
+  fullyInvoiced: boolean;
   lines: {
     id: string;
     lineNo: number;
@@ -243,6 +287,25 @@ export interface VendorPoOption {
     hsnCode: string | null;
     uom: string;
     qtyOrdered: string;
+    /** Accepted on posted goods receipts against this line. */
+    qtyReceived: string;
+    /**
+     * Already billed by other live invoices — summed from their lines, the same
+     * way the matcher does it, because `PurchaseOrderLine.qtyInvoiced` is read
+     * in three places and written by nothing.
+     */
+    qtyInvoiced: string;
+    /**
+     * What the supplier can still bill without tripping QTY_VARIANCE: received
+     * where anything has been received, else ordered, less what is already
+     * billed. Clamped at zero.
+     *
+     * The submit form seeds the quantity from this rather than from
+     * `qtyOrdered`. Seeding the full order on a part-billed PO hands the
+     * supplier a number the matcher is guaranteed to reject — the form would be
+     * walking them into an exception it had the data to prevent.
+     */
+    qtyBillable: string;
     unitPrice: string;
     /** Fraction, e.g. "0.05" for 5% — the rate the PO was raised at. */
     taxRate: string;

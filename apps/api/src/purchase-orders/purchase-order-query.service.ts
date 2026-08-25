@@ -6,10 +6,12 @@ import {
   type DeliveryAddress,
   type PaymentTerms,
   type PoDetailResponse,
+  type PoFulfilment,
   type PoLineView,
   type PoListItem,
   type PoListQuery,
   type PoListResponse,
+  type PoProgress,
 } from '@procureflow/shared';
 import Decimal from 'decimal.js';
 
@@ -83,9 +85,10 @@ export class PurchaseOrderQueryService {
     const hasMore = rows.length > query.limit;
     const page = hasMore ? rows.slice(0, query.limit) : rows;
     const counts = await this.counts();
+    const billed = await this.billedByPoLine(page.map((po) => po.id));
 
     return {
-      items: page.map((po) => this.toListItem(po)),
+      items: page.map((po) => this.toListItem(po, billed)),
       nextCursor: hasMore ? (page[page.length - 1]?.id ?? null) : null,
       totalEstimate: await this.prisma.client.purchaseOrder.count({ where }),
       counts,
@@ -93,6 +96,7 @@ export class PurchaseOrderQueryService {
   }
 
   async detail(id: string, userId: string): Promise<PoDetailResponse> {
+    const billed = await this.billedByPoLine([id]);
     const po = await this.prisma.client.purchaseOrder.findUnique({
       where: { id },
       include: {
@@ -157,7 +161,7 @@ export class PurchaseOrderQueryService {
           }
         : null,
       stages: this.stages(po.status),
-      lines: po.lines.map((l) => this.toLineView(l)),
+      lines: po.lines.map((l) => this.toLineView(l, billed)),
       amounts: {
         subtotal: tax.subtotal,
         taxAmount: tax.taxAmount,
@@ -219,12 +223,76 @@ export class PurchaseOrderQueryService {
       ].includes(po.status),
       canHold: po.status === 'APPROVED' || po.status === 'ISSUED',
       fulfilmentPct: this.fulfilment(po.lines),
+      fulfilment: this.fulfilmentOf(po.lines, billed),
     };
   }
 
   // ── internals ──────────────────────────────────────────────────────────────
 
-  private toListItem(po: PoWithRels): PoListItem {
+  /**
+   * Quantity billed per PO line by live invoices.
+   *
+   * Summed from invoice lines, not read from `PurchaseOrderLine.qtyInvoiced` —
+   * that column is surfaced by this very service and written by nothing, so it
+   * reads zero on every row. REJECTED invoices are excluded, matching the match
+   * engine, so the figures here and the ones the matcher enforces agree.
+   *
+   * Batched for the list: one groupBy for the page rather than a query per PO.
+   */
+  private async billedByPoLine(poIds: string[]): Promise<Map<string, Decimal>> {
+    if (poIds.length === 0) return new Map();
+    const rows = await this.prisma.client.invoiceLine.groupBy({
+      by: ['poLineId'],
+      where: {
+        poLine: { poId: { in: poIds } },
+        invoice: { status: { notIn: ['REJECTED'] } },
+      },
+      _sum: { qty: true },
+    });
+    return new Map(
+      rows
+        .filter((r): r is typeof r & { poLineId: string } => r.poLineId !== null)
+        .map((r) => [r.poLineId, new Decimal(r._sum.qty?.toString() ?? '0')]),
+    );
+  }
+
+  /**
+   * Receipt and billing progress, as two independent axes.
+   *
+   * They are reported separately because they genuinely move apart: an order
+   * can be fully invoiced with nothing received — which is the combination most
+   * worth seeing, and the one a single status label hides. `status` cannot
+   * carry both; GRN posting already owns it for the receipt axis.
+   */
+  private fulfilmentOf(
+    lines: { id: string; qtyOrdered: Prisma.Decimal; qtyReceived: Prisma.Decimal }[],
+    billed: Map<string, Decimal>,
+  ): PoFulfilment {
+    const sum = (pick: (l: (typeof lines)[number]) => Decimal): Decimal =>
+      lines.reduce((a, l) => a.plus(pick(l)), new Decimal(0));
+
+    const ordered = sum((l) => new Decimal(l.qtyOrdered.toString()));
+    const received = sum((l) => new Decimal(l.qtyReceived.toString()));
+    const invoiced = sum((l) => billed.get(l.id) ?? new Decimal(0));
+
+    const pct = (n: Decimal): number =>
+      ordered.isZero() ? 0 : Number(n.dividedBy(ordered).times(100).toFixed(1));
+
+    const axis = (n: Decimal, allowOver: boolean): PoProgress => {
+      if (n.lessThanOrEqualTo(0)) return 'NONE';
+      if (allowOver && n.greaterThan(ordered)) return 'OVER';
+      return n.greaterThanOrEqualTo(ordered) ? 'COMPLETE' : 'PARTIAL';
+    };
+
+    return {
+      receipt: axis(received, false),
+      billing: axis(invoiced, true),
+      receivedPct: Math.min(pct(received), 100),
+      billedPct: Math.min(pct(invoiced), 100),
+    };
+  }
+
+  private toListItem(po: PoWithRels, billed: Map<string, Decimal>): PoListItem {
     return {
       id: po.id,
       number: po.number,
@@ -240,6 +308,7 @@ export class PurchaseOrderQueryService {
       status: po.status,
       poType: po.poType,
       fulfilmentPct: this.fulfilment(po.lines),
+      fulfilment: this.fulfilmentOf(po.lines, billed),
       expectedDeliveryDate: po.expectedDeliveryDate?.toISOString() ?? null,
       totalAmount: po.totalAmount.toString(),
       currency: po.currency,
@@ -249,6 +318,7 @@ export class PurchaseOrderQueryService {
 
   private toLineView(
     l: Prisma.PurchaseOrderLineGetPayload<Record<string, never>>,
+    billed: Map<string, Decimal>,
   ): PoLineView {
     const ordered = new Decimal(l.qtyOrdered.toString());
     const received = new Decimal(l.qtyReceived.toString());
@@ -265,7 +335,7 @@ export class PurchaseOrderQueryService {
       uom: l.uom,
       qtyOrdered: ordered.toFixed(4),
       qtyReceived: received.toFixed(4),
-      qtyInvoiced: l.qtyInvoiced.toString(),
+      qtyInvoiced: (billed.get(l.id) ?? new Decimal(0)).toString(),
       unitPrice: l.unitPrice.toString(),
       discountPct: l.discountPct.toString(),
       taxRate: l.taxRate.toString(),

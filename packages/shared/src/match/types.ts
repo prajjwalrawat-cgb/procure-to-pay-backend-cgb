@@ -17,7 +17,30 @@ export interface MatchTolerances {
   qtyVarianceAbs: string;
   /** Tax must match exactly when true. */
   taxExact: boolean;
+  /**
+   * Absolute rupee tolerance when comparing the total PRINTED on the document
+   * against the sum of its own lines. Vendors round per line, per tax head, or
+   * at the foot, so a genuine invoice is routinely off by paise. Defaults to
+   * ₹1 — tight enough that a dropped or misread line cannot hide inside it.
+   */
+  amountRoundingAbs?: string;
+  /**
+   * Days of slack on date-sequence checks. An invoice dated the same day as
+   * the PO but timestamped a few hours earlier is a clock artefact, not
+   * back-dating. Defaults to 1.
+   */
+  dateGraceDays?: string;
 }
+
+/** Statuses a purchase order may legitimately be invoiced against. */
+export const INVOICEABLE_PO_STATUS = [
+  'ISSUED',
+  'ACKNOWLEDGED',
+  'PARTIALLY_RECEIVED',
+  'RECEIVED',
+  'PARTIALLY_INVOICED',
+  'INVOICED',
+] as const;
 
 export interface MatchPoLine {
   id: string;
@@ -27,6 +50,15 @@ export interface MatchPoLine {
   qtyOrdered: string;
   unitPrice: string;
   taxRate: string;
+  /**
+   * Quantity already billed against this PO line by OTHER live invoices
+   * (rejected and cancelled ones excluded). Without this the matcher scores
+   * every invoice against the full ordered/received quantity in isolation, so
+   * a vendor can bill 200 against a 1000-unit PO nine times and each invoice
+   * passes on its own — 1800 units paid on a 1000-unit order. Defaults to '0'
+   * so existing callers keep the previous single-invoice behaviour.
+   */
+  qtyAlreadyInvoiced?: string;
 }
 
 export interface MatchGrnLine {
@@ -45,12 +77,66 @@ export interface MatchInvoiceLine {
   taxRate: string;
   /** Explicit PO line link when known; otherwise matched by item description. */
   poLineId?: string | null;
+  /**
+   * `qty` expressed in the PO line's unit, when the two units differ and the
+   * item has a conversion defined. Resolved by the caller — the engine stays
+   * pure — exactly as GRN already does for receipts booked in a different unit
+   * (`GrnLine.uomConversionFactor`).
+   *
+   * Absent when the units agree (nothing to convert) or when no conversion
+   * exists for the item. Those two cases are not the same: the second means the
+   * quantities are genuinely incomparable, and the engine raises UOM_MISMATCH
+   * rather than comparing numbers that mean different things.
+   */
+  qtyInPoUom?: string | null;
 }
 
 export interface MatchInput {
-  po: { lines: MatchPoLine[]; allowFreightLines: boolean } | null;
-  grn: { lines: MatchGrnLine[] } | null;
-  invoice: { lines: MatchInvoiceLine[] };
+  po: {
+    lines: MatchPoLine[];
+    allowFreightLines: boolean;
+    /** PoStatus. Absent on older callers — the status check then skips. */
+    status?: string | null;
+    /** When the PO was issued to the vendor, ISO 8601. */
+    issuedAt?: string | null;
+  } | null;
+  grn: {
+    lines: MatchGrnLine[];
+    /**
+     * Receipt date of the EARLIEST goods receipt on this PO, ISO 8601. Earliest,
+     * not latest: on a part-delivered order an invoice legitimately predates
+     * later receipts, so only predating the first one means nothing had arrived.
+     */
+    firstReceivedAt?: string | null;
+  } | null;
+  invoice: {
+    lines: MatchInvoiceLine[];
+    /** The operative invoice date on this record, ISO 8601. */
+    invoiceDate?: string | null;
+    /** The operative vendor reference on this record. */
+    vendorInvoiceRef?: string | null;
+    /**
+     * Invoice date and vendor reference as PRINTED on the document, from OCR.
+     *
+     * Kept apart from the two above for the same reason `declaredTotal` is kept
+     * apart from the line items: the record's values can be typed by a person or
+     * defaulted by the system, and only the document is evidence of what the
+     * vendor actually issued. Where the two disagree that is the finding —
+     * neither silently wins.
+     */
+    declaredInvoiceDate?: string | null;
+    declaredVendorRef?: string | null;
+    /**
+     * Grand total printed on the document (incl. tax), as read by OCR. Null when
+     * the provider returned none — the check skips rather than assuming a match.
+     */
+    declaredTotal?: string | null;
+  };
+  /** Vendor state at match time. Absent on older callers — check skips. */
+  vendor?: {
+    /** VendorLifecycleStatus. */
+    lifecycleStatus?: string | null;
+  } | null;
   tolerances: MatchTolerances;
   /** True when another invoice with the same vendor ref already exists. */
   isDuplicate?: boolean;

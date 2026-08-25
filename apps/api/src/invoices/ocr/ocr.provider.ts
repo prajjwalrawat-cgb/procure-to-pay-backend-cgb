@@ -14,6 +14,18 @@ export interface OcrExtraction {
   irn?: string;
   ewaybillNo?: string;
   lines: OcrLine[];
+  /**
+   * Grand total as PRINTED on the document, incl. tax. Kept separate from the
+   * lines on purpose: the invoice's stored gross is computed by summing them,
+   * so it corroborates a bad extraction as readily as a good one. This is the
+   * one number that can contradict them, and the matcher's AMOUNT_MISMATCH
+   * check is the only thing standing between a misread line item and a payment
+   * for the wrong amount.
+   *
+   * Omitted when the provider did not return a total — downstream the check is
+   * skipped and the invoice is reported as unverified, never as agreeing.
+   */
+  declaredTotal?: string;
   confidence: number; // 0..1
 }
 
@@ -63,6 +75,8 @@ export class MockOcrProvider implements IOcrProvider {
             taxRate: '0.18',
           },
         ],
+        // (8×18900 + 2×11200 + 8400 + 1800) × 1.18
+        declaredTotal: '216884.00',
         confidence: 0.97,
       };
     }
@@ -91,6 +105,8 @@ export class MockOcrProvider implements IOcrProvider {
             taxRate: '0.18',
           },
         ],
+        // (8×18900 + 2×10800 + 8400) × 1.18
+        declaredTotal: '213816.00',
         confidence: 0.95,
       };
     }
