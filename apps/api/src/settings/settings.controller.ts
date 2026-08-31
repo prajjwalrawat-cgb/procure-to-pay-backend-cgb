@@ -221,4 +221,18 @@ export class SettingsController {
     if (!file?.buffer) throw new BadRequestException('No file was uploaded.');
     return this.settings.setLogo(user.tenantId, file, user.userId);
   }
+
+  /** Authorised signatory's signature — printed in the PO PDF's sign-off block. */
+  @Post('organisation/signature')
+  @RequirePermission(PERMISSIONS.SETTINGS_WRITE)
+  @UseInterceptors(FileInterceptor('file', DOCUMENT_UPLOAD_OPTIONS))
+  async uploadSignature(
+    @CurrentUser() user: AuthUser,
+    @UploadedFile()
+    file: { buffer: Buffer; mimetype: string; size?: number } | undefined,
+  ): Promise<OrganisationSettings> {
+    assertUploadSize(file);
+    if (!file?.buffer) throw new BadRequestException('No file was uploaded.');
+    return this.settings.setSignature(user.tenantId, file, user.userId);
+  }
 }

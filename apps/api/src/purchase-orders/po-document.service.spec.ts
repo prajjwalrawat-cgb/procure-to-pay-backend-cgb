@@ -4,8 +4,15 @@ import { dirname, join } from 'node:path';
 import Decimal from 'decimal.js';
 import { describe, expect, it, vi } from 'vitest';
 
+import { StorageService } from '../common/storage/storage.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PoDocumentService } from './po-document.service';
+
+/** Smallest valid PNG — enough for pdfkit to embed. */
+const PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
 
 const GOLDEN = join(
   __dirname,
@@ -76,14 +83,21 @@ function po0481() {
   };
 }
 
-function build() {
+function build(storage?: StorageService) {
   const po = po0481();
   const client = {
     purchaseOrder: { findUnique: vi.fn().mockResolvedValue(po) },
     plant: { findFirst: vi.fn().mockResolvedValue(po.requisition.plant) },
   };
   const prisma = { client } as unknown as PrismaService;
-  return new PoDocumentService(prisma);
+  return new PoDocumentService(prisma, storage);
+}
+
+/** Storage holding only the tenant's signature — no letterhead logo. */
+function signatureStorage(): StorageService {
+  return {
+    getBuffer: vi.fn(async (key: string) => (key.endsWith('/signature') ? PNG : null)),
+  } as unknown as StorageService;
 }
 
 describe('PoDocumentService', () => {
@@ -103,6 +117,16 @@ describe('PoDocumentService', () => {
     }
     const golden = readFileSync(GOLDEN);
     expect(buffer.equals(golden)).toBe(true);
+  });
+
+  it('prints the uploaded signature instead of the placeholder line', async () => {
+    const { buffer: plain } = await build().generate('po_0481', { deterministic: true });
+    const { buffer: signed } = await build(signatureStorage()).generate('po_0481', {
+      deterministic: true,
+    });
+    // The signature is embedded, so the stream grows and the bytes differ.
+    expect(signed.equals(plain)).toBe(false);
+    expect(signed.length).toBeGreaterThan(plain.length);
   });
 
   it('adds a CANCELLED watermark when requested', async () => {

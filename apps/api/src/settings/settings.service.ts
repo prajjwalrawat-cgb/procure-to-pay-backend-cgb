@@ -17,7 +17,12 @@ export function tenantLogoKey(tenantId: string): string {
   return `tenants/${tenantId}/logo`;
 }
 
-const LOGO_MIME = new Set(['image/png', 'image/jpeg', 'image/jpg']);
+/** The authorised signatory's signature image, stored the same way. */
+export function tenantSignatureKey(tenantId: string): string {
+  return `tenants/${tenantId}/signature`;
+}
+
+const IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/jpg']);
 
 /**
  * Organisation settings (Slice 11). The tenant's own identity — name, GSTIN,
@@ -42,7 +47,8 @@ export class SettingsService {
     return {
       tenant,
       branches: await this.listBranches(tenantId),
-      logoUrl: await this.logoUrl(tenantId),
+      logoUrl: await this.imageUrl(tenantLogoKey(tenantId)),
+      signatureUrl: await this.imageUrl(tenantSignatureKey(tenantId)),
     };
   }
 
@@ -182,12 +188,40 @@ export class SettingsService {
     file: { buffer: Buffer; mimetype: string },
     actorId: string,
   ): Promise<OrganisationSettings> {
-    if (!LOGO_MIME.has(file.mimetype)) {
-      throw new BadRequestException('The logo must be a PNG or JPEG image.');
-    }
-    await this.storage.put(tenantLogoKey(tenantId), file.buffer, file.mimetype);
-    await this.audit.record({
+    return this.setBrandingImage(tenantId, file, actorId, {
+      key: tenantLogoKey(tenantId),
       action: 'settings.logo_updated',
+      badMime: 'The logo must be a PNG or JPEG image.',
+    });
+  }
+
+  /** The signature printed above "Authorised signatory" on the PO PDF. A
+   *  transparent PNG sits on the ruled block better than a scanned JPEG, but
+   *  both are accepted. */
+  async setSignature(
+    tenantId: string,
+    file: { buffer: Buffer; mimetype: string },
+    actorId: string,
+  ): Promise<OrganisationSettings> {
+    return this.setBrandingImage(tenantId, file, actorId, {
+      key: tenantSignatureKey(tenantId),
+      action: 'settings.signature_updated',
+      badMime: 'The signature must be a PNG or JPEG image.',
+    });
+  }
+
+  private async setBrandingImage(
+    tenantId: string,
+    file: { buffer: Buffer; mimetype: string },
+    actorId: string,
+    opts: { key: string; action: string; badMime: string },
+  ): Promise<OrganisationSettings> {
+    if (!IMAGE_MIME.has(file.mimetype)) {
+      throw new BadRequestException(opts.badMime);
+    }
+    await this.storage.put(opts.key, file.buffer, file.mimetype);
+    await this.audit.record({
+      action: opts.action,
       entityType: 'Tenant',
       entityId: tenantId,
       actorId,
@@ -220,9 +254,8 @@ export class SettingsService {
   }
 
   /** Presigned only when an object actually exists, so the UI can tell
-   *  "no logo yet" from "logo that failed to load". */
-  private async logoUrl(tenantId: string): Promise<string | null> {
-    const key = tenantLogoKey(tenantId);
+   *  "nothing uploaded yet" from "image that failed to load". */
+  private async imageUrl(key: string): Promise<string | null> {
     if (!(await this.storage.exists(key))) return null;
     return this.storage.presignedGetUrl(key);
   }

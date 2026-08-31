@@ -49,6 +49,9 @@ export const OrganisationSettingsSchema = z.object({
   branches: z.array(BranchSchema),
   /** Time-limited URL for the letterhead logo, null when none is uploaded. */
   logoUrl: z.string().nullable(),
+  /** Time-limited URL for the authorised signatory's signature image, printed
+   *  in the PO signatory block. Null when none is uploaded. */
+  signatureUrl: z.string().nullable(),
 });
 export type OrganisationSettings = z.infer<typeof OrganisationSettingsSchema>;
 

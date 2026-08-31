@@ -20,7 +20,7 @@ import PDFDocument from 'pdfkit';
 import { StorageService } from '../common/storage/storage.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CustomFieldsService } from '../settings/custom-fields.service';
-import { tenantLogoKey } from '../settings/settings.service';
+import { tenantLogoKey, tenantSignatureKey } from '../settings/settings.service';
 
 export interface GeneratedPo {
   buffer: Buffer;
@@ -73,6 +73,10 @@ interface Frag {
   align?: 'left' | 'right' | 'center';
   /** Extra vertical space after this fragment. */
   gap?: number;
+  /** Draws an image instead of `text`, fitted into `imageHeight`. The band is
+   *  reserved whether or not the image loads, so the rows below never shift. */
+  image?: Buffer | string;
+  imageHeight?: number;
 }
 
 interface Cell {
@@ -236,6 +240,15 @@ export class PoDocumentService {
     return stored ?? resolveTenantLogo(tenantName);
   }
 
+  /**
+   * The authorised signatory's signature, uploaded through organisation
+   * settings. Absent until an admin uploads one — the sign-off block then
+   * prints its placeholder line instead.
+   */
+  private async loadSignature(tenantId: string): Promise<Buffer | null> {
+    return (await this.storage?.getBuffer(tenantSignatureKey(tenantId))) ?? null;
+  }
+
   /** The tenant's own PO fields that were marked "print on the PDF", in the
    *  order an admin arranged them. */
   private async printableFields(
@@ -291,10 +304,12 @@ export class PoDocumentService {
     const paymentTerms =
       (po.paymentTermsSnapshot as unknown as PaymentTerms | null) ?? null;
     const logo = await this.loadLogo(po.tenantId, po.tenant.name);
+    const signature = await this.loadSignature(po.tenantId);
     const customFields = await this.printableFields(po.tenantId, po.customFields);
     const buffer = await this.render(po, plant, tax, paymentTerms, {
       ...opts,
       logo,
+      signature,
       customFields,
     });
     const hash = createHash('sha256').update(buffer).digest('hex');
@@ -315,6 +330,8 @@ export class PoDocumentService {
       watermark?: string;
       deterministic?: boolean;
       logo?: Buffer | string | null;
+      /** Signature image printed over the authorised-signatory line. */
+      signature?: Buffer | null;
       /** Admin-defined fields the tenant marked printable. */
       customFields?: { label: string; value: string }[];
     },
@@ -353,6 +370,7 @@ export class PoDocumentService {
       };
       const cellHeight = (c: Cell): number =>
         c.frags.reduce((h, f) => {
+          if (f.image) return h + (f.imageHeight ?? 0) + (f.gap ?? 0);
           if (!f.text) return h + (f.gap ?? 0);
           applyFont(f);
           return h + doc.heightOfString(f.text, fragOpts(f, c.w)) + (f.gap ?? 0);
@@ -368,7 +386,23 @@ export class PoDocumentService {
           doc.lineWidth(0.5).strokeColor(BORDER).rect(x, y, c.w, h).stroke();
           let cy = y + PAD;
           for (const f of c.frags) {
-            if (f.text) {
+            if (f.image) {
+              const band = f.imageHeight ?? 0;
+              try {
+                doc.image(f.image, x + PAD, cy, {
+                  fit: [c.w - PAD * 2, band],
+                  // pdfkit only offsets an image right or centre; left is where
+                  // it already sits.
+                  ...(f.align === 'center' || f.align === 'right'
+                    ? { align: f.align }
+                    : {}),
+                  valign: 'bottom',
+                });
+              } catch {
+                // An unreadable image must not cost the vendor their PO.
+              }
+              cy += band;
+            } else if (f.text) {
               applyFont(f);
               doc.text(f.text, x + PAD, cy, fragOpts(f, c.w));
               cy += doc.heightOfString(f.text, fragOpts(f, c.w));
@@ -879,15 +913,32 @@ export class PoDocumentService {
               text: `For ${po.tenant.name}`,
               bold: true,
               align: 'center',
-              gap: 32,
+              gap: opts.signature ? 6 : 32,
             },
+            // The uploaded signature sits where a wet one would: above the
+            // signatory line. Without one the block keeps its placeholder.
+            ...(opts.signature
+              ? [
+                  {
+                    text: '',
+                    image: opts.signature,
+                    imageHeight: 40,
+                    align: 'center' as const,
+                    gap: 4,
+                  },
+                ]
+              : []),
             { text: 'Authorised signatory · Procurement', align: 'center' },
-            {
-              text: '(Digital signature placeholder)',
-              size: 7,
-              color: MUTED,
-              align: 'center',
-            },
+            ...(opts.signature
+              ? []
+              : [
+                  {
+                    text: '(Digital signature placeholder)',
+                    size: 7,
+                    color: MUTED,
+                    align: 'center' as const,
+                  },
+                ]),
           ]),
         ],
         92,

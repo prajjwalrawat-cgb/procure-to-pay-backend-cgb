@@ -55,6 +55,26 @@ import { VendorsController } from './vendors.controller';
  * (VENDOR_CHANGE). Reuses the approval engine + reads Slice 4/5/6 data for the
  * performance and risk scorecards.
  */
+/*
+ * Which "real" provider clients actually exist.
+ *
+ * Penny-drop and screening are stubs awaiting a signed contract — one throws,
+ * the other returns ERROR — so their env vars were traps in the same way
+ * GSP_API_URL was: setting one switched off a working simulator in favour of a
+ * client that cannot answer, and the usage records would have stopped saying
+ * `simulated` while the results got worse rather than better.
+ *
+ * Configuration is not capability. Flip a flag here in the same change that
+ * implements the client it guards.
+ */
+const LIVE_CLIENT_IMPLEMENTED = {
+  /** OCR sidecar — implemented, and live in production. */
+  KYC_EXTRACTION: true,
+  PENNY_DROP: false,
+  IFSC: true,
+  SCREENING: false,
+} as const;
+
 @Module({
   // SettingsModule for VendorCategoriesService — the category list an invite is
   // validated against is tenant data an admin maintains there.
@@ -109,6 +129,7 @@ import { VendorsController } from './vendors.controller';
         breaker: CircuitBreaker,
         usage: IntegrationUsageService,
       ) =>
+        LIVE_CLIENT_IMPLEMENTED.PENNY_DROP &&
         config.get('PENNY_DROP_API_URL', { infer: true })
           ? new RealPennyDropProvider(config)
           : new SandboxPennyDropProvider(breaker, usage),
@@ -137,6 +158,7 @@ import { VendorsController } from './vendors.controller';
         breaker: CircuitBreaker,
         usage: IntegrationUsageService,
       ) =>
+        LIVE_CLIENT_IMPLEMENTED.SCREENING &&
         config.get('SCREENING_API_URL', { infer: true })
           ? new RealScreeningProvider(config)
           : new SandboxScreeningProvider(breaker, usage),
