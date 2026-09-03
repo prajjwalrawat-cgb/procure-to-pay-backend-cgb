@@ -79,6 +79,11 @@ function build(
             findUnique: vi.fn().mockResolvedValue(stored),
             update: userUpdate,
           },
+          // Effective permissions are the role bundles *plus* whatever the
+          // tenant's active approval matrices grant those roles, so the token
+          // path reads this table on every issue. No matrices here: these specs
+          // are about credentials and portal eligibility, not authority.
+          approvalMatrix: { findMany: vi.fn().mockResolvedValue([]) },
           session: { updateMany: sessionRevoke },
         }),
     ),

@@ -40,6 +40,10 @@ export const LoginResponseSchema = z.object({
     email: z.string().email(),
     name: z.string(),
     roles: z.array(z.enum(ALL_ROLES as [string, ...string[]])),
+    /** The caller's *effective* permissions — role bundles plus whatever the
+     *  tenant's active approval matrices grant those roles. The client gates
+     *  its controls on these, so a matrix change moves the buttons with it. */
+    perms: z.array(z.string()),
     mfaEnabled: z.boolean(),
     tenant: SessionTenantSchema,
   }),

@@ -295,6 +295,20 @@ export class VendorQueryService {
        * is what stops the button being drawn in the first place. */
       canReview: !!myStep?.approvalId,
       myApprovalId: myStep?.approvalId ?? null,
+      /* What actually happened, so the panel can distinguish "already decided"
+       * from "someone else's turn" — both of which set canReview: false. */
+      reviewDecision: ob.reviewDecision,
+      decisionAt: ob.decisionAt?.toISOString() ?? null,
+      approvalChain: chain.map((step) => ({
+        stepNo: step.stepNo,
+        name: step.name,
+        role: step.role,
+        approverName: step.approverName,
+        decision: step.decision,
+        decidedAt: step.decidedAt,
+        comment: step.comment,
+        isCurrent: step.isCurrent,
+      })),
       returnForInfoItems: (ob.returnForInfoItems as string[] | null) ?? [],
       bank: bank
         ? {

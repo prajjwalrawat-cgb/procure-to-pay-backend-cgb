@@ -10,12 +10,10 @@ import { ConfigService } from '@nestjs/config';
 import { Prisma, newId } from '@procureflow/db';
 import {
   ROLES,
-  ROLE_PERMISSIONS,
   addDaysUtc,
   type LoginInput,
   type LoginResponse,
   type Portal,
-  type RoleName,
   type SessionTenant,
 } from '@procureflow/shared';
 import { hash as argonHash, verify as argonVerify } from 'argon2';
@@ -26,6 +24,7 @@ import { AuditLogService } from '../audit/audit.service';
 import { MailService } from '../common/mail/mail.service';
 import type { Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
+import { resolveEffectivePermissions } from './effective-permissions';
 import { TokenService, passwordFingerprint } from './token.service';
 
 interface AuthRow {
@@ -114,6 +113,10 @@ export class AuthService {
         email: user.email,
         name: user.name,
         roles,
+        // The client hides controls it has no permission for, and matrix-derived
+        // authority is not reconstructible from `roles` alone — so the resolved
+        // set travels with the session rather than being re-derived there.
+        perms,
         mfaEnabled: user.mfa_enabled,
         tenant: await this.loadTenant(user.tenant_id),
       },
@@ -357,11 +360,12 @@ export class AuthService {
         include: { role: true },
       });
       const roles = userRoles.map((ur) => ur.role.name);
-      const perms = new Set<string>();
-      for (const role of roles) {
-        for (const p of ROLE_PERMISSIONS[role as RoleName] ?? []) perms.add(p);
-      }
-      return { roles, perms: [...perms] };
+      // Not just the role bundles: the tenant's active approval matrices add
+      // the authority a routed approver needs to carry out the decision it is
+      // routed (see resolveEffectivePermissions). Re-pointing a matrix at a
+      // different role therefore moves that authority without a code change.
+      const perms = await resolveEffectivePermissions(tx, roles);
+      return { roles, perms };
     });
   }
 
@@ -430,6 +434,7 @@ export class AuthService {
         email: user.email,
         name: user.name,
         roles: [],
+        perms: [],
         mfaEnabled: true,
         tenant: await this.loadTenant(user.tenant_id),
       },

@@ -547,3 +547,87 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     PERMISSIONS.VENDOR_CONTRACT_COUNTERSIGN,
   ],
 };
+
+// ── Approval-matrix–derived authority ────────────────────────────────────────
+
+/**
+ * Authority that follows the approval matrix rather than the role bundle.
+ *
+ * A routed approver needs more than the decide button: to sign off a vendor
+ * onboarding you have to be able to clear the documents the decision rests on,
+ * accept a bank account the penny drop could not confirm, and resolve a flagged
+ * screening — each of which is separately permissioned, and any one of which
+ * blocks activation outright when it is left open. Pinning that authority to a
+ * fixed role broke the moment the tenant re-pointed VENDOR_ONBOARDING at
+ * FINANCE_OFFICER: the routed approver could see the dossier, could press
+ * Approve, and could not do any of the work Approve depends on.
+ *
+ * So the bundle is attached to the *document type*, and granted at token-issue
+ * time to whichever roles the tenant's own active matrices name as approvers
+ * (see `permissionsFromApprovalMatrices`). Re-point the matrix at another role
+ * and the authority moves with it; no code change, no role edit.
+ *
+ * These are additive only — they never remove what a role already holds — and
+ * they are not a licence to invite vendors or edit the master, which stay with
+ * VENDOR_MASTER.
+ */
+export const MATRIX_APPROVER_PERMISSIONS: Record<string, Permission[]> = {
+  VENDOR_ONBOARDING: [
+    PERMISSIONS.VENDOR_READ,
+    PERMISSIONS.VENDOR_ONBOARDING_READ,
+    PERMISSIONS.VENDOR_ONBOARDING_REVIEW,
+    PERMISSIONS.VENDOR_DOC_VERIFY,
+    PERMISSIONS.VENDOR_SCREENING_REVIEW,
+  ],
+  VENDOR_CHANGE: [PERMISSIONS.VENDOR_READ, PERMISSIONS.VENDOR_CHANGE_APPROVE],
+};
+
+/** The shape `permissionsFromApprovalMatrices` reads off an ApprovalMatrix row. */
+export interface ApprovalMatrixRoleSource {
+  documentType: string;
+  isActive: boolean;
+  /** The steps JSON. Only `role` and `escalate_to.role` are read. */
+  steps: unknown;
+}
+
+/** Every role named as an approver (or escalation target) in a steps DSL blob. */
+function rolesInSteps(steps: unknown): string[] {
+  if (!Array.isArray(steps)) return [];
+  const out: string[] = [];
+  for (const raw of steps) {
+    if (!raw || typeof raw !== 'object') continue;
+    const step = raw as { role?: unknown; escalate_to?: { role?: unknown } | null };
+    if (typeof step.role === 'string') out.push(step.role);
+    const escalate = step.escalate_to;
+    if (escalate && typeof escalate === 'object' && typeof escalate.role === 'string') {
+      out.push(escalate.role);
+    }
+  }
+  return out;
+}
+
+/**
+ * The extra permissions a user holds because the tenant's approval matrices
+ * route a document type to one of their roles.
+ *
+ * Deliberately role-wise, not record-wise: a reviewer has to verify documents
+ * and accept a bank account *before* the chain reaches them (and, for a chain
+ * they have already decided, may still need to look at why). Scoping it to the
+ * single onboarding currently sitting in their queue would reintroduce the same
+ * dead end one step later.
+ */
+export function permissionsFromApprovalMatrices(
+  roles: readonly string[],
+  matrices: readonly ApprovalMatrixRoleSource[],
+): Permission[] {
+  const mine = new Set(roles);
+  const granted = new Set<Permission>();
+  for (const matrix of matrices) {
+    if (!matrix.isActive) continue;
+    const bundle = MATRIX_APPROVER_PERMISSIONS[matrix.documentType];
+    if (!bundle) continue;
+    if (!rolesInSteps(matrix.steps).some((r) => mine.has(r))) continue;
+    for (const p of bundle) granted.add(p);
+  }
+  return [...granted];
+}

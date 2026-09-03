@@ -13,6 +13,7 @@ import { ALL_ROLES, ROLES, type RoleName } from '@procureflow/shared';
 import { hash as argonHash } from 'argon2';
 
 import { AuditLogService } from '../audit/audit.service';
+import { resolveEffectivePermissions } from '../auth/effective-permissions';
 import { TokenService } from '../auth/token.service';
 import { MailService } from '../common/mail/mail.service';
 import type { Env } from '../config/env';
@@ -46,9 +47,12 @@ export interface UserProfile {
 }
 
 /** `/users/me` — the profile plus the caller's own organisation. The tenant
- *  travels with the session so no screen has to hardcode the org's name. */
+ *  travels with the session so no screen has to hardcode the org's name, and
+ *  the effective permissions travel with it so the client hides exactly what
+ *  the API would refuse — including authority the approval matrix confers. */
 export interface MyProfile extends UserProfile {
   tenant: { id: string; name: string };
+  perms: string[];
 }
 
 export interface TeamMember {
@@ -266,7 +270,12 @@ export class UsersService {
     // otherwise exceed the request's 5s RLS transaction budget ("Transaction
     // already closed"). The account already exists and the link can be re-sent,
     // so a mail failure is non-fatal.
-    this.dispatchInviteEmail(tenant?.name ?? 'your organisation', email, input.name, token);
+    this.dispatchInviteEmail(
+      tenant?.name ?? 'your organisation',
+      email,
+      input.name,
+      token,
+    );
 
     return {
       id: user.id,
@@ -491,11 +500,16 @@ export class UsersService {
       },
     });
     if (!user) throw new NotFoundException('User not found');
+    const roles = user.userRoles.map((ur) => ur.role.name);
     return {
       id: user.id,
       email: user.email,
       name: user.name,
-      roles: user.userRoles.map((ur) => ur.role.name),
+      roles,
+      // Resolved the same way the JWT's `perms` are (auth.service), so the
+      // session the app bootstraps from /users/me gates its controls on exactly
+      // what the guards will accept.
+      perms: await resolveEffectivePermissions(this.prisma.client, roles),
       mfaEnabled: user.mfaEnabled,
       tenant: { id: user.tenant.id, name: user.tenant.name },
     };

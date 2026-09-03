@@ -116,6 +116,18 @@ export interface RiskTrafficLight {
   state: 'green' | 'amber' | 'red';
 }
 
+/** One step of the onboarding's approval chain, as shown in the decision panel. */
+export interface OnboardingApprovalStep {
+  stepNo: number;
+  name: string;
+  role: string;
+  approverName: string | null;
+  decision: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CHANGES_REQUESTED' | 'DELEGATED';
+  decidedAt: string | null;
+  comment: string | null;
+  isCurrent: boolean;
+}
+
 export interface OnboardingDetailResponse {
   id: string;
   vendorId: string;
@@ -138,6 +150,14 @@ export interface OnboardingDetailResponse {
   riskLights: RiskTrafficLight[];
   canReview: boolean;
   myApprovalId: string | null;
+  /** The outcome once the chain reaches a terminal decision — null while the
+   *  onboarding is still in flight. `canReview: false` on its own says nothing
+   *  about *why*, so without this the panel read "waiting on another approver"
+   *  to everyone looking at an onboarding that had already been approved. */
+  reviewDecision: OnboardingReviewDecision | null;
+  decisionAt: string | null;
+  /** The live approval chain — who decided what, and who it now sits with. */
+  approvalChain: OnboardingApprovalStep[];
   returnForInfoItems: string[];
   /** The account the vendor will be paid into, with the outcome of the
    *  penny-drop name match. Shown at review because money moves against this and
