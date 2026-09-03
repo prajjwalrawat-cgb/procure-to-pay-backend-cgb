@@ -30,6 +30,14 @@ export interface MatchTolerances {
    * back-dating. Defaults to 1.
    */
   dateGraceDays?: string;
+  /**
+   * How close the supplier name printed on the document must be to the
+   * vendor's, 0..1, after both are normalised for Indian legal-name variants.
+   * Defaults to 0.85 — the threshold the vendor master already uses for
+   * penny-drop and GSTIN name acceptance, so one supplier is not held to two
+   * different standards.
+   */
+  vendorNameThreshold?: string;
 }
 
 /** Statuses a purchase order may legitimately be invoiced against. */
@@ -127,6 +135,11 @@ export interface MatchInput {
     declaredInvoiceDate?: string | null;
     declaredVendorRef?: string | null;
     /**
+     * Supplier name printed on the document, from OCR. Compared against the
+     * vendor the order was raised with — see `checkVendorName`.
+     */
+    declaredVendorName?: string | null;
+    /**
      * Grand total printed on the document (incl. tax), as read by OCR. Null when
      * the provider returned none — the check skips rather than assuming a match.
      */
@@ -136,6 +149,8 @@ export interface MatchInput {
   vendor?: {
     /** VendorLifecycleStatus. */
     lifecycleStatus?: string | null;
+    /** The vendor master's name, to compare against the document's. */
+    name?: string | null;
   } | null;
   tolerances: MatchTolerances;
   /** True when another invoice with the same vendor ref already exists. */

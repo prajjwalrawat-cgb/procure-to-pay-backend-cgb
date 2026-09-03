@@ -43,7 +43,7 @@ export class MatchService {
           },
         },
         exceptions: true,
-        vendor: { select: { lifecycleStatus: true } },
+        vendor: { select: { lifecycleStatus: true, name: true } },
       },
     });
     if (!invoice) throw new NotFoundException('Invoice not found');
@@ -129,7 +129,10 @@ export class MatchService {
     const input: MatchInput = {
       tolerances,
       isDuplicate: duplicates > 0,
-      vendor: { lifecycleStatus: invoice.vendor.lifecycleStatus },
+      vendor: {
+        lifecycleStatus: invoice.vendor.lifecycleStatus,
+        name: invoice.vendor.name,
+      },
       po: invoice.po
         ? {
             status: invoice.po.status,
@@ -170,6 +173,7 @@ export class MatchService {
         // agree.
         declaredInvoiceDate: invoice.ocrInvoiceDate?.toISOString() ?? null,
         declaredVendorRef: invoice.ocrVendorInvoiceRef,
+        declaredVendorName: invoice.ocrVendorName,
         // The total printed on the document, captured by OCR — NOT the stored
         // grossAmount, which is computed from these same lines and so agrees
         // with them whatever they say. Null when the provider gave no total.

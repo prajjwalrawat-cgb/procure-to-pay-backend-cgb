@@ -8,6 +8,8 @@ import type { IOcrProvider, OcrExtraction } from './ocr.provider';
 interface OcrApiResponse {
   vendor_invoice_ref?: string;
   invoice_date?: string;
+  /** Supplier name printed on the document — the service has always sent it. */
+  vendor_name?: string | null;
   irn?: string;
   eway_bill_no?: string;
   line_items?: {
@@ -119,6 +121,7 @@ export class RealOcrProvider implements IOcrProvider {
     return {
       vendorInvoiceRef: body.vendor_invoice_ref,
       invoiceDate: body.invoice_date,
+      vendorName: body.vendor_name?.trim() || undefined,
       irn: body.irn,
       ewaybillNo: body.eway_bill_no,
       lines: (body.line_items ?? []).map((l) => ({

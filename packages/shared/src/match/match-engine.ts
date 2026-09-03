@@ -1,5 +1,7 @@
 import Decimal from 'decimal.js';
 
+import { compare as compareNames } from '../vendors/name-match';
+
 import {
   INVOICEABLE_PO_STATUS,
   type MatchException,
@@ -29,6 +31,7 @@ export function runMatch(input: MatchInput): MatchResult {
   // even on an invoice that also has no PO, and the early returns would
   // otherwise swallow it.
   checkVendor(vendor, exceptions);
+  checkVendorName(vendor, invoice.declaredVendorName, tolerances, exceptions);
 
   // Hard blockers short-circuit the line-by-line comparison.
   if (input.isDuplicate) {
@@ -486,6 +489,51 @@ function checkDocumentHeader(
     severity: 'HIGH',
     impactWithTax: '0.0000',
     details: `The document disagrees with this record: ${parts.join('; ')}.`,
+  });
+}
+
+/**
+ * Is this document even from the company the order was raised with?
+ *
+ * Nothing else asks. Quantity, rate, tax, unit, dates and totals can every one
+ * of them be correct on an invoice issued by a different supplier — which is
+ * what a misfiled document looks like, and what invoice fraud looks like: a
+ * plausible invoice quoting a real PO number, from a company nobody ordered
+ * from.
+ *
+ * Compared through the vendor master's own name matcher, which normalises the
+ * Indian legal-name variants that would otherwise generate constant noise —
+ * "Pvt Ltd" against "Private Limited", "& Sons", punctuation, spacing.
+ *
+ * CRITICAL: paying the wrong company is not a variance to be accepted, and
+ * unlike a price difference there is no amount of it that is tolerable.
+ *
+ * Skipped when the document yielded no name. OCR failing to read a letterhead
+ * is not evidence of a mismatch, and crying wolf here would train people to
+ * dismiss the one exception that should always stop them.
+ */
+function checkVendorName(
+  vendor: MatchInput['vendor'],
+  declaredVendorName: string | null | undefined,
+  t: MatchInput['tolerances'],
+  out: MatchException[],
+): void {
+  const onRecord = vendor?.name?.trim();
+  const onDocument = declaredVendorName?.trim();
+  if (!onRecord || !onDocument) return;
+
+  const threshold = Number(t.vendorNameThreshold ?? '0.85');
+  const { score } = compareNames(onDocument, onRecord);
+  if (score >= threshold) return;
+
+  out.push({
+    type: 'VENDOR_MISMATCH',
+    severity: 'CRITICAL',
+    impactWithTax: '0.0000',
+    details:
+      `The document is issued by "${onDocument}", but this order was raised ` +
+      `with "${onRecord}" (name similarity ${Math.round(score * 100)}%). ` +
+      'Check the attachment belongs to this invoice before paying.',
   });
 }
 

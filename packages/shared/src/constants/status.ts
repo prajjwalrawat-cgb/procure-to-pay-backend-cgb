@@ -258,6 +258,7 @@ export const EXCEPTION_TYPE = [
   'PO_NOT_OPEN',
   'AMOUNT_MISMATCH',
   'VENDOR_BLOCKED',
+  'VENDOR_MISMATCH',
 ] as const;
 export type ExceptionType = (typeof EXCEPTION_TYPE)[number];
 

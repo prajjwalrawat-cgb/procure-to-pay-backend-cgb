@@ -355,6 +355,12 @@ export class InvoiceService {
             : {}),
           ...(printedDate ? { ocrInvoiceDate: printedDate } : {}),
           ...(printedRef ? { ocrVendorInvoiceRef: printedRef } : {}),
+          // Never adopted onto the invoice, only recorded: the vendor is fixed
+          // by the PO, so a differing name on the page is a finding, not a
+          // correction.
+          ...(extraction.vendorName?.trim()
+            ? { ocrVendorName: extraction.vendorName.trim() }
+            : {}),
           ...(nextDate ? { invoiceDate: nextDate } : {}),
           ...(nextRef ? { vendorInvoiceRef: nextRef } : {}),
           ...(msmeDueDate ? { msmeDueDate } : {}),

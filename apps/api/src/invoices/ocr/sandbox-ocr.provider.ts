@@ -71,6 +71,7 @@ export class SandboxOcrProvider implements IOcrProvider {
             taxRate: '0.18',
           },
         ],
+        vendorName: 'Patel Engineering Services',
         // (8×18900 + 2×11200 + 8400) × 1.18
         declaredTotal: declared('214760.00'),
         confidence: lowConf ? 0.55 : 0.96,
@@ -88,6 +89,9 @@ export class SandboxOcrProvider implements IOcrProvider {
           taxRate: '0.18',
         },
       ],
+      // A name the matcher will not recognise, so the simulator exercises
+      // VENDOR_MISMATCH rather than quietly agreeing with every vendor.
+      vendorName: name.includes('wrongvendor') ? 'Some Other Trading Co' : undefined,
       // 10000 × 1.18
       declaredTotal: declared('11800.00'),
       confidence: lowConf ? 0.52 : 0.88,

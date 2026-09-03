@@ -269,6 +269,7 @@ enum ExceptionType {
   PO_NOT_OPEN
   AMOUNT_MISMATCH
   VENDOR_BLOCKED
+  VENDOR_MISMATCH
 }
 
 enum InvoiceSource {
@@ -1525,6 +1526,12 @@ model Invoice {
   /// written last.
   ocrInvoiceDate         DateTime?     @map("ocr_invoice_date") @db.Timestamptz(6)
   ocrVendorInvoiceRef    String?       @map("ocr_vendor_invoice_ref")
+  /// Supplier name as PRINTED on the document, from OCR.
+  ///
+  /// The one field that answers "is this invoice even from the company we
+  /// ordered from". Every other check compares quantities and prices, all of
+  /// which can be perfectly correct on a document issued by somebody else.
+  ocrVendorName          String?       @map("ocr_vendor_name")
   /// True while `invoiceDate` / `vendorInvoiceRef` hold system defaults rather
   /// than anything a person asserted.
   ///

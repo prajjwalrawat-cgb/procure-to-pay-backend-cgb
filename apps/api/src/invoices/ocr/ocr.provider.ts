@@ -11,6 +11,15 @@ export interface OcrLine {
 export interface OcrExtraction {
   vendorInvoiceRef?: string;
   invoiceDate?: string;
+  /**
+   * Supplier name printed on the document.
+   *
+   * The OCR service has always returned this — it even logs it — and the
+   * adapter dropped it on the floor, so nothing ever asked whether the
+   * document came from the vendor the PO was raised against. Quantities,
+   * prices and dates can all be correct on somebody else's letterhead.
+   */
+  vendorName?: string;
   irn?: string;
   ewaybillNo?: string;
   lines: OcrLine[];
@@ -75,6 +84,7 @@ export class MockOcrProvider implements IOcrProvider {
             taxRate: '0.18',
           },
         ],
+        vendorName: 'Patel Engineering Services',
         // (8×18900 + 2×11200 + 8400 + 1800) × 1.18
         declaredTotal: '216884.00',
         confidence: 0.97,
@@ -105,6 +115,7 @@ export class MockOcrProvider implements IOcrProvider {
             taxRate: '0.18',
           },
         ],
+        vendorName: 'Patel Engineering Services',
         // (8×18900 + 2×10800 + 8400) × 1.18
         declaredTotal: '213816.00',
         confidence: 0.95,

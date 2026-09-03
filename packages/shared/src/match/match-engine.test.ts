@@ -785,10 +785,106 @@ describe('runMatch — 3-way match engine', () => {
     });
   });
 
+  describe('supplier identity', () => {
+    const base = {
+      tolerances: TOL,
+      po: po([{ id: 'p1' }]),
+      grn: grn([{ poLineId: 'p1', qtyAccepted: '1' }]),
+    };
+    const doc = (declaredVendorName: string): MatchInput['invoice'] => ({
+      ...inv([{ poLineId: 'p1' }]),
+      declaredVendorName,
+    });
+
+    it('flags a document issued by a different company', () => {
+      // The real case: PO-0503 raised with Mantra, the attached tax invoice
+      // issued by Omkar. Quantity, rate and tax all agreed exactly; nothing
+      // asked whose letterhead it was on.
+      const result = runMatch({
+        ...base,
+        vendor: { name: 'MANTRA E-VENTURES PRIVATE LIMITED' },
+        invoice: doc('Omkar Print Lab Pvt Ltd'),
+      });
+      expect(result.exceptions.map((e) => e.type)).toEqual(['VENDOR_MISMATCH']);
+      expect(result.exceptions[0].severity).toBe('CRITICAL');
+      expect(result.exceptions[0].details).toContain('Omkar Print Lab Pvt Ltd');
+      expect(result.exceptions[0].details).toContain('MANTRA E-VENTURES');
+    });
+
+    it('accepts the same company written differently', () => {
+      // Legal-suffix and punctuation variation is the normal case, not a
+      // finding. Crying wolf here would train people to dismiss the one
+      // exception that should always stop them.
+      for (const printed of [
+        'Mantra E-Ventures Private Limited',
+        'MANTRA E VENTURES PVT LTD',
+        'Mantra E-Ventures Pvt. Ltd.',
+        'mantra e-ventures private limited',
+      ]) {
+        const result = runMatch({
+          ...base,
+          vendor: { name: 'MANTRA E-VENTURES PRIVATE LIMITED' },
+          invoice: doc(printed),
+        });
+        expect(result.exceptions, printed).toEqual([]);
+      }
+    });
+
+    it('treats the ampersand and "and" forms as one name', () => {
+      const result = runMatch({
+        ...base,
+        vendor: { name: 'Sharma & Sons Trading Co' },
+        invoice: doc('Sharma and Sons Trading Company'),
+      });
+      expect(result.exceptions).toEqual([]);
+    });
+
+    it('skips the check when the document yielded no name', () => {
+      // OCR failing to read a letterhead is not evidence of a mismatch.
+      const result = runMatch({
+        ...base,
+        vendor: { name: 'MANTRA E-VENTURES PRIVATE LIMITED' },
+        invoice: inv([{ poLineId: 'p1' }]),
+      });
+      expect(result.exceptions).toEqual([]);
+    });
+
+    it('skips the check when the caller supplied no vendor name', () => {
+      const result = runMatch({ ...base, invoice: doc('Omkar Print Lab Pvt Ltd') });
+      expect(result.exceptions).toEqual([]);
+    });
+
+    it('survives the PO_MISSING short-circuit', () => {
+      // An invoice with no PO from an unrecognised supplier is exactly when
+      // both facts matter, and the early return would otherwise swallow one.
+      const result = runMatch({
+        tolerances: TOL,
+        vendor: { name: 'MANTRA E-VENTURES PRIVATE LIMITED' },
+        po: null,
+        grn: null,
+        invoice: { ...inv([{ poLineId: null }]), declaredVendorName: 'Omkar Print Lab' },
+      });
+      expect(result.exceptions.map((e) => e.type)).toEqual([
+        'VENDOR_MISMATCH',
+        'PO_MISSING',
+      ]);
+    });
+
+    it('honours a tenant threshold', () => {
+      const result = runMatch({
+        ...base,
+        tolerances: { ...TOL, vendorNameThreshold: '0.1' },
+        vendor: { name: 'MANTRA E-VENTURES PRIVATE LIMITED' },
+        invoice: doc('Omkar Print Lab Pvt Ltd'),
+      });
+      expect(result.exceptions).toEqual([]);
+    });
+  });
+
   it('a clean invoice still matches with every new check wired in', () => {
     const result = runMatch({
       tolerances: TOL,
-      vendor: { lifecycleStatus: 'ACTIVE' },
+      vendor: { lifecycleStatus: 'ACTIVE', name: 'Patel Engineering Services' },
       po: {
         ...po([{ id: 'p1', uom: 'MT', qtyOrdered: '10', unitPrice: '5000' }])!,
         status: 'PARTIALLY_RECEIVED',
@@ -804,6 +900,7 @@ describe('runMatch — 3-way match engine', () => {
         vendorInvoiceRef: 'PES/2026/4471',
         declaredInvoiceDate: '2026-03-06T09:30:00.000Z',
         declaredVendorRef: 'pes-2026-4471',
+        declaredVendorName: 'Patel Engineering Services Pvt. Ltd.',
         declaredTotal: '59000.00',
       },
     });
