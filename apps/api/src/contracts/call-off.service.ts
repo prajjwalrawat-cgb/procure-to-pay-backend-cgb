@@ -89,6 +89,10 @@ export class CallOffService {
           contractRateCardId: l.contractRateCardId,
           qtyOrdered: l.qty,
         })),
+        // The call-off endpoint has no confirm-and-retry step, and repeat
+        // call-offs against a running contract are the normal case — a match is
+        // recorded on the audit trail rather than refused.
+        confirmDuplicate: true,
       },
       actorId,
     );

@@ -12,6 +12,7 @@ import { PoDocumentService } from './po-document.service';
 import { PoTermsService } from './po-terms.service';
 import { PurchaseOrderService } from './purchase-order.service';
 import {
+  DuplicatePurchaseOrderError,
   PurchaseOrderStateError,
   PurchaseOrderValidationError,
   VendorNotEligibleError,
@@ -31,6 +32,25 @@ function prLine(id: string, qty: string, issued: string) {
   };
 }
 
+/** A PO already on the books, as the duplicate scan reads it back. */
+function existingPo(
+  number: string,
+  lines: { itemDesc: string; qtyOrdered: string }[],
+  status = 'ISSUED',
+) {
+  return {
+    id: `po_${number}`,
+    number,
+    status,
+    totalAmount: new Decimal('76936'),
+    createdAt: new Date('2026-09-03T06:09:00.000Z'),
+    lines: lines.map((l) => ({
+      itemDesc: l.itemDesc,
+      qtyOrdered: new Decimal(l.qtyOrdered),
+    })),
+  };
+}
+
 function build(
   opts: {
     prStatus?: string;
@@ -39,6 +59,8 @@ function build(
     bankVerified?: boolean;
     prLines?: ReturnType<typeof prLine>[];
     vendorGstin?: string;
+    /** Rows the duplicate scan finds for the vendor. */
+    existingPos?: ReturnType<typeof existingPo>[];
   } = {},
 ) {
   const requisition = {
@@ -64,7 +86,14 @@ function build(
     vendor: { findUnique: vi.fn().mockResolvedValue(vendor) },
     purchaseOrder: {
       findFirst: vi.fn().mockResolvedValue(null),
-      findMany: vi.fn().mockResolvedValue([]),
+      // Two callers share findMany: the PO-numbering scan, which filters on
+      // `number`, and the duplicate scan, which filters on `vendorId`. Only the
+      // latter is varied — numbering always sees an empty table.
+      findMany: vi
+        .fn()
+        .mockImplementation((args: { where?: { vendorId?: string } }) =>
+          Promise.resolve(args?.where?.vendorId ? (opts.existingPos ?? []) : []),
+        ),
       create: vi.fn().mockResolvedValue({ id: 'po_new' }),
     },
     requisitionLine: { update: vi.fn().mockResolvedValue({}) },
@@ -438,5 +467,123 @@ describe('PurchaseOrderService.createSpotBuy', () => {
     );
     expect(r.id).toMatch(/^po_/);
     expect(client.purchaseOrder.create).toHaveBeenCalledOnce();
+  });
+});
+
+/**
+ * The case this guards, taken from the pair that prompted it: PO-0504 and
+ * PO-0507, same vendor, same four items, four days apart — one keyed in
+ * uppercase and one in lowercase, both approved, both issued.
+ */
+describe('PurchaseOrderService — duplicate order guard', () => {
+  const FOUR_LINES = [
+    { itemDesc: 'Sleeves', qty: '200', price: '160' },
+    { itemDesc: 'mousepad', qty: '200', price: '140' },
+    { itemDesc: 'packaging cover', qty: '200', price: '20' },
+    { itemDesc: 'complimentary card', qty: '200', price: '6' },
+  ];
+
+  const spotBuy = (
+    lines = FOUR_LINES,
+    extra: { confirmDuplicate?: boolean } = {},
+  ) => ({
+    kind: 'SPOT_BUY' as const,
+    vendorId: 'ven_patel',
+    costCenterId: 'cc_1',
+    ...terms,
+    ...extra,
+    lines: lines.map((l) => ({
+      itemDesc: l.itemDesc,
+      uom: 'NOS',
+      qtyOrdered: l.qty,
+      unitPrice: l.price,
+      discountPct: '0',
+      taxRate: '0.18',
+    })),
+  });
+
+  const priorOrder = (status = 'ISSUED') =>
+    existingPo(
+      'PO-0504',
+      // Keyed in uppercase on the earlier order, as the real pair was.
+      FOUR_LINES.map((l) => ({
+        itemDesc: l.itemDesc.toUpperCase(),
+        qtyOrdered: l.qty,
+      })),
+      status,
+    );
+
+  it('refuses a second order with the same vendor and lines', async () => {
+    const { service, client } = build({ existingPos: [priorOrder()] });
+    await expect(service.createSpotBuy(spotBuy(), 'usr_1')).rejects.toBeInstanceOf(
+      DuplicatePurchaseOrderError,
+    );
+    expect(client.purchaseOrder.create).not.toHaveBeenCalled();
+  });
+
+  it('names the colliding order so the UI can link to it', async () => {
+    const { service } = build({ existingPos: [priorOrder()] });
+    const err = await service
+      .createSpotBuy(spotBuy(), 'usr_1')
+      .then(() => null)
+      .catch((e: unknown) => e as DuplicatePurchaseOrderError);
+    expect(err?.context?.duplicates).toEqual([
+      expect.objectContaining({ number: 'PO-0504', status: 'ISSUED' }),
+    ]);
+  });
+
+  it('lets the buyer through once they confirm, and records that they were warned', async () => {
+    const { service, client } = build({ existingPos: [priorOrder()] });
+    const audit = { record: vi.fn() };
+    // The audit call is what proves the warning was not silently dropped.
+    (service as unknown as { audit: typeof audit }).audit = audit;
+    const r = await service.createSpotBuy(
+      spotBuy(FOUR_LINES, { confirmDuplicate: true }),
+      'usr_1',
+    );
+    expect(r.id).toMatch(/^po_/);
+    expect(client.purchaseOrder.create).toHaveBeenCalledOnce();
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        after: expect.objectContaining({ raisedDespiteDuplicateOf: ['PO-0504'] }),
+      }),
+    );
+  });
+
+  it('allows an order that differs by one quantity', async () => {
+    const { service, client } = build({ existingPos: [priorOrder()] });
+    const changed = FOUR_LINES.map((l, i) => (i === 0 ? { ...l, qty: '250' } : l));
+    await service.createSpotBuy(spotBuy(changed), 'usr_1');
+    expect(client.purchaseOrder.create).toHaveBeenCalledOnce();
+  });
+
+  it('allows an order that adds a line', async () => {
+    const { service, client } = build({ existingPos: [priorOrder()] });
+    await service.createSpotBuy(
+      spotBuy([...FOUR_LINES, { itemDesc: 'labels', qty: '50', price: '10' }]),
+      'usr_1',
+    );
+    expect(client.purchaseOrder.create).toHaveBeenCalledOnce();
+  });
+
+  it('ignores a cancelled order — re-raising it is the correction, not a duplicate', async () => {
+    // The scan excludes CANCELLED in SQL, so an empty candidate set is what the
+    // service sees; this asserts the filter is actually on the query.
+    const { service, client } = build({ existingPos: [] });
+    await service.createSpotBuy(spotBuy(), 'usr_1');
+    const scan = client.purchaseOrder.findMany.mock.calls
+      .map((c) => c[0] as { where?: { status?: { notIn?: string[] } } })
+      .find((a) => a.where?.status?.notIn);
+    expect(scan?.where?.status?.notIn).toContain('CANCELLED');
+  });
+
+  it('does not flag an identical order to a different vendor', async () => {
+    // The scan is scoped by vendorId, so a match elsewhere never reaches it.
+    const { service, client } = build({ existingPos: [priorOrder()] });
+    await service.createSpotBuy(spotBuy(), 'usr_1').catch(() => null);
+    const scan = client.purchaseOrder.findMany.mock.calls
+      .map((c) => c[0] as { where?: { vendorId?: string } })
+      .find((a) => a.where?.vendorId);
+    expect(scan?.where?.vendorId).toBe('ven_patel');
   });
 });

@@ -18,9 +18,18 @@ import { BudgetService } from '../budgets/budget.service';
 import { DomainEventService } from '../common/events/domain-event.service';
 import { StorageService } from '../common/storage/storage.service';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  DUPLICATE_IGNORED_STATUSES,
+  DUPLICATE_WINDOW_DAYS,
+  duplicateWindowStart,
+  lineFingerprint,
+  type DuplicatePoRef,
+  type FingerprintLine,
+} from './duplicate-po';
 import { PoDocumentService } from './po-document.service';
 import { PoTermsService } from './po-terms.service';
 import {
+  DuplicatePurchaseOrderError,
   NotImplementedError,
   PurchaseOrderStateError,
   PurchaseOrderValidationError,
@@ -94,6 +103,72 @@ export class PurchaseOrderService {
       ...defaultPlantQuery(this.tenantId()),
       select: { id: true, stateCode: true },
     });
+  }
+
+  /**
+   * Live orders to the same vendor, inside the duplicate window, whose line set
+   * matches the one about to be raised.
+   *
+   * Deliberately a read of candidates plus an in-memory match rather than a
+   * SQL-side one: the fingerprint folds case and whitespace and ignores line
+   * order, which no index can do, and the candidate set is small — one vendor,
+   * one week.
+   */
+  private async findDuplicatePos(
+    vendorId: string,
+    lines: readonly FingerprintLine[],
+  ): Promise<DuplicatePoRef[]> {
+    const fingerprint = lineFingerprint(lines);
+    const candidates = await this.prisma.client.purchaseOrder.findMany({
+      where: {
+        tenantId: this.tenantId(),
+        vendorId,
+        status: { notIn: [...DUPLICATE_IGNORED_STATUSES] },
+        createdAt: { gte: duplicateWindowStart() },
+      },
+      select: {
+        id: true,
+        number: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+        lines: { select: { itemDesc: true, qtyOrdered: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return candidates
+      .filter((po) => lineFingerprint(po.lines) === fingerprint)
+      .map((po) => ({
+        id: po.id,
+        number: po.number,
+        status: po.status,
+        totalAmount: po.totalAmount.toString(),
+        createdAt: po.createdAt.toISOString(),
+      }));
+  }
+
+  /**
+   * Warn and let the buyer confirm, rather than block: a genuine repeat order to
+   * the same vendor is ordinary procurement. An unconfirmed match is refused
+   * once with the colliding orders attached; the same request sent back with
+   * `confirmDuplicate` goes through. The matches are returned either way, so the
+   * caller can record on the audit trail that the buyer was warned and went on.
+   */
+  private async checkDuplicates(
+    vendorId: string,
+    lines: readonly FingerprintLine[],
+    confirmed: boolean,
+  ): Promise<DuplicatePoRef[]> {
+    const duplicates = await this.findDuplicatePos(vendorId, lines);
+    if (duplicates.length > 0 && !confirmed) {
+      throw new DuplicatePurchaseOrderError(
+        duplicates.length === 1
+          ? `The same order was already raised for this vendor as ${duplicates[0]!.number}.`
+          : `The same order was already raised for this vendor ${duplicates.length} times.`,
+        { duplicates, windowDays: DUPLICATE_WINDOW_DAYS, confirmable: true },
+      );
+    }
+    return duplicates;
   }
 
   async create(input: PoCreateInput, actorId: string): Promise<{ id: string }> {
@@ -185,6 +260,17 @@ export class PurchaseOrderService {
       };
     });
 
+    // An in-terms call-off can skip the approval matrix and issue itself, so a
+    // duplicate here would reach the vendor without any human seeing it twice.
+    // The /contracts/:id/call-offs endpoint pre-confirms — repeat draws against
+    // a running contract are its normal case — so this bites on the generic
+    // POST /purchase-orders route, where the buyer has a confirm step.
+    const duplicates = await this.checkDuplicates(
+      contract.vendorId,
+      lines,
+      input.confirmDuplicate ?? false,
+    );
+
     const plant = await this.resolveBillToPlant(input.billToPlantId);
     const tax = computeDocTax(
       lines.map((l) => ({
@@ -227,7 +313,15 @@ export class PurchaseOrderService {
       entityType: 'PurchaseOrder',
       entityId: id,
       actorId,
-      after: { number, contract: contract.number, vendor: vendor.name, total: tax.total },
+      after: {
+        number,
+        contract: contract.number,
+        vendor: vendor.name,
+        total: tax.total,
+        ...(duplicates.length > 0
+          ? { raisedDespiteDuplicateOf: duplicates.map((d) => d.number) }
+          : {}),
+      },
     });
     await this.events.emit(DOMAIN_EVENTS.PURCHASE_ORDER_DRAFTED, {
       poId: id,
@@ -317,6 +411,15 @@ export class PurchaseOrderService {
       };
     });
 
+    // A second PO off *this* PR is already bounded by qtyIssued above. What is
+    // not bounded is the same goods requisitioned twice and both PRs converted,
+    // which reaches the vendor as two identical orders just the same.
+    const duplicates = await this.checkDuplicates(
+      input.vendorId,
+      lines,
+      input.confirmDuplicate ?? false,
+    );
+
     const billTo = await this.resolveBillToPlant(input.billToPlantId, pr.plantId);
     const tax = computeDocTax(
       lines.map((l) => ({
@@ -370,7 +473,15 @@ export class PurchaseOrderService {
       entityType: 'PurchaseOrder',
       entityId: id,
       actorId,
-      after: { number, prNumber: pr.number, vendor: vendor.name, total: tax.total },
+      after: {
+        number,
+        prNumber: pr.number,
+        vendor: vendor.name,
+        total: tax.total,
+        ...(duplicates.length > 0
+          ? { raisedDespiteDuplicateOf: duplicates.map((d) => d.number) }
+          : {}),
+      },
     });
     await this.events.emit(DOMAIN_EVENTS.PURCHASE_ORDER_DRAFTED, {
       poId: id,
@@ -403,6 +514,14 @@ export class PurchaseOrderService {
       taxRate: new Prisma.Decimal(line.taxRate),
       glAccount: line.glAccount ?? null,
     }));
+    // Nothing upstream of a spot buy constrains how often the same goods can be
+    // ordered — there is no PR whose remaining quantity runs out — so this is
+    // the only place a re-keyed order gets caught.
+    const duplicates = await this.checkDuplicates(
+      input.vendorId,
+      lines,
+      input.confirmDuplicate ?? false,
+    );
     const tax = computeDocTax(
       lines.map((l) => ({
         qty: l.qtyOrdered.toString(),
@@ -452,7 +571,16 @@ export class PurchaseOrderService {
       entityType: 'PurchaseOrder',
       entityId: id,
       actorId,
-      after: { number, vendor: vendor.name, total: tax.total },
+      after: {
+        number,
+        vendor: vendor.name,
+        total: tax.total,
+        // Only present when the buyer was shown the duplicate warning and
+        // raised the order anyway — the record of who accepted the risk.
+        ...(duplicates.length > 0
+          ? { raisedDespiteDuplicateOf: duplicates.map((d) => d.number) }
+          : {}),
+      },
     });
     await this.events.emit(DOMAIN_EVENTS.PURCHASE_ORDER_DRAFTED, {
       poId: id,

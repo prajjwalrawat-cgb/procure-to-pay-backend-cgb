@@ -278,6 +278,10 @@ export class AwardService implements OnModuleInit {
               paymentTerms,
               expectedDeliveryDate: expected.toISOString(),
               lines,
+              // The award screen has no duplicate-confirm step to send the buyer
+              // back to, so a match here is recorded on the audit trail rather
+              // than blocking an award that has already been decided.
+              confirmDuplicate: true,
             },
             actorId,
           );
@@ -357,6 +361,8 @@ export class AwardService implements OnModuleInit {
         paymentTerms: { kind: 'NET_45' },
         expectedDeliveryDate: expected.toISOString(),
         lines,
+        // As above — the award is already decided; a duplicate is audited, not blocked.
+        confirmDuplicate: true,
       },
       actorId,
     );

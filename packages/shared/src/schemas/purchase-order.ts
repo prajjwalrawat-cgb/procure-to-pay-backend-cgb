@@ -6,6 +6,13 @@ import { INCOTERMS, PO_TYPE } from '../constants/status';
 
 const decimalString = z.string().regex(/^-?\d+(\.\d+)?$/, 'must be a decimal string');
 
+/**
+ * Set once the buyer has seen the "possible duplicate" warning and chosen to
+ * raise the order anyway. Left off (or false), the server refuses an order
+ * whose vendor and lines match a recent one — see DuplicatePurchaseOrderError.
+ */
+const confirmDuplicate = z.boolean().optional();
+
 /** Payment terms a buyer can put on an order. NET_* and MSME_45 run from the
  *  invoice date; the DELIVERY_* terms run from delivery, and ADVANCE is paid
  *  before it. */
@@ -91,6 +98,7 @@ export const PoCreateFromPrInputSchema = z.object({
   paymentTerms: PaymentTermsSchema,
   expectedDeliveryDate: z.string().datetime(),
   lines: z.array(PoFromPrLineInputSchema).min(1),
+  confirmDuplicate,
 });
 export type PoCreateFromPrInput = z.infer<typeof PoCreateFromPrInputSchema>;
 
@@ -114,6 +122,7 @@ export const PoCreateFromContractInputSchema = z.object({
   deliveryTerms: z.enum(INCOTERMS).default('DDP'),
   expectedDeliveryDate: z.string().datetime(),
   lines: z.array(PoFromContractLineInputSchema).min(1),
+  confirmDuplicate,
 });
 export type PoCreateFromContractInput = z.infer<typeof PoCreateFromContractInputSchema>;
 
@@ -131,6 +140,7 @@ export const PoCreateSpotBuyInputSchema = z.object({
   paymentTerms: PaymentTermsSchema,
   expectedDeliveryDate: z.string().datetime(),
   lines: z.array(PoSpotBuyLineInputSchema).min(1),
+  confirmDuplicate,
 });
 export type PoCreateSpotBuyInput = z.infer<typeof PoCreateSpotBuyInputSchema>;
 
@@ -142,6 +152,20 @@ export const PoCreateInputSchema = z.discriminatedUnion('kind', [
   PoCreateFromContractInputSchema,
 ]);
 export type PoCreateInput = z.infer<typeof PoCreateInputSchema>;
+
+/**
+ * One order the duplicate guard collided with. Rides in the 409's problem+json
+ * as `context.duplicates`, so the buyer's confirm step can name and link the
+ * order it thinks is being raised twice.
+ */
+export interface PoDuplicateRef {
+  id: string;
+  number: string;
+  status: string;
+  /** Decimal string, as every money value crosses the wire. */
+  totalAmount: string;
+  createdAt: string;
+}
 
 export const PoUpdateInputSchema = z.object({
   /** Move a draft to another GST registration. Recomputes the place of
