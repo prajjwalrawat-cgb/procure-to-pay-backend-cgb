@@ -420,6 +420,29 @@ export class VendorOnboardingService implements OnModuleInit {
     };
   }
 
+  /**
+   * Refuse a vendor-portal write on an application that is no longer theirs to
+   * change. saveStep and submitOnboarding check this inline; document uploads
+   * arrive on their own endpoints and did not, so a submitted file could still
+   * grow attachments underneath the reviewer reading it.
+   */
+  async assertEditable(userId: string): Promise<void> {
+    const vendorId = await this.resolveVendorId(userId);
+    const onboarding = await this.requireActiveOnboarding(vendorId);
+    const vendor = await this.prisma.client.vendor.findUniqueOrThrow({
+      where: { id: vendorId },
+      select: { lifecycleStatus: true },
+    });
+    if (!isOnboardingEditable(vendor.lifecycleStatus, onboarding)) {
+      throw new VendorStateError(
+        vendor.lifecycleStatus === 'ACTIVE'
+          ? 'This vendor is already approved. Raise a change request to update the details.'
+          : 'This onboarding is awaiting review and cannot be changed.',
+        { lifecycleStatus: vendor.lifecycleStatus },
+      );
+    }
+  }
+
   async saveStep(
     userId: string,
     stepNumber: number,
@@ -761,6 +784,15 @@ export class VendorOnboardingService implements OnModuleInit {
       where: { id: onboarding.id },
       data: {
         submittedAt: new Date(),
+        // A re-submission after a return-for-info clears the standing decision.
+        // Without this the file stayed RETURNED_FOR_INFO forever: the portal
+        // kept telling the vendor their buyer needed more information (and kept
+        // the wizard editable) after they had already sent it back, and the
+        // reviewer's queue never saw it again. reviewNotes and
+        // returnForInfoItems are deliberately kept — they are the record of what
+        // was asked for, which the reviewer wants while reading the re-submission.
+        reviewDecision: null,
+        decisionAt: null,
         slaTargetHours: slaHours,
         slaBreachAt: new Date(Date.now() + slaHours * 3_600_000),
         vendor: { update: { lifecycleStatus: 'UNDER_REVIEW' } },
@@ -777,6 +809,17 @@ export class VendorOnboardingService implements OnModuleInit {
     return { ok: true };
   }
 
+  /**
+   * Hand the file back to the vendor for corrections.
+   *
+   * The review is over until they re-submit, so the approval chain has to end
+   * with it. It used to be left untouched: the reviewer's own step stayed
+   * PENDING, so the dossier went on offering them Approve / Reject on an
+   * application that was no longer theirs to decide, and the re-submission
+   * silently no-opped against submit()'s idempotency guard. Routing it through
+   * decide(REQUEST_CHANGES) clears the chain, stamps the decision and notifies
+   * the vendor — the same path the generic approvals inbox takes.
+   */
   async returnForInfo(
     onboardingId: string,
     input: ReturnForInfoInput,
@@ -785,12 +828,44 @@ export class VendorOnboardingService implements OnModuleInit {
     const onboarding = await this.prisma.client.vendorOnboarding.findUniqueOrThrow({
       where: { id: onboardingId },
     });
+    const mine = await this.prisma.client.approval.findFirst({
+      where: {
+        documentType: 'VENDOR_ONBOARDING',
+        documentId: onboardingId,
+        approverId: actorId,
+        decision: 'PENDING',
+      },
+    });
+    if (mine) {
+      await this.routing.decide(
+        mine.id,
+        'REQUEST_CHANGES',
+        input.note ?? input.items.join('; '),
+        actorId,
+      );
+    } else {
+      // A reviewer holding VENDOR_ONBOARDING_REVIEW who is not the assigned
+      // approver (an admin unpicking a stuck file, or a return sent before the
+      // routing ran). There is no decision of theirs to record, but the pending
+      // steps still have to go — otherwise the file sits in someone's inbox
+      // while the vendor is editing it.
+      await this.prisma.client.approval.deleteMany({
+        where: { documentType: 'VENDOR_ONBOARDING', documentId: onboardingId },
+      });
+    }
     await this.prisma.client.vendorOnboarding.update({
       where: { id: onboardingId },
       data: {
         reviewDecision: 'RETURNED_FOR_INFO',
+        decisionAt: new Date(),
         reviewNotes: input.note ?? null,
         returnForInfoItems: input.items as unknown as Prisma.InputJsonValue,
+        // The ball is back with the vendor: drop the submission stamp and stop
+        // the review clock, so neither the queue nor the SLA pill counts time
+        // the reviewer is not waiting on themselves. submitOnboarding sets both
+        // again on the re-submission.
+        submittedAt: null,
+        slaBreachAt: null,
         vendor: { update: { lifecycleStatus: 'IN_ONBOARDING' } },
       },
     });

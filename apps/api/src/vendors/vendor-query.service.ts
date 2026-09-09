@@ -144,8 +144,16 @@ export class VendorQueryService {
     let where: Prisma.VendorOnboardingWhereInput =
       query.tab === 'in_progress'
         ? // A withdrawn invitation is not in progress — it must drop out of this
-          // tab, which is the whole point of cancelling it.
-          { submittedAt: null, reviewDecision: null }
+          // tab, which is the whole point of cancelling it. An onboarding handed
+          // back for more information is: it is with the vendor, being edited,
+          // and it belongs in the live queue rather than vanishing into "All"
+          // until they re-submit.
+          {
+            OR: [
+              { submittedAt: null, reviewDecision: null },
+              { reviewDecision: 'RETURNED_FOR_INFO' },
+            ],
+          }
         : query.tab === 'approved'
           ? { reviewDecision: 'APPROVED' }
           : query.tab === 'rejected'

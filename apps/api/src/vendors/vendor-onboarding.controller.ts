@@ -143,6 +143,10 @@ export class VendorOnboardingController {
       );
     }
 
+    // A submitted (or approved) application stops accepting new files: the
+    // reviewer is reading a fixed set, and the portal renders the wizard
+    // read-only to match.
+    await this.onboarding.assertEditable(user.userId);
     const vendorId = await this.onboarding.resolveVendorId(user.userId);
     const filename = safeFilename(file.originalname);
     const s3Key = `vendor-documents/${user.tenantId}/${vendorId}/${newId('vendorDocument')}-${filename}`;
@@ -202,6 +206,7 @@ export class VendorOnboardingController {
     @CurrentUser() user: AuthUser,
     @Body(new ZodValidationPipe(VendorDocumentUploadSchema)) dto: VendorDocumentUpload,
   ): Promise<{ id: string }> {
+    await this.onboarding.assertEditable(user.userId);
     const vendorId = await this.onboarding.resolveVendorId(user.userId);
     return this.documents.uploadDocument(vendorId, dto, user.userId);
   }

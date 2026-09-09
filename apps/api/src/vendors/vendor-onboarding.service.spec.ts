@@ -53,6 +53,8 @@ interface Fixture {
     activatedAt: Date | null;
     lifecycleStatus: string;
   } | null;
+  /** The reviewer's own pending approval on this onboarding, if they hold one. */
+  myPendingApproval?: { id: string } | null;
   /** Other contacts sharing the cancelled vendor's email, on live vendors. */
   sharedContactCount?: number;
   userRoles?: string[];
@@ -65,12 +67,16 @@ function makeService(fixture: Fixture = {}): {
   onboardingUpdate: ReturnType<typeof vi.fn>;
   userUpdate: ReturnType<typeof vi.fn>;
   audit: ReturnType<typeof vi.fn>;
+  approvalDeleteMany: ReturnType<typeof vi.fn>;
+  routingDecide: ReturnType<typeof vi.fn>;
 } {
   const vendorCreate = vi.fn().mockResolvedValue({});
   const vendorUpdate = vi.fn().mockResolvedValue({});
   const onboardingUpdate = vi.fn().mockResolvedValue({});
   const userUpdate = vi.fn().mockResolvedValue({});
   const auditRecord = vi.fn().mockResolvedValue(undefined);
+  const approvalDeleteMany = vi.fn().mockResolvedValue({ count: 0 });
+  const routingDecide = vi.fn().mockResolvedValue(undefined);
   const prisma = {
     currentTenantId: 'ten_1',
     client: {
@@ -96,9 +102,14 @@ function makeService(fixture: Fixture = {}): {
       },
       vendorOnboarding: {
         findUnique: vi.fn().mockResolvedValue(fixture.onboarding ?? null),
+        findUniqueOrThrow: vi.fn().mockResolvedValue(fixture.onboarding ?? null),
         findFirst: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockResolvedValue({}),
         update: onboardingUpdate,
+      },
+      approval: {
+        findFirst: vi.fn().mockResolvedValue(fixture.myPendingApproval ?? null),
+        deleteMany: approvalDeleteMany,
       },
       user: {
         findUnique: vi.fn().mockResolvedValue(null),
@@ -122,7 +133,11 @@ function makeService(fixture: Fixture = {}): {
     { record: auditRecord } as unknown as AuditLogService,
     { emit: vi.fn().mockResolvedValue(undefined) } as unknown as DomainEventService,
     { notify: vi.fn() } as unknown as NotificationService,
-    { onApproved: vi.fn(), submit: vi.fn() } as unknown as ApprovalRoutingService,
+    {
+      onApproved: vi.fn(),
+      submit: vi.fn(),
+      decide: routingDecide,
+    } as unknown as ApprovalRoutingService,
     {} as unknown as VendorVerificationService,
     {} as unknown as VendorScorecardService,
     {} as unknown as VendorKycService,
@@ -145,6 +160,8 @@ function makeService(fixture: Fixture = {}): {
     onboardingUpdate,
     userUpdate,
     audit: auditRecord,
+    approvalDeleteMany,
+    routingDecide,
   };
 }
 
@@ -412,6 +429,70 @@ describe('VendorOnboardingService.renameVendor', () => {
  * lifecycle_status back to UNDER_REVIEW, which disqualified them from new POs
  * while the picker (reading the legacy `status`) still offered them.
  */
+describe('VendorOnboardingService.returnForInfo', () => {
+  const RETURNED: OnboardingRow = {
+    id: 'onb_1',
+    vendorId: 'ven_1',
+    submittedAt: new Date('2026-09-01T00:00:00Z'),
+    reviewDecision: null,
+    emailVerifiedAt: new Date('2026-08-20T00:00:00Z'),
+    vendor: { id: 'ven_1', name: 'Lohith', lifecycleStatus: 'UNDER_REVIEW' },
+  };
+
+  it("records the reviewer's decision through the approval engine", async () => {
+    const { svc, routingDecide, approvalDeleteMany } = makeService({
+      onboarding: RETURNED,
+      myPendingApproval: { id: 'apr_1' },
+    });
+    await svc.returnForInfo(
+      'onb_1',
+      { items: ['Upload a legible PAN card'], note: 'Documents are not readable' },
+      'usr_officer',
+    );
+    // REQUEST_CHANGES is what clears the chain, so the dossier stops offering
+    // Approve/Reject while the vendor is editing.
+    expect(routingDecide).toHaveBeenCalledWith(
+      'apr_1',
+      'REQUEST_CHANGES',
+      'Documents are not readable',
+      'usr_officer',
+    );
+    expect(approvalDeleteMany).not.toHaveBeenCalled();
+  });
+
+  it('clears the chain by hand for a reviewer who holds no approval', async () => {
+    const { svc, routingDecide, approvalDeleteMany } = makeService({
+      onboarding: RETURNED,
+      myPendingApproval: null,
+    });
+    await svc.returnForInfo(
+      'onb_1',
+      { items: ['Re-upload the GST certificate'] },
+      'usr_admin',
+    );
+    expect(routingDecide).not.toHaveBeenCalled();
+    expect(approvalDeleteMany).toHaveBeenCalledOnce();
+  });
+
+  it('hands the application back: no submission stamp, no SLA clock', async () => {
+    const { svc, onboardingUpdate } = makeService({
+      onboarding: RETURNED,
+      myPendingApproval: { id: 'apr_1' },
+    });
+    await svc.returnForInfo('onb_1', { items: ['Fix the bank details'] }, 'usr_officer');
+    expect(onboardingUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          reviewDecision: 'RETURNED_FOR_INFO',
+          submittedAt: null,
+          slaBreachAt: null,
+          vendor: { update: { lifecycleStatus: 'IN_ONBOARDING' } },
+        }),
+      }),
+    );
+  });
+});
+
 describe('isOnboardingEditable', () => {
   const draft = { submittedAt: null, reviewDecision: null };
 
