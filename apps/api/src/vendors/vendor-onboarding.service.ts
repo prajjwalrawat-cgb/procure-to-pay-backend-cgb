@@ -11,6 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import { Prisma, newId } from '@procureflow/db';
 import { hash } from 'argon2';
 import {
+  GST_IDENTITY_FIELDS,
   ONBOARDING_MANDATORY_DOCUMENTS,
   ONBOARDING_STEP1_DOCUMENTS,
   ONBOARDING_STEP_COUNT,
@@ -19,6 +20,7 @@ import {
   assessAcceptance,
   compare as compareNames,
   fieldSourceLabel,
+  panFromGstin,
   panGstinMismatch,
   vendorDocumentLabel,
   type CancelOnboardingInput,
@@ -475,14 +477,7 @@ export class VendorOnboardingService implements OnModuleInit {
       done: true,
       data: stepData as Record<string, unknown>,
     };
-    // Counted over the steps that exist *now*. An onboarding started under the
-    // old six-step wizard carries step5/step6 entries; counting every key would
-    // report it 150% complete.
-    const doneCount = Array.from(
-      { length: ONBOARDING_STEP_COUNT },
-      (_, i) => state.steps[`step${i + 1}`]?.done === true,
-    ).filter(Boolean).length;
-    state.completionPct = Math.round((doneCount / ONBOARDING_STEP_COUNT) * 100);
+    state.completionPct = this.completionPct(state);
     state.currentStep = Math.min(ONBOARDING_STEP_COUNT, stepNumber + 1);
     await this.prisma.client.vendorOnboarding.update({
       where: { id: onboarding.id },
@@ -515,6 +510,9 @@ export class VendorOnboardingService implements OnModuleInit {
   async recordExtraction(
     userId: string,
     result: DocumentExtractionResult,
+    /** The document row just filed for this upload — spared when earlier
+     *  copies are superseded. */
+    documentId?: string,
   ): Promise<ExtractedFieldMap> {
     const vendorId = await this.resolveVendorId(userId);
     // An already-activated vendor re-uploading a certificate has no wizard to
@@ -524,6 +522,9 @@ export class VendorOnboardingService implements OnModuleInit {
     if (!onboarding) return {};
     const state =
       (onboarding.wizardState as unknown as WizardState) ?? this.initialWizardState();
+    if (result.supersedesIdentity) {
+      await this.replaceStatutoryIdentity(userId, vendorId, state, result, documentId);
+    }
     state.extracted = VendorKycService.merge(state.extracted ?? {}, result.fields);
     await this.prisma.client.vendorOnboarding.update({
       where: { id: onboarding.id },
@@ -547,6 +548,110 @@ export class VendorOnboardingService implements OnModuleInit {
       },
     });
     return state.extracted;
+  }
+
+  /**
+   * A GST certificate for a different registration than the one on file. The
+   * earlier identity was wrong — typically the vendor's first upload was someone
+   * else's certificate, even their buyer's — and everything resting on it goes:
+   *
+   *  - the values read off the earlier documents. Merged instead, a stale
+   *    verified GSTIN would outrank the new one whenever the registry lookup was
+   *    down and the new GSTIN came back unverified;
+   *  - the GSTIN and PAN on the vendor master, which every PAN↔GSTIN check reads
+   *    first. Leaving them is what made each correct certificate "disagree";
+   *  - steps 1 and 2 are re-opened with their identity values dropped, since
+   *    they describe the other entity. Submission needs every step done, so the
+   *    file cannot go back to the reviewer until the new identity is saved;
+   *  - earlier GST certificates, and PAN cards auto-verified against a PAN that
+   *    no longer applies, are marked FAILED so the reviewer is not shown a green
+   *    tick on another entity's document. Nothing is deleted.
+   */
+  private async replaceStatutoryIdentity(
+    actorId: string,
+    vendorId: string,
+    state: WizardState,
+    result: DocumentExtractionResult,
+    documentId: string | undefined,
+  ): Promise<void> {
+    const vendor = await this.prisma.client.vendor.findUniqueOrThrow({
+      where: { id: vendorId },
+      select: { gstin: true, businessPan: true, pan: true },
+    });
+    const stale = state.extracted ?? {};
+    const oldGstin = vendor.gstin ?? stale.gstin?.value ?? null;
+    const oldPan =
+      vendor.businessPan ?? vendor.pan ?? stale.businessPan?.value ?? panFromGstin(oldGstin);
+    const newGstin = result.fields.gstin?.value ?? null;
+    const newPan = result.fields.businessPan?.value ?? null;
+
+    const identity = new Set<string>(GST_IDENTITY_FIELDS);
+    const withoutIdentity = <T>(record: Record<string, T>): Record<string, T> =>
+      Object.fromEntries(Object.entries(record).filter(([key]) => !identity.has(key)));
+    state.extracted = withoutIdentity(stale);
+    for (const key of ['step1', 'step2']) {
+      const saved = state.steps?.[key];
+      if (saved) state.steps[key] = { done: false, data: withoutIdentity(saved.data ?? {}) };
+    }
+    state.completionPct = this.completionPct(state);
+    state.currentStep = 1;
+
+    await this.prisma.client.vendor.update({
+      where: { id: vendorId },
+      data: { gstin: null, pan: null, businessPan: null, businessPanVerifiedAt: null },
+    });
+
+    const replacedBy = newGstin ?? 'a different GSTIN';
+    const superseded = {
+      verificationStatus: 'FAILED' as const,
+      verificationSource: 'SUPERSEDED',
+      verifiedBy: null,
+      verifiedAt: new Date(),
+    };
+    await this.prisma.client.vendorDocument.updateMany({
+      where: {
+        vendorId,
+        docType: 'GST_CERT',
+        verificationStatus: { notIn: ['FAILED', 'EXPIRED'] },
+        ...(documentId ? { id: { not: documentId } } : {}),
+      },
+      data: {
+        ...superseded,
+        rejectionReason: `Replaced by the GST registration certificate for ${replacedBy}.`,
+      },
+    });
+    if (oldPan && newPan && oldPan.toUpperCase() !== newPan.toUpperCase()) {
+      await this.prisma.client.vendorDocument.updateMany({
+        where: { vendorId, docType: 'PAN_CARD', verificationStatus: 'AUTO_VERIFIED' },
+        data: {
+          ...superseded,
+          rejectionReason:
+            `Checked against PAN ${oldPan}, which the GST certificate for ${replacedBy} ` +
+            `replaced — its PAN is ${newPan}.`,
+        },
+      });
+    }
+
+    await this.audit.record({
+      action: 'ONBOARDING_IDENTITY_REPLACED',
+      entityType: 'Vendor',
+      entityId: vendorId,
+      actorId,
+      before: { gstin: oldGstin, pan: oldPan },
+      after: { gstin: newGstin, pan: newPan, documentId: documentId ?? null },
+    });
+  }
+
+  /** Share of the steps that are done, as a whole percentage. Counted over the
+   *  steps that exist *now*: an onboarding started under the old six-step
+   *  wizard carries step5/step6 entries, and counting every key would report it
+   *  150% complete. */
+  private completionPct(state: WizardState): number {
+    const doneCount = Array.from(
+      { length: ONBOARDING_STEP_COUNT },
+      (_, i) => state.steps?.[`step${i + 1}`]?.done === true,
+    ).filter(Boolean).length;
+    return Math.round((doneCount / ONBOARDING_STEP_COUNT) * 100);
   }
 
   /** The vendor's current statutory identity, for cross-checking a second

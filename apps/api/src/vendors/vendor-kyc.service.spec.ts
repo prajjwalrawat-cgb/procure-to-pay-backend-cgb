@@ -219,6 +219,51 @@ describe('VendorKycService — PAN card cross-check', () => {
   });
 });
 
+/**
+ * A vendor whose first upload was the wrong certificate — in the case that
+ * prompted this, their buyer's own — has to be able to correct it. The saved
+ * identity used to be the yardstick, so the correct certificate "disagreed"
+ * with it, was refused, and the PAN field stayed locked to the other entity.
+ */
+describe('VendorKycService — a certificate for another registration', () => {
+  const gstCert = {
+    docType: 'GST_CERT' as const,
+    s3Key: 'k',
+    buffer: textPdf(GST_CERT_LINES),
+    mimeType: 'application/pdf',
+  };
+
+  it('replaces the GSTIN and PAN on file rather than refusing the certificate', async () => {
+    const result = await build().extractDocument(gstCert, {
+      gstin: '07AFMFS3755D1ZK',
+      pan: 'AFMFS3755D',
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.supersedesIdentity).toBe(true);
+    expect(result.fields.businessPan).toMatchObject({ value: PAN, verified: true });
+    expect(result.confirmsDocument).toBe(true);
+    // The vendor is told what changed, and that the PAN card has to follow.
+    const told = result.warnings.join(' ');
+    expect(told).toContain('07AFMFS3755D1ZK');
+    expect(told).toContain(`upload the PAN card for ${PAN}`);
+  });
+
+  it('also replaces a PAN saved before any certificate was uploaded', async () => {
+    const result = await build().extractDocument(gstCert, {
+      gstin: null,
+      pan: 'AFMFS3755D',
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.supersedesIdentity).toBe(true);
+  });
+
+  it('is an ordinary re-upload when the registration is the same', async () => {
+    const result = await build().extractDocument(gstCert, { gstin: GSTIN, pan: PAN });
+    expect(result.supersedesIdentity).toBeFalsy();
+    expect(result.warnings).toEqual([]);
+  });
+});
+
 describe('merging extractions', () => {
   const verified = {
     value: 'A',

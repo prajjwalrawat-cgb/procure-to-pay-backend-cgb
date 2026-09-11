@@ -105,6 +105,7 @@ export class VendorKycService {
       warnings: [],
       manualFallback: false,
       confirmsDocument: false,
+      supersedesIdentity: false,
     };
 
     if (input.docType === 'GST_CERT') {
@@ -198,8 +199,36 @@ export class VendorKycService {
       const printedMismatch = panGstinMismatch(raw.pan, gstin);
       if (printedMismatch) out.warnings.push(printedMismatch);
 
-      const onFileMismatch = panGstinMismatch(context.pan, gstin);
-      if (onFileMismatch) out.errors.push(onFileMismatch);
+      // A certificate for a different registration than the one on file
+      // *replaces* it rather than being refused for disagreeing with it. The
+      // certificate is where the identity comes from; the saved GSTIN and PAN
+      // are only an earlier certificate's reading. Refusing used to strand a
+      // vendor whose first upload was the wrong certificate: the stale PAN was
+      // the yardstick, so every correct certificate "disagreed" and was thrown
+      // away, while the PAN field stayed locked to the other entity.
+      const onFileGstin = (context.gstin ?? '').trim().toUpperCase();
+      const onFilePan = (context.pan ?? panFromGstin(onFileGstin) ?? '')
+        .trim()
+        .toUpperCase();
+      const replaced =
+        onFileGstin && onFileGstin !== gstin
+          ? `GSTIN ${onFileGstin}`
+          : onFilePan && onFilePan !== derivedPan
+            ? `PAN ${onFilePan}`
+            : null;
+      if (replaced) {
+        out.supersedesIdentity = true;
+        const panChanged = !!onFilePan && !!derivedPan && onFilePan !== derivedPan;
+        out.warnings.push(
+          `This certificate is for GSTIN ${gstin}. It replaces the ${replaced} saved ` +
+            'earlier, and your PAN and business details now come from it — check them, ' +
+            'then save steps 1 and 2 again.' +
+            (panChanged
+              ? ` Your PAN changes from ${onFilePan} to ${derivedPan}, so please also ` +
+                `upload the PAN card for ${derivedPan}.`
+              : ''),
+        );
+      }
     }
 
     // Legal name: the registry's copy if we have one, otherwise the certificate's

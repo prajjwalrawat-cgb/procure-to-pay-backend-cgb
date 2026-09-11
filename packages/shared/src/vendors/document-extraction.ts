@@ -74,6 +74,23 @@ export const LOW_CONFIDENCE_THRESHOLD = 0.55;
 /** The wizard-field name → its extracted value, for the fields we can auto-fill. */
 export type ExtractedFieldMap = Record<string, ExtractedField>;
 
+/**
+ * The wizard fields a GST certificate is the source for. When a certificate for
+ * a different registration arrives, these are what it replaces wholesale — every
+ * one of them described the earlier entity.
+ */
+export const GST_IDENTITY_FIELDS = [
+  'gstin',
+  'businessPan',
+  'stateCode',
+  'legalEntityName',
+  'legalEntityType',
+  'tradeName',
+  'addressLine1',
+  'city',
+  'pincode',
+] as const;
+
 export interface DocumentExtractionResult {
   docType: VendorDocumentType;
   fields: ExtractedFieldMap;
@@ -91,6 +108,13 @@ export interface DocumentExtractionResult {
    * uploaded successfully has been checked by nobody.
    */
   confirmsDocument: boolean;
+  /**
+   * Set on a GST certificate whose GSTIN or PAN differs from what is on file.
+   * The certificate is the source of the vendor's identity, so it replaces the
+   * earlier one — values, saved steps, earlier documents — instead of being
+   * refused for disagreeing with it.
+   */
+  supersedesIdentity?: boolean;
 }
 
 /**

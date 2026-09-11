@@ -52,6 +52,7 @@ function makeService(fixture: Fixture = {}) {
   const onboardingUpdate = vi.fn().mockResolvedValue({});
   const vendorUpdate = vi.fn().mockResolvedValue({});
   const runScreening = vi.fn().mockResolvedValue({ id: 's1', status: 'CLEAR' });
+  const documentUpdateMany = vi.fn().mockResolvedValue({ count: 0 });
   const vendor = {
     id: 'ven_1',
     tenantId: 'ten_1',
@@ -113,6 +114,7 @@ function makeService(fixture: Fixture = {}) {
       },
       vendorDocument: {
         findMany: vi.fn().mockResolvedValue(fixture.documents ?? STATUTORY_DOCS),
+        updateMany: documentUpdateMany,
       },
       vendorBank: {
         deleteMany: vi.fn().mockResolvedValue({}),
@@ -138,7 +140,7 @@ function makeService(fixture: Fixture = {}) {
     {} as unknown as IPennyDropProvider,
     {} as unknown as ICaptchaProvider,
   );
-  return { svc, onboardingUpdate, vendorUpdate, runScreening };
+  return { svc, onboardingUpdate, vendorUpdate, runScreening, documentUpdateMany };
 }
 
 /** The wizard state the update call was given. */
@@ -421,5 +423,112 @@ describe('activateVendor — the second door into ACTIVE', () => {
     await expect(svc.activateVendor('ven_1', 'usr_officer')).resolves.toEqual({
       ok: true,
     });
+  });
+});
+
+/**
+ * The vendor whose first upload was the wrong GST certificate. Uploading the
+ * right one has to replace the identity outright: the old GSTIN/PAN on the
+ * vendor master were what every check measured against, so leaving them kept
+ * the correct certificate "disagreeing" for good.
+ */
+describe('recordExtraction — a certificate for another registration', () => {
+  const OLD_GSTIN = '07AFMFS3755D1ZK';
+  const OLD_PAN = 'AFMFS3755D';
+  // A factory: the service mutates the wizard state it is handed.
+  const wrongIdentity = () => ({
+    currentStep: 4,
+    completionPct: 100,
+    steps: {
+      step1: {
+        done: true,
+        data: { ...STEP1, businessPan: OLD_PAN, legalEntityName: 'Other Co Pvt Ltd' },
+      },
+      step2: { done: true, data: { gstin: OLD_GSTIN, isMsme: false, udyamNumber: null } },
+      step3: { done: true, data: { ifsc: 'HDFC0001234' } },
+      step4: { done: true, data: { documentsConfirmed: true } },
+    },
+    extracted: {
+      gstin: { value: OLD_GSTIN, source: 'GSTN_API', verified: true, confidence: 1 },
+      businessPan: { value: OLD_PAN, source: 'PAN_API', verified: true, confidence: 1 },
+      tradeName: { value: 'OTHER CO', source: 'OCR', verified: false, confidence: 1 },
+      ifsc: { value: 'HDFC0001234', source: 'IFSC_API', verified: true, confidence: 1 },
+    },
+  });
+  const onFile = { gstin: OLD_GSTIN, businessPan: OLD_PAN, pan: OLD_PAN };
+  type Extraction = Parameters<VendorOnboardingService['recordExtraction']>[1];
+  const replacement: Extraction = {
+    docType: 'GST_CERT',
+    fields: {
+      // The registry was down, so the new GSTIN is unverified — it must still
+      // displace the old verified one.
+      gstin: { value: GSTIN, source: 'OCR', verified: false, confidence: 0.9 },
+      businessPan: { value: PAN, source: 'DERIVED', verified: true, confidence: 1 },
+      stateCode: { value: '27', source: 'DERIVED', verified: true, confidence: 1 },
+    },
+    errors: [],
+    warnings: [],
+    manualFallback: false,
+    confirmsDocument: false,
+    supersedesIdentity: true,
+  };
+
+  it('clears the old GSTIN and PAN off the vendor record', async () => {
+    const { svc, vendorUpdate } = makeService({
+      wizardState: wrongIdentity(),
+      vendor: onFile,
+    });
+    await svc.recordExtraction('usr_1', replacement, 'vdoc_new');
+    expect(vendorUpdate).toHaveBeenCalledWith({
+      where: { id: 'ven_1' },
+      data: { gstin: null, pan: null, businessPan: null, businessPanVerifiedAt: null },
+    });
+  });
+
+  it('replaces the identity values and re-opens steps 1 and 2', async () => {
+    const { svc, onboardingUpdate } = makeService({
+      wizardState: wrongIdentity(),
+      vendor: onFile,
+    });
+    await svc.recordExtraction('usr_1', replacement, 'vdoc_new');
+    const state = onboardingUpdate.mock.calls.at(-1)![0].data.wizardState;
+    expect(state.extracted.gstin.value).toBe(GSTIN);
+    expect(state.extracted.businessPan.value).toBe(PAN);
+    expect(state.extracted.tradeName).toBeUndefined();
+    // Not identity — the bank values stay.
+    expect(state.extracted.ifsc.value).toBe('HDFC0001234');
+    expect(state.steps.step1.done).toBe(false);
+    expect(state.steps.step1.data.businessPan).toBeUndefined();
+    expect(state.steps.step1.data.primaryContactEmail).toBe(STEP1.primaryContactEmail);
+    expect(state.steps.step2.done).toBe(false);
+    expect(state.steps.step2.data.gstin).toBeUndefined();
+    expect(state.steps.step3.done).toBe(true);
+    expect(state.completionPct).toBe(50);
+    expect(state.currentStep).toBe(1);
+  });
+
+  it('fails the earlier certificates and the PAN cards verified against the old PAN', async () => {
+    const { svc, documentUpdateMany } = makeService({
+      wizardState: wrongIdentity(),
+      vendor: onFile,
+    });
+    await svc.recordExtraction('usr_1', replacement, 'vdoc_new');
+    const wheres = documentUpdateMany.mock.calls.map((c) => c[0].where);
+    expect(wheres).toContainEqual(
+      expect.objectContaining({ docType: 'GST_CERT', id: { not: 'vdoc_new' } }),
+    );
+    expect(wheres).toContainEqual(
+      expect.objectContaining({ docType: 'PAN_CARD', verificationStatus: 'AUTO_VERIFIED' }),
+    );
+  });
+
+  it('touches nothing on an ordinary re-upload of the same registration', async () => {
+    const { svc, vendorUpdate, documentUpdateMany } = makeService({
+      wizardState: wrongIdentity(),
+      vendor: onFile,
+    });
+    await svc.recordExtraction('usr_1', { ...replacement, supersedesIdentity: false });
+    expect(vendorUpdate).not.toHaveBeenCalled();
+    expect(documentUpdateMany).not.toHaveBeenCalled();
   });
 });

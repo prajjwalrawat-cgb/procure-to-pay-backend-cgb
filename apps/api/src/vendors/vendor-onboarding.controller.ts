@@ -190,7 +190,7 @@ export class VendorOnboardingController {
     // Only the fields we are willing to stand behind are remembered; the errors
     // ride back to the vendor on this response.
     if (extraction && extraction.errors.length === 0 && !extraction.manualFallback) {
-      await this.onboarding.recordExtraction(user.userId, extraction);
+      await this.onboarding.recordExtraction(user.userId, extraction, id);
     }
 
     // Hand back a presigned URL so the vendor can immediately confirm they
