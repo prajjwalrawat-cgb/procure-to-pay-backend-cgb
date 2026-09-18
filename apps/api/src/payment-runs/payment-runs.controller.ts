@@ -20,7 +20,9 @@ import {
   PaymentRunDecisionInputSchema,
   PaymentRunListQuerySchema,
   PERMISSIONS,
+  RecordManualPaymentInputSchema,
   ReorderPaymentItemsInputSchema,
+  SetPaymentItemAmountInputSchema,
   SuggestInvoicesInputSchema,
   type AddPaymentItemInput,
   type BankAccountInput,
@@ -34,7 +36,9 @@ import {
   type PaymentRunDetailResponse,
   type PaymentRunListQuery,
   type PaymentRunListResponse,
+  type RecordManualPaymentInput,
   type ReorderPaymentItemsInput,
+  type SetPaymentItemAmountInput,
   type SuggestInvoicesInput,
   type SuggestInvoicesResponse,
 } from '@procureflow/shared';
@@ -44,6 +48,7 @@ import { CurrentUser, RequirePermission } from '../auth/decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { TdsService } from '../invoices/domain/tds.service';
 import { BankAccountService } from './bank-account.service';
+import { PaymentPostingService } from './payment-posting.service';
 import { PaymentRunComposerService } from './payment-run-composer.service';
 import { PaymentRunMsmeService } from './payment-run-msme.service';
 import { PaymentRunQueryService } from './payment-run-query.service';
@@ -61,6 +66,7 @@ export class PaymentRunsController {
     private readonly bankAccounts: BankAccountService,
     private readonly msmeAudit: PaymentRunMsmeService,
     private readonly tds: TdsService,
+    private readonly posting: PaymentPostingService,
   ) {}
 
   /** Active accounts only — this feeds the "debit account" picker on a run. */
@@ -169,6 +175,36 @@ export class PaymentRunsController {
   ): Promise<{ ok: true }> {
     await this.composer.removeInvoice(id, invoiceId, user.userId);
     return { ok: true };
+  }
+
+  /** Pay part of the invoice in this run; the rest stays payable. */
+  @Put('payment-runs/:id/items/:invoiceId/amount')
+  @RequirePermission(PERMISSIONS.PAYMENT_RUN_COMPOSE)
+  async setItemAmount(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Param('invoiceId') invoiceId: string,
+    @Body(new ZodValidationPipe(SetPaymentItemAmountInputSchema))
+    dto: SetPaymentItemAmountInput,
+  ): Promise<{ ok: true }> {
+    await this.composer.setItemAmount(id, invoiceId, dto.amount, user.userId);
+    return { ok: true };
+  }
+
+  /**
+   * Record a payment made outside the app (direct transfer, cheque) against an
+   * invoice — in full or in part. Lives here rather than on the invoices
+   * controller because it posts through the same service bank confirmation does.
+   */
+  @Post('invoices/:id/payments')
+  @RequirePermission(PERMISSIONS.INVOICE_PAY)
+  async recordPayment(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(RecordManualPaymentInputSchema))
+    dto: RecordManualPaymentInput,
+  ): Promise<{ status: 'PAID' | 'PARTIALLY_PAID' }> {
+    return this.posting.recordManual(id, dto, user.userId);
   }
 
   @Post('payment-runs/:id/reorder')

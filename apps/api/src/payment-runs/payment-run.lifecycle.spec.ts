@@ -12,6 +12,7 @@ import { BankFileService } from './bank-file.service';
 import { BankSubmissionService } from './banking/bank-submission.service';
 import { SandboxBankGateway } from './banking/bank-gateway';
 import { UtrReconciliationService } from './banking/utr-reconciliation.service';
+import { PaymentPostingService } from './payment-posting.service';
 import { PaymentRunSubmissionBlockedError } from './payment-run.errors';
 import { PaymentRunService } from './payment-run.service';
 
@@ -42,6 +43,8 @@ function item(id: string, status = 'APPROVED', verified = true, ifsc = 'HDFC0001
       id: `inv_${id}`,
       number: `INV-${id}`,
       status,
+      grossAmount: new Decimal('100000'),
+      paidAmount: new Decimal('0'),
       vendor: {
         name: 'Vendor',
         banks: [{ isVerified: verified, ifsc, holderName: 'Vendor Ltd' }],
@@ -140,11 +143,25 @@ function harness(
       }),
     },
     invoice: {
+      // Posting first increments paidAmount (reading the row back), then sets
+      // the status that follows from it.
       update: vi.fn(
-        async ({ where, data }: { where: { id: string }; data: { status: string } }) => {
+        async ({
+          where,
+          data,
+        }: {
+          where: { id: string };
+          data: { status?: string; paidAmount?: { increment: Decimal.Value } };
+        }) => {
           const it = items.find((i) => i.invoiceId === where.id);
-          if (it) it.invoice.status = data.status;
-          return {};
+          if (!it) return {};
+          if (data.paidAmount) {
+            it.invoice.paidAmount = it.invoice.paidAmount.plus(
+              data.paidAmount.increment.toString(),
+            );
+          }
+          if (data.status) it.invoice.status = data.status;
+          return it.invoice;
         },
       ),
       // Status-guarded, like the real updateMany: the service relies on the
@@ -154,11 +171,13 @@ function harness(
           where,
           data,
         }: {
-          where: { id: string; status: string };
+          where: { id: string; status: string | { in: string[] } };
           data: { status: string };
         }) => {
           const it = items.find((i) => i.invoiceId === where.id);
-          if (!it || it.invoice.status !== where.status) return { count: 0 };
+          const allowed =
+            typeof where.status === 'string' ? [where.status] : where.status.in;
+          if (!it || !allowed.includes(it.invoice.status)) return { count: 0 };
           it.invoice.status = data.status;
           return { count: 1 };
         },
@@ -194,6 +213,7 @@ function harness(
     audit,
     events,
     submission,
+    new PaymentPostingService(prisma, audit),
     gateway,
   );
   const service = new PaymentRunService(
@@ -236,6 +256,34 @@ describe('PaymentRunService — full lifecycle (submit → approve → confirm �
     expect(records).toHaveLength(2);
     expect(records.every((r) => r.isStub === false)).toBe(true);
     expect(records.every((r) => !r.utr.startsWith('STUB'))).toBe(true);
+  });
+
+  it('leaves an invoice PARTIALLY_PAID when the run paid only part of it', async () => {
+    const half = item('1');
+    half.gross = new Decimal('50000');
+    half.net = new Decimal('50000');
+    const { service, run, records } = harness({ items: [half, item('2')] });
+
+    await service.submitForApproval('pay_1', 'usr_iyer');
+    await service.onFullyApproved('pay_1', 'usr_das');
+    await service.confirmBank('pay_1', 'usr_das');
+
+    const [first, second] = run.items;
+    expect(first!.invoice.status).toBe('PARTIALLY_PAID');
+    expect(first!.invoice.paidAmount.toString()).toBe('50000');
+    expect(second!.invoice.status).toBe('PAID');
+    expect(records).toHaveLength(2);
+  });
+
+  it('refuses to submit an item worth more than is still owed on its invoice', async () => {
+    // Half was paid by hand after the item was added at the full amount.
+    const stale = item('1');
+    stale.invoice.paidAmount = new Decimal('50000');
+    stale.invoice.status = 'PARTIALLY_PAID';
+    const { service } = harness({ items: [stale] });
+    await expect(service.submitForApproval('pay_1', 'usr_iyer')).rejects.toBeInstanceOf(
+      PaymentRunSubmissionBlockedError,
+    );
   });
 
   it('blocks the bank submission if the file changed between submit and approval', async () => {

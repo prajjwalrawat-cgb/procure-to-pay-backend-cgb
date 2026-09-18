@@ -8,6 +8,7 @@ import type {
   PaymentRunListResponse,
   PaymentRunTabCounts,
 } from '@procureflow/shared';
+import Decimal from 'decimal.js';
 
 import { ApprovalRoutingService } from '../approvals/approval-routing.service';
 import { MsmeService } from '../invoices/domain/msme.service';
@@ -106,6 +107,7 @@ export class PaymentRunQueryService {
             },
           },
         },
+        paymentRecords: { select: { invoiceId: true, gross: true } },
       },
     });
     if (!run) throw new NotFoundException('Payment run not found');
@@ -115,19 +117,35 @@ export class PaymentRunQueryService {
       select: { name: true },
     });
 
-    const items: PaymentRunItemView[] = run.items.map((it) => ({
-      id: it.id,
-      invoiceId: it.invoiceId,
-      invoiceNumber: it.invoice.number,
-      vendorName: it.invoice.vendor.name,
-      isMsme: it.invoice.vendor.isMsme,
-      msmeDaysRemaining: this.msme.daysRemaining(it.invoice.msmeDueDate),
-      gross: it.gross.toString(),
-      tds: it.tds.toString(),
-      net: it.net.toString(),
-      bankVerified: it.invoice.vendor.banks.some((b) => b.isVerified),
-      orderInBatch: it.orderInBatch,
-    }));
+    // Once the bank confirms, the invoice's paidAmount includes this run's own
+    // payment; take it back out so "paid before" means before this run.
+    const postedHere = new Map(
+      run.paymentRecords.map((r) => [r.invoiceId, new Decimal(r.gross.toString())]),
+    );
+    const items: PaymentRunItemView[] = run.items.map((it) => {
+      const invoiceGross = new Decimal(it.invoice.grossAmount.toString());
+      const paidBefore = new Decimal(it.invoice.paidAmount.toString()).minus(
+        postedHere.get(it.invoiceId) ?? 0,
+      );
+      const outstanding = Decimal.max(invoiceGross.minus(paidBefore), 0);
+      return {
+        id: it.id,
+        invoiceId: it.invoiceId,
+        invoiceNumber: it.invoice.number,
+        vendorName: it.invoice.vendor.name,
+        isMsme: it.invoice.vendor.isMsme,
+        msmeDaysRemaining: this.msme.daysRemaining(it.invoice.msmeDueDate),
+        gross: it.gross.toString(),
+        tds: it.tds.toString(),
+        net: it.net.toString(),
+        invoiceGross: invoiceGross.toFixed(4),
+        paidBefore: paidBefore.toFixed(4),
+        outstanding: outstanding.toFixed(4),
+        isPartial: new Decimal(it.gross.toString()).lessThan(outstanding),
+        bankVerified: it.invoice.vendor.banks.some((b) => b.isVerified),
+        orderInBatch: it.orderInBatch,
+      };
+    });
 
     const kpis: PaymentRunKpis = {
       itemCount: items.length,

@@ -6,6 +6,7 @@ import type {
   InvoiceListItem,
   InvoiceListQuery,
   InvoiceListResponse,
+  InvoicePaymentInfo,
   InvoiceTabCounts,
   LiveApprovalStep,
   MsmeSummary,
@@ -30,6 +31,7 @@ const OPEN_STATUSES = [
   'MATCH_EXCEPTION',
   'AWAITING_APPROVAL',
   'APPROVED', // approved but unpaid — still AP's work until the bank confirms
+  'PARTIALLY_PAID', // part settled — the rest is still AP's to pay
   'HELD',
 ] as const;
 const openStatusIn = (): { in: (typeof OPEN_STATUSES)[number][] } => ({
@@ -132,7 +134,7 @@ export class InvoiceQueryService {
         c.count({ where: scoped({ status: openStatusIn() }) }),
         c.count({ where: scoped({ status: 'MATCH_EXCEPTION' }) }),
         c.count({ where: scoped({ status: 'AWAITING_APPROVAL' }) }),
-        c.count({ where: scoped({ status: 'APPROVED' }) }),
+        c.count({ where: scoped({ status: { in: ['APPROVED', 'PARTIALLY_PAID'] } }) }),
         c.count({ where: scoped({ status: 'SCHEDULED' }) }),
         c.count({ where: scoped({ status: 'PAID' }) }),
         c.count({ where: scoped({ status: openStatusIn(), vendor: { isMsme: true } }) }),
@@ -318,12 +320,52 @@ export class InvoiceQueryService {
         })
       : null;
 
-    // Payment posting (Slice 3) — the "Payments" tab + Paid stage reference.
-    const paymentRecord = await this.prisma.client.paymentRecord.findFirst({
+    // Payment postings (Slice 3) — the "Payments" tab + Paid stage reference.
+    // Several once an invoice is paid in parts.
+    const paymentRecords = await this.prisma.client.paymentRecord.findMany({
       where: { invoiceId: id },
-      orderBy: { paidAt: 'desc' },
+      orderBy: [{ paidAt: 'asc' }, { createdAt: 'asc' }],
       include: { paymentRun: { select: { id: true, number: true } } },
     });
+    const recorderIds = [
+      ...new Set(paymentRecords.flatMap((r) => (r.recordedById ? [r.recordedById] : []))),
+    ];
+    const recorders = recorderIds.length
+      ? await this.prisma.client.user.findMany({
+          where: { id: { in: recorderIds } },
+          select: { id: true, name: true },
+        })
+      : [];
+    const recorderName = new Map(recorders.map((u) => [u.id, u.name]));
+    const payments: InvoicePaymentInfo[] = paymentRecords.map((r) => ({
+      id: r.id,
+      source: r.source,
+      paymentRunId: r.paymentRun?.id ?? null,
+      paymentRunNumber: r.paymentRun?.number ?? null,
+      utr: r.utr,
+      isStub: r.isStub,
+      gross: r.gross.toString(),
+      tds: r.tds.toString(),
+      net: r.net.toString(),
+      paidAt: r.paidAt.toISOString(),
+      mode: r.mode,
+      note: r.note,
+      recordedByName: r.recordedById ? (recorderName.get(r.recordedById) ?? null) : null,
+    }));
+    // A run holding the invoice that the bank has not confirmed yet.
+    const activeItem = await this.prisma.client.paymentRunItem.findFirst({
+      where: {
+        invoiceId: id,
+        paymentRun: { status: { not: 'CANCELLED' } },
+        bankStatus: { not: 'CONFIRMED' },
+      },
+      include: { paymentRun: { select: { id: true, number: true } } },
+    });
+    const amountPaid = new Decimal(inv.paidAmount.toString());
+    const amountOutstanding = Decimal.max(
+      new Decimal(inv.grossAmount.toString()).minus(amountPaid),
+      0,
+    );
 
     return {
       id: inv.id,
@@ -473,17 +515,12 @@ export class InvoiceQueryService {
       myApprovalId: myApproval?.approvalId ?? null,
       canDecide: Boolean(myApproval),
       assignedTo: assignee,
-      payment: paymentRecord
-        ? {
-            paymentRunId: paymentRecord.paymentRun.id,
-            paymentRunNumber: paymentRecord.paymentRun.number,
-            utr: paymentRecord.utr,
-            isStub: paymentRecord.isStub,
-            gross: paymentRecord.gross.toString(),
-            tds: paymentRecord.tds.toString(),
-            net: paymentRecord.net.toString(),
-            paidAt: paymentRecord.paidAt.toISOString(),
-          }
+      payment: payments[payments.length - 1] ?? null,
+      payments,
+      amountPaid: amountPaid.toFixed(4),
+      amountOutstanding: amountOutstanding.toFixed(4),
+      activePaymentRun: activeItem
+        ? { id: activeItem.paymentRun.id, number: activeItem.paymentRun.number }
         : null,
     };
   }
@@ -504,7 +541,8 @@ export class InvoiceQueryService {
       all: { status: openStatusIn() },
       exceptions: { status: 'MATCH_EXCEPTION' },
       approval: { status: 'AWAITING_APPROVAL' },
-      approved: { status: 'APPROVED' },
+      // Approved and still owing — a part-paid invoice is waiting on the rest.
+      approved: { status: { in: ['APPROVED', 'PARTIALLY_PAID'] } },
       scheduled: { status: 'SCHEDULED' },
       paid: { status: 'PAID' },
       msme: { status: openStatusIn(), vendor: { isMsme: true } },
@@ -555,6 +593,7 @@ function buildStages(status: string): InvoiceDetailResponse['stages'] {
     AWAITING_APPROVAL: 3,
     APPROVED: 3,
     SCHEDULED: 4,
+    PARTIALLY_PAID: 5,
     PAID: 5,
     REJECTED: 2,
   };

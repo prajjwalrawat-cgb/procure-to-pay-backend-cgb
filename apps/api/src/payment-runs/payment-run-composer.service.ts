@@ -15,22 +15,18 @@ import { MsmeService } from '../invoices/domain/msme.service';
 import { TdsService, type TdsRunLine } from '../invoices/domain/tds.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { BankAccountService } from './bank-account.service';
+import {
+  ACTIVE_RUN_ITEM,
+  PAYABLE_STATUSES,
+  PaymentPostingService,
+} from './payment-posting.service';
 import { PaymentItemInvalidError, PaymentRunStateError } from './payment-run.errors';
 
-/**
- * A run holds onto its invoices in every status but CANCELLED (dedup guard).
- *
- * Written as the one released status rather than a list of active ones. The old
- * allow-list — DRAFT, AWAITING_APPROVAL, SUBMITTED_TO_BANK — omitted
- * SUBMITTED_PENDING_BANK_CONFIRMATION, the status a run actually lands in once
- * submitted (see BankSubmissionService), along with COMPLETED and FAILED. An
- * invoice already sent to the bank was therefore free to join a second run and
- * be paid twice. Inverting the test also means a status added to the enum later
- * defaults to "still committed" rather than "up for grabs".
- */
-const RELEASED_RUN_STATUSES = ['CANCELLED'] as const;
-/** Invoice statuses eligible for a payment run. */
-const PAYABLE_STATUSES = ['APPROVED', 'SCHEDULED'] as const;
+// Dedup guard: see ACTIVE_RUN_ITEM. A run holds onto its invoice in every run
+// status but CANCELLED — the old allow-list of active statuses omitted
+// SUBMITTED_PENDING_BANK_CONFIRMATION and let an invoice already at the bank be
+// paid twice — until the bank confirms that item, after which only the unpaid
+// remainder of the invoice (if any) is up for a new run.
 /** MSME "approaching the cap" window for auto-inclusion, in days remaining. */
 const MSME_APPROACHING_DAYS = 7;
 
@@ -153,13 +149,17 @@ export class PaymentRunComposerService {
       );
     }
     const dupe = await this.prisma.client.paymentRunItem.findFirst({
-      where: {
-        invoiceId,
-        paymentRun: { status: { notIn: [...RELEASED_RUN_STATUSES] } },
-      },
+      where: { invoiceId, ...ACTIVE_RUN_ITEM },
     });
     if (dupe) {
       throw new PaymentItemInvalidError('Invoice is already in an active payment run.', {
+        invoiceId,
+      });
+    }
+    // A part-paid invoice joins with only what is left on it.
+    const outstanding = PaymentPostingService.outstanding(invoice);
+    if (outstanding.isZero()) {
+      throw new PaymentItemInvalidError('Nothing is left to pay on this invoice.', {
         invoiceId,
       });
     }
@@ -174,13 +174,10 @@ export class PaymentRunComposerService {
         tenantId: this.tenantId(),
         paymentRunId: runId,
         invoiceId,
-        gross: invoice.grossAmount,
-        tds: invoice.tdsAmount,
-        net: new Prisma.Decimal(
-          new Decimal(invoice.grossAmount.toString())
-            .minus(invoice.tdsAmount.toString())
-            .toFixed(4),
-        ),
+        // TDS and net are placeholders until recompute() below sets them.
+        gross: new Prisma.Decimal(outstanding.toFixed(4)),
+        tds: new Prisma.Decimal(0),
+        net: new Prisma.Decimal(outstanding.toFixed(4)),
         orderInBatch: (maxOrder._max.orderInBatch ?? 0) + 1,
       },
     });
@@ -190,7 +187,62 @@ export class PaymentRunComposerService {
       entityType: 'PaymentRun',
       entityId: runId,
       actorId,
-      after: { invoiceId, number: invoice.number },
+      after: { invoiceId, number: invoice.number, amount: outstanding.toFixed(2) },
+    });
+  }
+
+  /**
+   * Pay part of an invoice in this run instead of its whole outstanding balance.
+   * The rest stays payable: once the bank confirms this run the invoice reads
+   * PARTIALLY_PAID and a later run (or a recorded payment) settles the remainder.
+   */
+  async setItemAmount(
+    runId: string,
+    invoiceId: string,
+    amount: string,
+    actorId: string,
+  ): Promise<void> {
+    const run = await this.requireRun(runId);
+    this.assertDraft(run.status);
+    const item = await this.prisma.client.paymentRunItem.findFirst({
+      where: { paymentRunId: runId, invoiceId },
+      include: {
+        invoice: { select: { number: true, grossAmount: true, paidAmount: true } },
+      },
+    });
+    if (!item) throw new NotFoundException('Invoice is not in this run');
+
+    const outstanding = PaymentPostingService.outstanding(item.invoice);
+    const next = new Decimal(amount);
+    if (next.lessThanOrEqualTo(0)) {
+      throw new PaymentItemInvalidError('Enter an amount greater than zero.', {
+        invoiceId,
+      });
+    }
+    if (next.greaterThan(outstanding)) {
+      throw new PaymentItemInvalidError(
+        `That is more than the ₹${outstanding.toFixed(2)} outstanding on ${item.invoice.number}.`,
+        { invoiceId, amount: next.toFixed(2), outstanding: outstanding.toFixed(2) },
+      );
+    }
+
+    await this.prisma.client.paymentRunItem.update({
+      where: { id: item.id },
+      data: { gross: new Prisma.Decimal(next.toFixed(4)) },
+    });
+    await this.recompute(runId, { resort: false });
+    await this.audit.record({
+      action: 'ITEM_AMOUNT_CHANGED',
+      entityType: 'PaymentRun',
+      entityId: runId,
+      actorId,
+      before: { invoiceId, amount: new Decimal(item.gross.toString()).toFixed(2) },
+      after: {
+        invoiceId,
+        number: item.invoice.number,
+        amount: next.toFixed(2),
+        outstanding: outstanding.toFixed(2),
+      },
     });
   }
 
@@ -268,7 +320,13 @@ export class PaymentRunComposerService {
 
   // ── internals ────────────────────────────────────────────────────────────
 
-  /** Recompute item TDS at composition (running ₹50L rollover) + run totals. */
+  /**
+   * Recompute item TDS at composition (running ₹50L rollover) + run totals.
+   *
+   * TDS is worked out on the whole invoice, as before; an item paying only part
+   * of it withholds its proportional share of what earlier payments have not
+   * already withheld (PaymentPostingService.tdsShare).
+   */
   async recompute(runId: string, opts: { resort: boolean }): Promise<void> {
     const items = await this.prisma.client.paymentRunItem.findMany({
       where: { paymentRunId: runId },
@@ -279,6 +337,7 @@ export class PaymentRunComposerService {
             vendorId: true,
             grossAmount: true,
             taxAmount: true,
+            paidAmount: true,
             invoiceDate: true,
             vendor: { select: { isMsme: true, name: true } },
           },
@@ -315,17 +374,34 @@ export class PaymentRunComposerService {
     }));
     const tds = TdsService.applyToRun(lines);
 
+    const withheld = await this.prisma.client.paymentRecord.groupBy({
+      by: ['invoiceId'],
+      where: { invoiceId: { in: runInvoiceIds } },
+      _sum: { tds: true },
+    });
+    const withheldByInvoice = new Map(
+      withheld.map((w) => [w.invoiceId, new Decimal(w._sum.tds?.toString() ?? '0')]),
+    );
+
     let gross = new Decimal(0);
     let tdsTotal = new Decimal(0);
     let net = new Decimal(0);
     for (let i = 0; i < ordered.length; i += 1) {
       const it = ordered[i]!;
-      const itemGross = new Decimal(it.invoice.grossAmount.toString());
-      const itemTds = tds[i] ?? new Decimal(0);
+      const outstanding = PaymentPostingService.outstanding(it.invoice);
+      // Never pay past the balance, even if it moved since the item was added.
+      const itemGross = Decimal.min(new Decimal(it.gross.toString()), outstanding);
+      const invoiceTds = tds[i] ?? new Decimal(0);
+      const itemTds = PaymentPostingService.tdsShare(
+        invoiceTds.minus(withheldByInvoice.get(it.invoiceId) ?? 0),
+        outstanding,
+        itemGross,
+      );
       const itemNet = itemGross.minus(itemTds);
       await this.prisma.client.paymentRunItem.update({
         where: { id: it.id },
         data: {
+          gross: new Prisma.Decimal(itemGross.toFixed(4)),
           tds: new Prisma.Decimal(itemTds.toFixed(4)),
           net: new Prisma.Decimal(itemNet.toFixed(4)),
           orderInBatch: opts.resort ? i + 1 : it.orderInBatch,
@@ -375,6 +451,7 @@ export class PaymentRunComposerService {
     }>,
     now: Date,
   ): SuggestedInvoice {
+    const outstanding = PaymentPostingService.outstanding(inv);
     const remaining = this.msme.daysRemaining(inv.msmeDueDate, now);
     const approaching =
       inv.vendor.isMsme && remaining != null && remaining <= MSME_APPROACHING_DAYS;
@@ -389,6 +466,8 @@ export class PaymentRunComposerService {
       gross: inv.grossAmount.toString(),
       tds: inv.tdsAmount.toString(),
       net: inv.netAmount.toString(),
+      paidAmount: inv.paidAmount.toString(),
+      outstanding: outstanding.toFixed(4),
       agingDays: Math.max(
         0,
         Math.floor((now.getTime() - inv.receivedAt.getTime()) / (24 * 60 * 60 * 1000)),
@@ -400,7 +479,7 @@ export class PaymentRunComposerService {
 
   private async invoiceIdsInActiveRuns(): Promise<Set<string>> {
     const items = await this.prisma.client.paymentRunItem.findMany({
-      where: { paymentRun: { status: { notIn: [...RELEASED_RUN_STATUSES] } } },
+      where: ACTIVE_RUN_ITEM,
       select: { invoiceId: true },
     });
     return new Set(items.map((i) => i.invoiceId));
@@ -446,6 +525,7 @@ type ItemWithInvoice = Prisma.PaymentRunItemGetPayload<{
         vendorId: true;
         grossAmount: true;
         taxAmount: true;
+        paidAmount: true;
         invoiceDate: true;
         vendor: { select: { isMsme: true; name: true } };
       };

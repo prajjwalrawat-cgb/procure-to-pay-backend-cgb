@@ -188,6 +188,7 @@ export const INVOICE_STATUS = [
   'AWAITING_APPROVAL',
   'APPROVED',
   'SCHEDULED',
+  'PARTIALLY_PAID', // part of the invoice settled; the rest still payable
   'PAID',
   'HELD',
   'REJECTED',

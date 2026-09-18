@@ -25,6 +25,41 @@ export const AddPaymentItemInputSchema = z.object({
 });
 export type AddPaymentItemInput = z.infer<typeof AddPaymentItemInputSchema>;
 
+const amountString = z
+  .string()
+  .trim()
+  .regex(/^\d+(\.\d{1,2})?$/, 'Enter an amount, e.g. 8260 or 8260.50');
+
+/**
+ * How much of an invoice a run pays — before TDS, against the invoice's gross.
+ * Anything below the outstanding balance is a part-payment; the rest stays
+ * payable for a later run.
+ */
+export const SetPaymentItemAmountInputSchema = z.object({
+  amount: amountString,
+});
+export type SetPaymentItemAmountInput = z.infer<typeof SetPaymentItemAmountInputSchema>;
+
+export const MANUAL_PAYMENT_MODES = ['NEFT', 'RTGS', 'IMPS', 'UPI', 'CHEQUE', 'OTHER'] as const;
+export type ManualPaymentMode = (typeof MANUAL_PAYMENT_MODES)[number];
+
+/** A payment finance made outside the app, recorded against the invoice. */
+export const RecordManualPaymentInputSchema = z.object({
+  /** Part of the invoice this payment settles, before TDS. */
+  amount: amountString,
+  /**
+   * TDS withheld from this payment. Omit it and the invoice's TDS is split in
+   * proportion to the amount settled.
+   */
+  tds: amountString.nullish(),
+  paidAt: z.string().datetime(),
+  mode: z.enum(MANUAL_PAYMENT_MODES),
+  /** UTR, cheque number, or whatever reference the bank gave. */
+  reference: z.string().trim().min(1, 'Enter the UTR or cheque number').max(64),
+  note: z.string().trim().max(500).nullish(),
+});
+export type RecordManualPaymentInput = z.infer<typeof RecordManualPaymentInputSchema>;
+
 export const ReorderPaymentItemsInputSchema = z.object({
   itemIds: z.array(z.string().min(1)).min(1),
   /** Required only when the reorder forces an MSME item below its fold. */
@@ -153,6 +188,9 @@ export interface SuggestedInvoice {
   gross: string;
   tds: string;
   net: string;
+  /** Already settled by earlier payments, and what is left — both before TDS. */
+  paidAmount: string;
+  outstanding: string;
   agingDays: number;
   bankVerified: boolean;
   /** Auto-included because it is an MSME invoice approaching the 45-day cap. */
@@ -172,9 +210,16 @@ export interface PaymentRunItemView {
   vendorName: string;
   isMsme: boolean;
   msmeDaysRemaining: number | null;
+  /** What this run settles of the invoice, before TDS. */
   gross: string;
   tds: string;
   net: string;
+  /** The invoice's full value, what earlier payments settled, and what was left for this run. */
+  invoiceGross: string;
+  paidBefore: string;
+  outstanding: string;
+  /** This run pays less than the outstanding balance. */
+  isPartial: boolean;
   bankVerified: boolean;
   orderInBatch: number;
 }
@@ -249,12 +294,18 @@ export interface PaymentRunDetailResponse {
 
 /** Payment posting shown on the invoice detail's "Payments" tab (Slice 3). */
 export interface InvoicePaymentInfo {
-  paymentRunId: string;
-  paymentRunNumber: string;
+  id: string;
+  source: 'PAYMENT_RUN' | 'MANUAL';
+  /** Null for a MANUAL payment — it was made outside any run. */
+  paymentRunId: string | null;
+  paymentRunNumber: string | null;
   utr: string;
   isStub: boolean;
   gross: string;
   tds: string;
   net: string;
   paidAt: string;
+  mode: string | null;
+  note: string | null;
+  recordedByName: string | null;
 }

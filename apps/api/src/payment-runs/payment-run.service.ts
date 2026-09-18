@@ -11,12 +11,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { BankFileService } from './bank-file.service';
 import { BankSubmissionService } from './banking/bank-submission.service';
 import { UtrReconciliationService } from './banking/utr-reconciliation.service';
+import { PAYABLE_STATUSES, PaymentPostingService } from './payment-posting.service';
 import {
   PaymentRunStateError,
   PaymentRunSubmissionBlockedError,
 } from './payment-run.errors';
-
-const PAYABLE_STATUSES = ['APPROVED', 'SCHEDULED'] as const;
 
 /**
  * PaymentRunService — orchestrates a run from draft to bank submission (Slice 3).
@@ -183,7 +182,11 @@ export class PaymentRunService implements OnModuleInit {
     const invalid = items.filter(
       (it) =>
         !(PAYABLE_STATUSES as readonly string[]).includes(it.invoice.status) ||
-        !it.invoice.vendor.banks.some((b) => b.isVerified),
+        !it.invoice.vendor.banks.some((b) => b.isVerified) ||
+        // A payment recorded since the item was added can leave less owing.
+        new Decimal(it.gross.toString()).greaterThan(
+          PaymentPostingService.outstanding(it.invoice),
+        ),
     );
     if (invalid.length > 0) {
       throw new PaymentRunSubmissionBlockedError(
@@ -200,9 +203,10 @@ export class PaymentRunService implements OnModuleInit {
    * `APPROVED` from the approval decision all the way to the bank UTR: it
    * appeared in no AP inbox tab, and the "Scheduled" tab was permanently empty.
    *
-   * Guarded on `APPROVED` rather than written blind — if the run auto-approved
-   * and the bank confirmed inside `routing.submit`, those invoices are already
-   * `PAID` and must not be dragged backwards.
+   * Guarded on the payable statuses rather than written blind — if the run
+   * auto-approved and the bank confirmed inside `routing.submit`, those invoices
+   * are already `PAID` and must not be dragged backwards. A part-paid invoice
+   * is scheduled too; its paidAmount still says how much was settled before.
    */
   private async markInvoicesScheduled(
     runId: string,
@@ -211,7 +215,7 @@ export class PaymentRunService implements OnModuleInit {
   ): Promise<void> {
     for (const { invoiceId } of items) {
       const { count } = await this.prisma.client.invoice.updateMany({
-        where: { id: invoiceId, status: 'APPROVED' },
+        where: { id: invoiceId, status: { in: ['APPROVED', 'PARTIALLY_PAID'] } },
         data: { status: 'SCHEDULED' },
       });
       if (count === 0) continue;
@@ -225,16 +229,20 @@ export class PaymentRunService implements OnModuleInit {
     }
   }
 
-  /** Cancelling a run puts its invoices back on the payable pile. */
+  /**
+   * Cancelling a run puts its invoices back on the payable pile — as
+   * PARTIALLY_PAID where an earlier payment already settled part of one.
+   */
   private async releaseScheduledInvoices(runId: string, actorId: string): Promise<void> {
     const items = await this.prisma.client.paymentRunItem.findMany({
       where: { paymentRunId: runId },
-      select: { invoiceId: true },
+      select: { invoiceId: true, invoice: { select: { paidAmount: true } } },
     });
-    for (const { invoiceId } of items) {
+    for (const { invoiceId, invoice } of items) {
+      const partlyPaid = new Decimal(invoice.paidAmount.toString()).greaterThan(0);
       const { count } = await this.prisma.client.invoice.updateMany({
         where: { id: invoiceId, status: 'SCHEDULED' },
-        data: { status: 'APPROVED' },
+        data: { status: partlyPaid ? 'PARTIALLY_PAID' : 'APPROVED' },
       });
       if (count === 0) continue;
       await this.audit.record({

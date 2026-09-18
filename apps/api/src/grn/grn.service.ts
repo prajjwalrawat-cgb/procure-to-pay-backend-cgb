@@ -24,7 +24,7 @@ import { StockLedgerService } from './stock-ledger.service';
 
 const RECEIVABLE_PO = ['ISSUED', 'ACKNOWLEDGED', 'PARTIALLY_RECEIVED'];
 const INVOICE_LOCKED: Prisma.InvoiceWhereInput['status'] = {
-  in: ['AWAITING_APPROVAL', 'APPROVED', 'SCHEDULED', 'PAID'],
+  in: ['AWAITING_APPROVAL', 'APPROVED', 'SCHEDULED', 'PARTIALLY_PAID', 'PAID'],
 };
 
 /**

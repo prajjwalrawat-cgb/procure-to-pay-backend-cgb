@@ -1,5 +1,4 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { newId } from '@procureflow/db';
 import {
   DOMAIN_EVENTS,
   type BankConfirmationResult,
@@ -9,6 +8,7 @@ import {
 import { AuditLogService } from '../../audit/audit.service';
 import { DomainEventService } from '../../common/events/domain-event.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PaymentPostingService } from '../payment-posting.service';
 import { PaymentRunStateError } from '../payment-run.errors';
 import { BankSubmissionService } from './bank-submission.service';
 import { BANK_GATEWAY, type IBankGateway } from './bank-gateway';
@@ -16,8 +16,9 @@ import { BANK_GATEWAY, type IBankGateway } from './bank-gateway';
 /**
  * UtrReconciliationService (Slice 10b). Confirms a submitted batch (poll/webhook),
  * replacing every `STUB-…` UTR with a real bank-issued UTR going forward. On
- * confirmation it creates the immutable PaymentRecord with `is_stub = false` and
- * moves the invoice to PAID — nothing is marked paid until the bank confirms.
+ * confirmation it posts the immutable PaymentRecord with `is_stub = false`, which
+ * moves the invoice to PAID, or PARTIALLY_PAID when the run paid only part of it —
+ * nothing is marked paid until the bank confirms.
  * Historical `is_stub = true` records are NEVER rewritten (audit honesty). Failed
  * items surface for correction + resubmission; they don't block the successful ones.
  */
@@ -28,6 +29,7 @@ export class UtrReconciliationService {
     private readonly audit: AuditLogService,
     private readonly events: DomainEventService,
     private readonly submission: BankSubmissionService,
+    private readonly posting: PaymentPostingService,
     @Inject(BANK_GATEWAY) private readonly gateway: IBankGateway,
   ) {}
 
@@ -60,35 +62,18 @@ export class UtrReconciliationService {
           where: { paymentRunId: runId, invoiceId: it.invoiceId },
         });
         if (!exists) {
-          await this.prisma.client.paymentRecord.create({
-            data: {
-              id: newId('paymentRecord'),
-              tenantId: run.tenantId,
-              invoiceId: it.invoiceId,
-              paymentRunId: runId,
-              gross: item.gross,
-              tds: item.tds,
-              net: item.net,
-              utr: it.utr, // REAL bank UTR
-              isStub: false, // no longer a stub — real transaction
-              paidAt: now,
-            },
-          });
-          await this.prisma.client.invoice.update({
-            where: { id: it.invoiceId },
-            data: { status: 'PAID', paidAt: now },
-          });
-          await this.audit.record({
-            action: 'PAYMENT_RECORDED',
-            entityType: 'Invoice',
-            entityId: it.invoiceId,
-            actorType: 'SYSTEM',
-            after: {
-              paymentRunId: runId,
-              utr: it.utr,
-              net: item.net.toString(),
-              isStub: false,
-            },
+          // Settles the item's part of the invoice: PAID if that clears it,
+          // PARTIALLY_PAID if the run paid only part.
+          await this.posting.post({
+            tenantId: run.tenantId,
+            invoiceId: it.invoiceId,
+            source: 'PAYMENT_RUN',
+            paymentRunId: runId,
+            gross: item.gross.toString(),
+            tds: item.tds.toString(),
+            utr: it.utr, // REAL bank UTR
+            isStub: false, // no longer a stub — real transaction
+            paidAt: now,
           });
         }
         await this.prisma.client.paymentRunItem.update({

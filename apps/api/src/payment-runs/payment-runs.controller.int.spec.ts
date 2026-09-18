@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ProblemExceptionFilter } from '../common/filters/problem.filter';
 import { TdsService } from '../invoices/domain/tds.service';
 import { BankAccountService } from './bank-account.service';
+import { PaymentPostingService } from './payment-posting.service';
 import { PaymentRunComposerService } from './payment-run-composer.service';
 import { PaymentRunMsmeService } from './payment-run-msme.service';
 import { PaymentRunQueryService } from './payment-run-query.service';
@@ -51,6 +52,7 @@ describe('PaymentRunsController (integration)', () => {
         { provide: BankAccountService, useValue: bankAccounts },
         { provide: PaymentRunMsmeService, useValue: msmeAudit },
         { provide: TdsService, useValue: tds },
+        { provide: PaymentPostingService, useValue: { recordManual: vi.fn() } },
         { provide: APP_FILTER, useClass: ProblemExceptionFilter },
         {
           provide: APP_GUARD,

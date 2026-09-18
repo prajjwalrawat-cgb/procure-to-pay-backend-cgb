@@ -7,6 +7,7 @@ import { DomainEventService } from '../../common/events/domain-event.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { BankFileService } from '../bank-file.service';
+import { PAYABLE_STATUSES } from '../payment-posting.service';
 import { PaymentRunSubmissionBlockedError } from '../payment-run.errors';
 import { BANK_GATEWAY, type BankPayee, type IBankGateway } from './bank-gateway';
 
@@ -43,7 +44,7 @@ export class BankSubmissionService {
     // Block submission if any item became invalid after approval (Slice 3 guard).
     const invalid = run.items.filter(
       (it) =>
-        !['APPROVED', 'SCHEDULED'].includes(it.invoice.status) ||
+        !(PAYABLE_STATUSES as readonly string[]).includes(it.invoice.status) ||
         !it.invoice.vendor.banks.some((b) => b.isVerified),
     );
     if (invalid.length > 0) {
