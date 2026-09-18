@@ -18,6 +18,7 @@ import {
   SandboxBankGateway,
 } from './banking/bank-gateway';
 import { UtrReconciliationService } from './banking/utr-reconciliation.service';
+import { PaymentPostingService } from './payment-posting.service';
 import { PaymentRunComposerService } from './payment-run-composer.service';
 import { PaymentRunMsmeService } from './payment-run-msme.service';
 import { PaymentRunQueryService } from './payment-run-query.service';
@@ -36,6 +37,7 @@ import { VendorBankVerificationService } from './vendor-bank-verification.servic
   controllers: [PaymentRunsController, VendorBankController],
   providers: [
     PaymentRunComposerService,
+    PaymentPostingService,
     PaymentRunService,
     PaymentRunQueryService,
     PaymentRunMsmeService,

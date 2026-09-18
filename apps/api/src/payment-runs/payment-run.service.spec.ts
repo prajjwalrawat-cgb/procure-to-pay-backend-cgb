@@ -11,6 +11,7 @@ import { BankFileService } from './bank-file.service';
 import { BankSubmissionService } from './banking/bank-submission.service';
 import { SandboxBankGateway } from './banking/bank-gateway';
 import { UtrReconciliationService } from './banking/utr-reconciliation.service';
+import { PaymentPostingService } from './payment-posting.service';
 import { PaymentRunSubmissionBlockedError } from './payment-run.errors';
 
 const D = (v: string) => new Decimal(v);
@@ -224,7 +225,15 @@ describe('UtrReconciliationService.confirmRun (real UTRs, never rewrites stubs)'
           return Promise.resolve(a.data);
         }),
       },
-      invoice: { update: vi.fn() },
+      // The posting increments paidAmount and reads the row back: the whole
+      // 100000 is now settled, so the invoice goes PAID.
+      invoice: {
+        update: vi.fn().mockResolvedValue({
+          grossAmount: D('100000'),
+          paidAmount: D('100000'),
+          status: 'SCHEDULED',
+        }),
+      },
       paymentRunItem: { update: vi.fn() },
     };
     const prisma = { client } as unknown as PrismaService;
@@ -242,6 +251,7 @@ describe('UtrReconciliationService.confirmRun (real UTRs, never rewrites stubs)'
       d.audit,
       d.events,
       submission,
+      new PaymentPostingService(prisma, d.audit),
       gateway(),
     );
 

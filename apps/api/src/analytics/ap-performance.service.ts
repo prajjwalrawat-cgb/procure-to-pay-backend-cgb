@@ -9,7 +9,7 @@ import {
 
 import { PrismaService } from '../prisma/prisma.service';
 
-const APPROVED_STATUSES = ['APPROVED', 'SCHEDULED', 'PAID'];
+const APPROVED_STATUSES = ['APPROVED', 'SCHEDULED', 'PARTIALLY_PAID', 'PAID'];
 
 interface MonthAcc {
   total: number;

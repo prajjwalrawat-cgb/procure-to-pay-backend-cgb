@@ -265,8 +265,19 @@ export interface InvoiceDetailResponse {
   myApprovalId: string | null;
   canDecide: boolean;
   assignedTo: { id: string; name: string } | null;
-  /** Payment posting once the invoice has been paid via a run (Slice 3). */
+  /** The most recent payment posted against the invoice (Slice 3). */
   payment: InvoicePaymentInfo | null;
+  /** Every payment posted against the invoice, oldest first. */
+  payments: InvoicePaymentInfo[];
+  /** Settled so far and still owed, both before TDS (against grossAmount). */
+  amountPaid: string;
+  amountOutstanding: string;
+  /**
+   * A payment run that currently holds this invoice and has not been confirmed
+   * by the bank. While one does, a payment cannot be recorded by hand — the run
+   * is already committed to paying its amount.
+   */
+  activePaymentRun: { id: string; number: string } | null;
 }
 
 export interface VendorPoOption {

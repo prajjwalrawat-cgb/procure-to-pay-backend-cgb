@@ -247,6 +247,7 @@ enum InvoiceStatus {
   AWAITING_APPROVAL
   APPROVED
   SCHEDULED
+  PARTIALLY_PAID // some of the invoice is settled; the rest is still payable
   PAID
   HELD
   REJECTED
@@ -1546,6 +1547,11 @@ model Invoice {
   assignedToId           String?       @map("assigned_to_id")
   holdReason             String?
   paidAt                 DateTime?     @map("paid_at") @db.Timestamptz(6)
+  /// How much of `grossAmount` its payment records have settled so far, before
+  /// TDS. Kept on the row so the payable queue can show what is outstanding
+  /// without summing records; only PaymentPostingService writes it, in step
+  /// with the record it posts.
+  paidAmount             Decimal       @default("0") @map("paid_amount") @db.Decimal(18, 4)
   approvalMatrixSnapshot Json?         @map("approval_matrix_snapshot")
   /// Admin-defined fields (Settings → Custom fields), keyed by definition key.
   customFields Json? @map("custom_fields")
@@ -1712,6 +1718,8 @@ model PaymentRunItem {
   tenantId         String                @map("tenant_id") @db.Uuid
   paymentRunId     String                @map("payment_run_id")
   invoiceId        String                @map("invoice_id")
+  /// The part of the invoice this run settles — its outstanding balance unless
+  /// finance chose to pay less (a part-payment).
   gross            Decimal               @db.Decimal(18, 4)
   tds              Decimal               @default("0") @db.Decimal(18, 4)
   net              Decimal               @db.Decimal(18, 4)
@@ -1730,24 +1738,38 @@ model PaymentRunItem {
   @@index([invoiceId])
 }
 
+enum PaymentRecordSource {
+  PAYMENT_RUN // confirmed by the bank against a payment run
+  MANUAL // paid outside the app (direct transfer, cheque) and recorded by finance
+}
+
 // Immutable payment posting per invoice (Master Context §3 rule #10). UTR is a
 // stub (`is_stub = true`) until the real bank integration lands in Slice 10.
+//
+// An invoice can carry several: each one settles `gross` of it, and the invoice
+// is PAID once they add up to its grossAmount. A MANUAL record has no run; its
+// `utr` is whatever reference finance has for the transfer or cheque.
 model PaymentRecord {
-  id           String   @id
-  tenantId     String   @map("tenant_id") @db.Uuid
-  invoiceId    String   @map("invoice_id")
-  paymentRunId String   @map("payment_run_id")
-  gross        Decimal  @db.Decimal(18, 4)
-  tds          Decimal  @default("0") @db.Decimal(18, 4)
-  net          Decimal  @db.Decimal(18, 4)
+  id           String              @id
+  tenantId     String              @map("tenant_id") @db.Uuid
+  invoiceId    String              @map("invoice_id")
+  paymentRunId String?             @map("payment_run_id")
+  source       PaymentRecordSource @default(PAYMENT_RUN)
+  gross        Decimal             @db.Decimal(18, 4)
+  tds          Decimal             @default("0") @db.Decimal(18, 4)
+  net          Decimal             @db.Decimal(18, 4)
   utr          String
-  isStub       Boolean  @default(true) @map("is_stub")
-  paidAt       DateTime @map("paid_at") @db.Timestamptz(6)
-  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+  isStub       Boolean             @default(true) @map("is_stub")
+  /// MANUAL only: NEFT, RTGS, IMPS, UPI, CHEQUE, OTHER.
+  mode         String?
+  note         String?
+  recordedById String?             @map("recorded_by_id")
+  paidAt       DateTime            @map("paid_at") @db.Timestamptz(6)
+  createdAt    DateTime            @default(now()) @db.Timestamptz(6)
 
-  tenant     Tenant     @relation(fields: [tenantId], references: [id])
-  invoice    Invoice    @relation(fields: [invoiceId], references: [id])
-  paymentRun PaymentRun @relation(fields: [paymentRunId], references: [id])
+  tenant     Tenant      @relation(fields: [tenantId], references: [id])
+  invoice    Invoice     @relation(fields: [invoiceId], references: [id])
+  paymentRun PaymentRun? @relation(fields: [paymentRunId], references: [id])
 
   @@index([tenantId])
   @@index([invoiceId])
