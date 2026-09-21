@@ -83,7 +83,9 @@ export class VendorScorecardService {
 
     const invoices = await this.prisma.client.invoice.findMany({
       where: { vendorId, ...(since ? { createdAt: { gte: since } } : {}) },
-      include: { exceptions: { where: { resolvedAt: null }, select: { id: true } } },
+      include: {
+        exceptions: { where: { resolvedAt: null, supersededAt: null }, select: { id: true } },
+      },
     });
     const disputed = invoices.filter((i) => i.exceptions.length > 0).length;
 

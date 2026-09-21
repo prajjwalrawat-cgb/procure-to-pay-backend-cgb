@@ -201,7 +201,7 @@ export class ApprovalContextService {
       include: {
         vendor: { select: { isMsme: true, gstin: true } },
         lines: { select: { id: true } },
-        exceptions: { where: { resolvedAt: null }, select: { id: true } },
+        exceptions: { where: { resolvedAt: null, supersededAt: null }, select: { id: true } },
       },
     });
     if (!inv) throw new NotFoundException('Invoice not found');

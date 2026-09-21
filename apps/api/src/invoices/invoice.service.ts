@@ -7,7 +7,10 @@ import {
 import { Prisma, newId } from '@procureflow/db';
 import type {
   InvoiceCreateInput,
+  InvoiceDocumentKind,
   InvoiceLineInput,
+  ResolveAndRouteResult,
+  TaxInvoiceInput,
   VendorInvoiceSubmitInput,
 } from '@procureflow/shared';
 import Decimal from 'decimal.js';
@@ -15,6 +18,7 @@ import Decimal from 'decimal.js';
 import { ApprovalRoutingService } from '../approvals/approval-routing.service';
 import { AuditLogService } from '../audit/audit.service';
 import { DomainEventService } from '../common/events/domain-event.service';
+import { ACTIVE_RUN_ITEM } from '../payment-runs/payment-posting.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { MatchService } from './match.service';
 import { MsmeService } from './domain/msme.service';
@@ -33,6 +37,28 @@ interface Totals {
 /** The states the 3-way matcher leaves an invoice in; anything else has not
  *  been matched (or is already past approval). */
 const MATCHED_STATUSES: string[] = ['OCR_DONE', 'MATCH_EXCEPTION'];
+
+/**
+ * Where a proforma cannot take its tax invoice yet, and what to do instead.
+ * Anything not listed can: before approval, after it, part-paid, or paid in
+ * full (a 100% advance still owes the buyer a tax invoice).
+ */
+const TAX_INVOICE_REFUSED: Record<string, string> = {
+  OCR_PENDING:
+    'The proforma is still being read. Wait for extraction to finish before replacing it.',
+  AWAITING_APPROVAL:
+    'The proforma is with its approver. Wait for the decision before replacing it.',
+  SCHEDULED:
+    'The proforma is in a payment run the bank has not confirmed yet. Wait for it to settle first.',
+  HELD: 'This invoice is on hold. Release the hold first.',
+  REJECTED: 'This proforma was rejected. Submit the tax invoice as a new invoice instead.',
+};
+
+/** ₹ a tax invoice may differ from its approved proforma by before it counts. */
+const APPROVED_TOTAL_ROUNDING = new Decimal(1);
+
+const inr = (v: Decimal): string =>
+  `₹${v.toNumber().toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 @Injectable()
 export class InvoiceService {
@@ -114,9 +140,10 @@ export class InvoiceService {
       lines: input.lines,
       totals,
       s3Key: input.s3Key,
+      documentKind: input.documentKind,
     });
     await this.queueOcr(tenantId, id, input.s3Key);
-    await this.auditCreated(id, vendorId, 'PORTAL', input.vendorInvoiceRef);
+    await this.auditCreated(id, vendorId, 'PORTAL', input.vendorInvoiceRef, input.documentKind);
     return id;
   }
 
@@ -563,8 +590,216 @@ export class InvoiceService {
     });
   }
 
-  /** Resolve gate, then hand off to the generic approval engine (Slice 2). */
-  async resolveAndRoute(invoiceId: string, actorId: string): Promise<void> {
+  /**
+   * Say whether the document on this record is a proforma or a tax invoice.
+   *
+   * For the cases the vendor did not flag at submission — and for proformas
+   * that predate the flag, which were entered as ordinary invoices. Marking one
+   * as a proforma blocks its balance once an advance is paid, so it is refused
+   * once a tax invoice has already replaced the PI: the record then holds a real
+   * tax invoice, and calling it a proforma again would block a legitimate
+   * payment.
+   */
+  async setDocumentKind(
+    invoiceId: string,
+    kind: InvoiceDocumentKind,
+    actorId: string,
+  ): Promise<void> {
+    const inv = await this.requireInvoice(invoiceId);
+    if (inv.documentKind === kind) return;
+    if (inv.proformaRef !== null) {
+      throw new ForbiddenException(
+        `The tax invoice has already replaced proforma ${inv.proformaRef} on this record.`,
+      );
+    }
+    if (inv.status === 'REJECTED') {
+      throw new ForbiddenException('This invoice was rejected.');
+    }
+    await this.prisma.client.invoice.update({
+      where: { id: invoiceId },
+      data: { documentKind: kind },
+    });
+    await this.audit.record({
+      action: 'invoice.document_kind_changed',
+      entityType: 'Invoice',
+      entityId: invoiceId,
+      actorId,
+      before: { documentKind: inv.documentKind },
+      after: { documentKind: kind },
+    });
+  }
+
+  /**
+   * Replace a proforma with the vendor's tax invoice, on the same record.
+   *
+   * Some suppliers will not ship until an advance is paid, and the advance is
+   * paid against their PI. The tax invoice only comes afterwards. Entering it as
+   * a new invoice would bill the PO a second time and lose the advance already
+   * paid, so it lands here instead:
+   *
+   *  - the PI's PDF stays attached, re-typed PROFORMA_PDF — the advance was
+   *    paid against it and that has to remain visible;
+   *  - the header and lines are the ones asserted with the upload, and OCR is
+   *    queued to read the page and check it against them;
+   *  - every exception raised on the PI is superseded, open and overridden
+   *    alike, so the tax invoice is matched from a clean slate;
+   *  - the PI's reference and approved total are kept, which is what
+   *    `resolveAndRoute` weighs the tax invoice against;
+   *  - payments are untouched: paidAmount still says what the advance settled.
+   */
+  async attachTaxInvoice(
+    invoiceId: string,
+    input: TaxInvoiceInput,
+    actor: { id: string; type: 'USER' | 'VENDOR' },
+  ): Promise<void> {
+    const inv = await this.prisma.client.invoice.findUnique({
+      where: { id: invoiceId },
+      include: { vendor: true },
+    });
+    if (!inv) throw new NotFoundException('Invoice not found');
+    if (inv.documentKind !== 'PROFORMA') {
+      throw new ForbiddenException(
+        inv.proformaRef
+          ? 'The tax invoice has already been uploaded for this proforma.'
+          : 'This invoice is not a proforma, so there is no tax invoice to replace it with.',
+      );
+    }
+    const refusal = TAX_INVOICE_REFUSED[inv.status];
+    if (refusal) throw new ForbiddenException(refusal);
+    // A draft run holding the PI would go on to pay an amount composed for the
+    // proforma; the bank-pending case is covered by SCHEDULED above.
+    const inRun = await this.prisma.client.paymentRunItem.findFirst({
+      where: { invoiceId, ...ACTIVE_RUN_ITEM },
+      include: { paymentRun: { select: { number: true } } },
+    });
+    if (inRun) {
+      throw new ForbiddenException(
+        `This proforma is in payment run ${inRun.paymentRun.number}. Remove it ` +
+          'from that run, or let the bank confirm it, before replacing the document.',
+      );
+    }
+
+    const invoiceDate = new Date(input.invoiceDate);
+    const totals = await this.computeTotals(inv.tenantId, inv.vendor.gstin, input.lines);
+    const tenant = await this.prisma.client.tenant.findUniqueOrThrow({
+      where: { id: inv.tenantId },
+      select: { tdsRate: true, msmePaymentCapDays: true },
+    });
+    const tdsAmount = await this.tds.computeFor(
+      inv.vendorId,
+      totals.subtotal,
+      invoiceDate,
+      new Decimal(tenant.tdsRate.toString()),
+    );
+    const now = new Date();
+
+    const db = this.prisma.client;
+    await db.invoiceAttachment.updateMany({
+      where: { invoiceId, docType: 'INVOICE_PDF' },
+      data: { docType: 'PROFORMA_PDF' },
+    });
+    await db.invoiceAttachment.create({
+      data: {
+        id: newId('invoiceAttachment'),
+        tenantId: inv.tenantId,
+        invoiceId,
+        s3Key: input.s3Key,
+        mimeType: 'application/pdf',
+        sizeBytes: 0,
+      },
+    });
+    await db.invoiceException.updateMany({
+      where: { invoiceId, supersededAt: null },
+      data: { supersededAt: now },
+    });
+    await db.invoiceLine.deleteMany({ where: { invoiceId } });
+    await db.invoiceLine.createMany({
+      data: input.lines.map((l) => ({
+        id: newId('invoiceLine'),
+        tenantId: inv.tenantId,
+        invoiceId,
+        lineNo: l.lineNo,
+        poLineId: l.poLineId ?? null,
+        itemDesc: l.itemDesc,
+        uom: l.uom,
+        qty: new Prisma.Decimal(l.qty),
+        unitPrice: new Prisma.Decimal(l.unitPrice),
+        taxRate: new Prisma.Decimal(l.taxRate ?? '0'),
+        lineTotal: new Prisma.Decimal(new Decimal(l.qty).times(l.unitPrice).toFixed(4)),
+      })),
+    });
+    await db.invoice.update({
+      where: { id: invoiceId },
+      data: {
+        documentKind: 'TAX_INVOICE',
+        proformaRef: inv.vendorInvoiceRef,
+        proformaGrossAmount: inv.grossAmount,
+        taxInvoiceReceivedAt: now,
+        vendorInvoiceRef: input.vendorInvoiceRef,
+        invoiceDate,
+        // The MSME clock runs from the tax invoice, not from the proforma.
+        ...(inv.vendor.isMsme
+          ? {
+              msmeDueDate: this.msme.computeDueDate(
+                invoiceDate,
+                tenant.msmePaymentCapDays,
+              ),
+            }
+          : {}),
+        grossAmount: new Prisma.Decimal(totals.gross.toFixed(4)),
+        taxAmount: new Prisma.Decimal(totals.taxAmount.toFixed(4)),
+        tdsAmount,
+        netAmount: new Prisma.Decimal(totals.gross.minus(tdsAmount.toString()).toFixed(4)),
+        irn: input.irn ?? null,
+        ewaybillNo: input.ewaybillNo ?? null,
+        // Asserted by the uploader, so OCR checks them rather than adopting.
+        headerAwaitingOcr: false,
+        // Everything read off the PI is about the PI.
+        ocrConfidence: null,
+        ocrJobId: null,
+        ocrDeclaredTotal: null,
+        ocrInvoiceDate: null,
+        ocrVendorInvoiceRef: null,
+        ocrVendorName: null,
+        gstr2bStatus: 'PENDING',
+        gstr2bMatchedAt: null,
+        status: 'OCR_PENDING',
+      },
+    });
+    await this.audit.record({
+      action: 'invoice.tax_invoice_attached',
+      entityType: 'Invoice',
+      entityId: invoiceId,
+      actorId: actor.id,
+      before: {
+        status: inv.status,
+        proformaRef: inv.vendorInvoiceRef,
+        grossAmount: inv.grossAmount.toString(),
+        paidAmount: inv.paidAmount.toString(),
+      },
+      after: {
+        vendorInvoiceRef: input.vendorInvoiceRef,
+        grossAmount: totals.gross.toFixed(4),
+        uploadedBy: actor.type,
+      },
+    });
+    await this.events.emit('InvoiceTaxInvoiceAttached', { invoiceId });
+    await this.queueOcr(inv.tenantId, invoiceId, input.s3Key);
+  }
+
+  /**
+   * Resolve gate, then hand off to the generic approval engine (Slice 2).
+   *
+   * A tax invoice that replaced an already-approved proforma does not go back
+   * through approval by default — the approver has already agreed to pay this
+   * supplier this much for this order, and re-approving every tax invoice that
+   * simply repeats its PI is noise. It goes back only when it changed what was
+   * agreed: see `materialChanges`.
+   */
+  async resolveAndRoute(
+    invoiceId: string,
+    actorId: string,
+  ): Promise<ResolveAndRouteResult> {
     const invoice = await this.requireInvoice(invoiceId);
     // "No open exceptions" is only evidence of a clean match if a match has
     // actually run. Before it does — OCR pending, below the confidence floor,
@@ -580,12 +815,121 @@ export class InvoiceService {
       );
     }
     const open = await this.prisma.client.invoiceException.count({
-      where: { invoiceId, resolvedAt: null },
+      where: { invoiceId, resolvedAt: null, supersededAt: null },
     });
     if (open > 0) {
       throw new ForbiddenException('Resolve all exceptions before routing');
     }
+
+    if (invoice.proformaRef !== null && (await this.hasPriorApproval(invoiceId))) {
+      const reasons = await this.materialChanges(invoice);
+      if (reasons.length === 0) {
+        await this.carryOverApproval(invoice, actorId);
+        return { outcome: 'APPROVAL_CARRIED_OVER', reasons };
+      }
+      // The engine will not route a document that already has approval rows —
+      // they are how it knows a document is in flight. The earlier decisions
+      // stay in the audit log (DOCUMENT_ROUTED / APPROVAL_DECIDED).
+      await this.prisma.client.approval.deleteMany({
+        where: { documentType: 'INVOICE', documentId: invoiceId },
+      });
+      await this.audit.record({
+        action: 'invoice.reapproval_required',
+        entityType: 'Invoice',
+        entityId: invoiceId,
+        actorId,
+        after: { reasons },
+      });
+      await this.routing.submit('INVOICE', invoiceId, actorId);
+      return { outcome: 'ROUTED', reasons };
+    }
+
     await this.routing.submit('INVOICE', invoiceId, actorId);
+    return { outcome: 'ROUTED', reasons: [] };
+  }
+
+  /** Fully approved before: approvals exist, none pending, none refused. */
+  private async hasPriorApproval(invoiceId: string): Promise<boolean> {
+    const rows = await this.prisma.client.approval.findMany({
+      where: { documentType: 'INVOICE', documentId: invoiceId },
+      select: { decision: true },
+    });
+    return rows.length > 0 && rows.every((r) => r.decision === 'APPROVED');
+  }
+
+  /**
+   * How the tax invoice departs from the proforma that was approved, in words
+   * an approver can act on. Empty means the earlier approval still holds.
+   *
+   *  - It costs more than was approved, beyond rounding.
+   *  - It costs less than has already been paid: the advance overshot and the
+   *    difference has to be recovered, which is not AP's call alone.
+   *  - It comes from a different supplier than the order. Even with the
+   *    exception overridden, the approver agreed to pay somebody else.
+   */
+  private async materialChanges(inv: {
+    id: string;
+    grossAmount: Prisma.Decimal;
+    paidAmount: Prisma.Decimal;
+    proformaGrossAmount: Prisma.Decimal | null;
+    ocrVendorName: string | null;
+  }): Promise<string[]> {
+    const reasons: string[] = [];
+    const gross = new Decimal(inv.grossAmount.toString());
+    const approved = new Decimal(inv.proformaGrossAmount?.toString() ?? '0');
+    const paid = new Decimal(inv.paidAmount.toString());
+    if (gross.minus(approved).greaterThan(APPROVED_TOTAL_ROUNDING)) {
+      reasons.push(
+        `The tax invoice total ${inr(gross)} is more than the ${inr(approved)} approved on the proforma.`,
+      );
+    }
+    if (paid.minus(gross).greaterThan(APPROVED_TOTAL_ROUNDING)) {
+      reasons.push(
+        `The tax invoice total ${inr(gross)} is less than the ${inr(paid)} already paid; the difference has to be recovered.`,
+      );
+    }
+    const otherSupplier = await this.prisma.client.invoiceException.count({
+      where: { invoiceId: inv.id, supersededAt: null, exceptionType: 'VENDOR_MISMATCH' },
+    });
+    if (otherSupplier > 0) {
+      reasons.push(
+        `The tax invoice is issued by ${inv.ocrVendorName ? `"${inv.ocrVendorName}"` : 'a different supplier'}, not the supplier on the order.`,
+      );
+    }
+    return reasons;
+  }
+
+  /**
+   * Put a converted invoice back where its payments left it. The approval rows
+   * already say APPROVED; what changes is the status, which the tax invoice's
+   * trip through OCR and the match moved back into the pipeline.
+   */
+  private async carryOverApproval(
+    inv: { id: string; status: string; grossAmount: Prisma.Decimal; paidAmount: Prisma.Decimal },
+    actorId: string,
+  ): Promise<void> {
+    const paid = new Decimal(inv.paidAmount.toString());
+    const settled = paid.greaterThan(0) && paid.greaterThanOrEqualTo(inv.grossAmount.toString());
+    const status = settled ? 'PAID' : paid.greaterThan(0) ? 'PARTIALLY_PAID' : 'APPROVED';
+    const lastPayment = settled
+      ? await this.prisma.client.paymentRecord.findFirst({
+          where: { invoiceId: inv.id },
+          orderBy: { paidAt: 'desc' },
+          select: { paidAt: true },
+        })
+      : null;
+    await this.prisma.client.invoice.update({
+      where: { id: inv.id },
+      data: { status, ...(lastPayment ? { paidAt: lastPayment.paidAt } : {}) },
+    });
+    await this.audit.record({
+      action: 'invoice.approval_carried_over',
+      entityType: 'Invoice',
+      entityId: inv.id,
+      actorId,
+      before: { status: inv.status },
+      after: { status },
+    });
   }
 
   // ── helpers ──────────────────────────────────────────────────────────────
@@ -627,6 +971,7 @@ export class InvoiceService {
     s3Key?: string;
     /** True when invoiceDate/vendorInvoiceRef are defaults awaiting OCR. */
     headerAwaitingOcr?: boolean;
+    documentKind?: InvoiceDocumentKind;
   }): Promise<void> {
     const tenant = await this.prisma.client.tenant.findUniqueOrThrow({
       where: { id: args.tenantId },
@@ -652,6 +997,7 @@ export class InvoiceService {
         vendorInvoiceRef: args.vendorInvoiceRef,
         invoiceDate: args.invoiceDate,
         headerAwaitingOcr: args.headerAwaitingOcr ?? false,
+        documentKind: args.documentKind ?? 'TAX_INVOICE',
         status: args.status,
         source: args.source,
         grossAmount: new Prisma.Decimal(args.totals.gross.toFixed(4)),
@@ -718,13 +1064,14 @@ export class InvoiceService {
     actorId: string,
     source: string,
     ref: string,
+    documentKind: InvoiceDocumentKind = 'TAX_INVOICE',
   ): Promise<void> {
     await this.audit.record({
       action: 'invoice.created',
       entityType: 'Invoice',
       entityId: id,
       actorId,
-      after: { source, vendorInvoiceRef: ref },
+      after: { source, vendorInvoiceRef: ref, documentKind },
     });
     await this.events.emit('InvoiceCreated', { invoiceId: id, source });
   }

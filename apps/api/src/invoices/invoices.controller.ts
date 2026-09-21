@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -17,13 +18,16 @@ import {
 import {
   AssignInputSchema,
   CommentInputSchema,
+  DocumentKindInputSchema,
   ExceptionResolutionInputSchema,
   HoldInputSchema,
   InvoiceCreateInputSchema,
   InvoiceListQuerySchema,
   PERMISSIONS,
+  TaxInvoiceInputSchema,
   type AssignInput,
   type CommentInput,
+  type DocumentKindInput,
   type ExceptionResolutionInput,
   type HoldInput,
   type InvoiceCreateInput,
@@ -31,6 +35,8 @@ import {
   type InvoiceListQuery,
   type InvoiceListResponse,
   type InvoiceTabCounts,
+  type ResolveAndRouteResult,
+  type TaxInvoiceInput,
 } from '@procureflow/shared';
 import { z } from 'zod';
 
@@ -220,9 +226,72 @@ export class InvoicesController {
   async resolveAndRoute(
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,
+  ): Promise<ResolveAndRouteResult> {
+    await this.assertVisible(user, id);
+    return this.invoices.resolveAndRoute(id, user.userId);
+  }
+
+  /**
+   * Proforma or tax invoice. Gated on resolve-exception, not intake: marking a
+   * record as a proforma blocks its balance from being paid, which is a
+   * decision about money rather than about intake.
+   */
+  @Post(':id/document-kind')
+  @RequirePermission(PERMISSIONS.INVOICE_RESOLVE_EXCEPTION)
+  async setDocumentKind(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(DocumentKindInputSchema)) dto: DocumentKindInput,
   ): Promise<{ ok: true }> {
     await this.assertVisible(user, id);
-    await this.invoices.resolveAndRoute(id, user.userId);
+    await this.invoices.setDocumentKind(id, dto.kind, user.userId);
+    return { ok: true };
+  }
+
+  /**
+   * Store the tax invoice for a proforma and hand back its key. Two steps, like
+   * the vendor portal, because the header and lines travel as JSON with it.
+   */
+  @Post(':id/tax-invoice/file')
+  @RequirePermission(INVOICE_OPERATE_SCOPES)
+  @UseInterceptors(FileInterceptor('file', DOCUMENT_UPLOAD_OPTIONS))
+  async uploadTaxInvoiceFile(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @UploadedFile()
+    file:
+      | { originalname: string; buffer: Buffer; mimetype: string; size?: number }
+      | undefined,
+  ): Promise<{ s3Key: string }> {
+    await this.assertVisible(user, id);
+    assertUploadSize(file);
+    if (!file?.buffer) {
+      throw new BadRequestException('No file received — attach the tax invoice.');
+    }
+    const s3Key = `invoices/${user.tenantId}/${newId('invoiceAttachment')}-${safeFilename(file.originalname)}`;
+    await this.storage.put(s3Key, file.buffer, file.mimetype ?? 'application/pdf');
+    return { s3Key };
+  }
+
+  @Post(':id/tax-invoice')
+  @RequirePermission(INVOICE_OPERATE_SCOPES)
+  async attachTaxInvoice(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(TaxInvoiceInputSchema)) dto: TaxInvoiceInput,
+  ): Promise<{ ok: true }> {
+    await this.assertVisible(user, id);
+    // The key comes back from the browser, so it is re-checked: this tenant's
+    // invoice prefix, and an object that actually exists.
+    if (!dto.s3Key.startsWith(`invoices/${user.tenantId}/`)) {
+      throw new BadRequestException('Upload the tax invoice before attaching it.');
+    }
+    if (!(await this.storage.exists(dto.s3Key))) {
+      throw new BadRequestException(
+        'The uploaded tax invoice could not be found in storage — attach it again.',
+      );
+    }
+    await this.invoices.attachTaxInvoice(id, dto, { id: user.userId, type: 'USER' });
     return { ok: true };
   }
 

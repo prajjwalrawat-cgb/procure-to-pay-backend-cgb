@@ -19,6 +19,7 @@ import {
   ACTIVE_RUN_ITEM,
   PAYABLE_STATUSES,
   PaymentPostingService,
+  proformaPaymentBlock,
 } from './payment-posting.service';
 import { PaymentItemInvalidError, PaymentRunStateError } from './payment-run.errors';
 
@@ -113,6 +114,9 @@ export class PaymentRunComposerService {
     const chosen = base.filter((inv) => {
       // Exclude invoices already committed to any active run (incl. this one).
       if (alreadyIn.has(inv.id)) return false;
+      // A proforma whose advance is paid waits for its tax invoice — even an
+      // MSME one: the statutory clock runs from the tax invoice, not the PI.
+      if (proformaPaymentBlock(inv)) return false;
       const passes = matchesFilter(inv);
       const approaching = isApproaching(inv);
       if (!passes && approaching) autoIncluded += 1;
@@ -141,6 +145,8 @@ export class PaymentRunComposerService {
         status: invoice.status,
       });
     }
+    const blocked = proformaPaymentBlock(invoice);
+    if (blocked) throw new PaymentItemInvalidError(blocked, { invoiceId });
     const bankVerified = invoice.vendor.banks.some((b) => b.isVerified);
     if (!bankVerified) {
       throw new PaymentItemInvalidError(

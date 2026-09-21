@@ -11,7 +11,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { BankFileService } from './bank-file.service';
 import { BankSubmissionService } from './banking/bank-submission.service';
 import { UtrReconciliationService } from './banking/utr-reconciliation.service';
-import { PAYABLE_STATUSES, PaymentPostingService } from './payment-posting.service';
+import {
+  PAYABLE_STATUSES,
+  PaymentPostingService,
+  proformaPaymentBlock,
+} from './payment-posting.service';
 import {
   PaymentRunStateError,
   PaymentRunSubmissionBlockedError,
@@ -183,6 +187,8 @@ export class PaymentRunService implements OnModuleInit {
       (it) =>
         !(PAYABLE_STATUSES as readonly string[]).includes(it.invoice.status) ||
         !it.invoice.vendor.banks.some((b) => b.isVerified) ||
+        // The advance on a proforma may have been paid since the item was added.
+        proformaPaymentBlock(it.invoice) !== null ||
         // A payment recorded since the item was added can leave less owing.
         new Decimal(it.gross.toString()).greaterThan(
           PaymentPostingService.outstanding(it.invoice),

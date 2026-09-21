@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma, newId } from '@procureflow/db';
+import Decimal from 'decimal.js';
 import {
   evaluateConditions,
   type ApprovalContext,
@@ -642,9 +643,25 @@ export class ApprovalRoutingService {
   ): Promise<void> {
     const status = docMeta(documentType).status[outcome];
     if (documentType === 'INVOICE') {
+      // An invoice re-approved after its tax invoice replaced a proforma may
+      // already carry the advance. APPROVED would read as nothing paid, and
+      // would let a run pay the whole gross again from the top.
+      let next = status;
+      if (outcome === 'APPROVED') {
+        const inv = await this.prisma.client.invoice.findUnique({
+          where: { id: documentId },
+          select: { grossAmount: true, paidAmount: true },
+        });
+        const paid = new Decimal((inv?.paidAmount ?? 0).toString());
+        if (inv && paid.greaterThan(0)) {
+          next = paid.greaterThanOrEqualTo(inv.grossAmount.toString())
+            ? 'PAID'
+            : 'PARTIALLY_PAID';
+        }
+      }
       await this.prisma.client.invoice.update({
         where: { id: documentId },
-        data: { status: status as Prisma.InvoiceUpdateInput['status'] },
+        data: { status: next as Prisma.InvoiceUpdateInput['status'] },
       });
     } else if (documentType === 'PAYMENT_RUN') {
       await this.prisma.client.paymentRun.update({

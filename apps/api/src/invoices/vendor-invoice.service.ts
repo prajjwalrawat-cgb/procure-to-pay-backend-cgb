@@ -4,7 +4,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { VendorInvoiceSubmitInput, VendorPoOption } from '@procureflow/shared';
+import type {
+  InvoiceDocumentKind,
+  TaxInvoiceInput,
+  VendorInvoiceSubmitInput,
+  VendorPoOption,
+} from '@procureflow/shared';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../common/storage/storage.service';
@@ -27,6 +32,55 @@ export interface VendorInvoiceSummary {
   status: string;
   grossAmount: string;
   invoiceDate: string;
+  documentKind: InvoiceDocumentKind;
+  /** The PI this record started as, once its tax invoice has replaced it. */
+  proformaRef: string | null;
+}
+
+/** One invoice with its lines — what the tax-invoice form seeds itself from. */
+export interface VendorInvoiceDetail extends VendorInvoiceSummary {
+  lines: {
+    lineNo: number;
+    poLineId: string | null;
+    itemDesc: string;
+    uom: string;
+    qty: string;
+    unitPrice: string;
+    taxRate: string;
+  }[];
+}
+
+const SUMMARY_SELECT = {
+  id: true,
+  number: true,
+  vendorInvoiceRef: true,
+  status: true,
+  grossAmount: true,
+  invoiceDate: true,
+  documentKind: true,
+  proformaRef: true,
+} as const;
+
+function toSummary(r: {
+  id: string;
+  number: string;
+  vendorInvoiceRef: string;
+  status: string;
+  grossAmount: { toString(): string };
+  invoiceDate: Date;
+  documentKind: InvoiceDocumentKind;
+  proformaRef: string | null;
+}): VendorInvoiceSummary {
+  return {
+    id: r.id,
+    number: r.number,
+    vendorInvoiceRef: r.vendorInvoiceRef,
+    status: r.status,
+    grossAmount: r.grossAmount.toString(),
+    invoiceDate: r.invoiceDate.toISOString(),
+    documentKind: r.documentKind,
+    proformaRef: r.proformaRef,
+  };
 }
 
 /**
@@ -71,6 +125,27 @@ export class VendorInvoiceService {
     await this.assertPoStillBillable(vendorId, input.poId);
     const id = await this.invoices.createFromVendorPortal(tenantId, vendorId, input);
     return { id };
+  }
+
+  /**
+   * The vendor replaces their own proforma with the tax invoice. Uploading
+   * decides nothing: OCR, the match and — where the invoice changed — a fresh
+   * approval all still run on the buyer's side.
+   */
+  async attachTaxInvoice(
+    tenantId: string,
+    userId: string,
+    invoiceId: string,
+    input: TaxInvoiceInput,
+  ): Promise<void> {
+    const vendorId = await this.resolveVendorId(userId);
+    const own = await this.prisma.client.invoice.findFirst({
+      where: { id: invoiceId, vendorId },
+      select: { id: true },
+    });
+    if (!own) throw new NotFoundException('Invoice not found');
+    await this.assertUploadedKey(tenantId, input.s3Key);
+    await this.invoices.attachTaxInvoice(invoiceId, input, { id: userId, type: 'VENDOR' });
   }
 
   /**
@@ -137,47 +212,30 @@ export class VendorInvoiceService {
     const rows = await this.prisma.client.invoice.findMany({
       where: { vendorId },
       orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        number: true,
-        vendorInvoiceRef: true,
-        status: true,
-        grossAmount: true,
-        invoiceDate: true,
-      },
+      select: SUMMARY_SELECT,
     });
-    return rows.map((r) => ({
-      id: r.id,
-      number: r.number,
-      vendorInvoiceRef: r.vendorInvoiceRef,
-      status: r.status,
-      grossAmount: r.grossAmount.toString(),
-      invoiceDate: r.invoiceDate.toISOString(),
-    }));
+    return rows.map(toSummary);
   }
 
   /** A vendor may only see their own invoices; anything else is 404 (no leak). */
-  async getOwn(userId: string, invoiceId: string): Promise<VendorInvoiceSummary> {
+  async getOwn(userId: string, invoiceId: string): Promise<VendorInvoiceDetail> {
     const vendorId = await this.resolveVendorId(userId);
     const inv = await this.prisma.client.invoice.findFirst({
       where: { id: invoiceId, vendorId },
-      select: {
-        id: true,
-        number: true,
-        vendorInvoiceRef: true,
-        status: true,
-        grossAmount: true,
-        invoiceDate: true,
-      },
+      select: { ...SUMMARY_SELECT, lines: { orderBy: { lineNo: 'asc' } } },
     });
     if (!inv) throw new NotFoundException('Invoice not found');
     return {
-      id: inv.id,
-      number: inv.number,
-      vendorInvoiceRef: inv.vendorInvoiceRef,
-      status: inv.status,
-      grossAmount: inv.grossAmount.toString(),
-      invoiceDate: inv.invoiceDate.toISOString(),
+      ...toSummary(inv),
+      lines: inv.lines.map((l) => ({
+        lineNo: l.lineNo,
+        poLineId: l.poLineId,
+        itemDesc: l.itemDesc,
+        uom: l.uom,
+        qty: l.qty.toString(),
+        unitPrice: l.unitPrice.toString(),
+        taxRate: l.taxRate.toString(),
+      })),
     };
   }
 }

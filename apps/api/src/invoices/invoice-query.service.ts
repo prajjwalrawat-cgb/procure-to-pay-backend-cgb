@@ -14,6 +14,7 @@ import type {
 import Decimal from 'decimal.js';
 
 import { ApprovalRoutingService } from '../approvals/approval-routing.service';
+import { proformaPaymentBlock } from '../payment-runs/payment-posting.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../common/storage/storage.service';
 import type { InvoiceScope } from './invoice-scope';
@@ -37,6 +38,11 @@ const OPEN_STATUSES = [
 const openStatusIn = (): { in: (typeof OPEN_STATUSES)[number][] } => ({
   in: [...OPEN_STATUSES],
 });
+/** Proformas still owed a tax invoice — paid in full or not, until it arrives. */
+const AWAITING_TAX_INVOICE = {
+  documentKind: 'PROFORMA',
+  status: { notIn: ['REJECTED'] },
+} as const;
 const STAGE_DEFS = [
   { key: 'RECEIVED', label: 'Received' },
   { key: 'OCR', label: 'OCR done' },
@@ -129,7 +135,7 @@ export class InvoiceQueryService {
     const clause = await this.scopeWhere(scope);
     const scoped = (where: Record<string, unknown>): Record<string, unknown> =>
       this.merge(where, clause);
-    const [all, exceptions, approval, approved, scheduled, paid, msme] =
+    const [all, exceptions, approval, approved, scheduled, paid, msme, proforma] =
       await Promise.all([
         c.count({ where: scoped({ status: openStatusIn() }) }),
         c.count({ where: scoped({ status: 'MATCH_EXCEPTION' }) }),
@@ -138,8 +144,9 @@ export class InvoiceQueryService {
         c.count({ where: scoped({ status: 'SCHEDULED' }) }),
         c.count({ where: scoped({ status: 'PAID' }) }),
         c.count({ where: scoped({ status: openStatusIn(), vendor: { isMsme: true } }) }),
+        c.count({ where: scoped({ ...AWAITING_TAX_INVOICE }) }),
       ]);
-    return { all, exceptions, approval, approved, scheduled, paid, msme };
+    return { all, exceptions, approval, approved, scheduled, paid, msme, proforma };
   }
 
   async find(
@@ -155,7 +162,7 @@ export class InvoiceQueryService {
       include: {
         vendor: { select: { id: true, name: true, isMsme: true } },
         po: { select: { number: true, grns: { select: { number: true }, take: 1 } } },
-        exceptions: { where: { resolvedAt: null }, select: { id: true } },
+        exceptions: { where: { resolvedAt: null, supersededAt: null }, select: { id: true } },
       },
     });
 
@@ -189,6 +196,7 @@ export class InvoiceQueryService {
         assignedTo: inv.assignedToId
           ? (assigneeById.get(inv.assignedToId) ?? null)
           : null,
+        documentKind: inv.documentKind,
       })),
       nextCursor: hasMore ? (page[page.length - 1]?.id ?? null) : null,
       totalEstimate,
@@ -220,8 +228,11 @@ export class InvoiceQueryService {
       select: { stateCode: true },
     });
 
+    // Exceptions raised on a replaced proforma are history, not findings about
+    // the document now on the record.
+    const current = inv.exceptions.filter((e) => e.supersededAt === null);
     const openExceptionLineIds = new Set(
-      inv.exceptions
+      current
         .filter((e) => !e.resolvedAt && e.invoiceLineId)
         .map((e) => e.invoiceLineId),
     );
@@ -300,6 +311,8 @@ export class InvoiceQueryService {
         id: a.id,
         url: await this.storage.presignedGetUrl(a.s3Key).catch(() => ''),
         mimeType: a.mimeType,
+        docType: a.docType,
+        uploadedAt: a.uploadedAt.toISOString(),
       })),
     );
 
@@ -375,6 +388,17 @@ export class InvoiceQueryService {
       source: inv.source,
       invoiceDate: inv.invoiceDate.toISOString(),
       receivedAt: inv.receivedAt.toISOString(),
+      documentKind: inv.documentKind,
+      proformaRef: inv.proformaRef,
+      proformaGrossAmount: inv.proformaGrossAmount?.toString() ?? null,
+      taxInvoiceReceivedAt: inv.taxInvoiceReceivedAt?.toISOString() ?? null,
+      priorApproval:
+        liveChain.length > 0 &&
+        liveChain.every((s) => s.decision === 'APPROVED') &&
+        !['AWAITING_APPROVAL', 'APPROVED', 'SCHEDULED', 'PARTIALLY_PAID', 'PAID'].includes(
+          inv.status,
+        ),
+      paymentBlockedReason: proformaPaymentBlock(inv),
       stages: buildStages(inv.status),
       vendor: {
         id: inv.vendor.id,
@@ -444,9 +468,10 @@ export class InvoiceQueryService {
           resolutionNotes: e.resolutionNotes,
           resolvedByName: e.resolvedBy ? (authorName.get(e.resolvedBy) ?? null) : null,
           resolvedAt: e.resolvedAt?.toISOString() ?? null,
+          superseded: e.supersededAt !== null,
         };
       }),
-      suggestedResolution: suggestResolution(inv.exceptions),
+      suggestedResolution: suggestResolution(current),
       matchSummary: {
         poSubtotal: (inv.po?.lines ?? [])
           .reduce(
@@ -456,7 +481,7 @@ export class InvoiceQueryService {
           )
           .toFixed(4),
         invoiceSubtotal: subtotal.toFixed(4),
-        varianceTotal: inv.exceptions
+        varianceTotal: current
           .filter((e) => !e.resolvedAt)
           .reduce(
             (a, e) =>
@@ -546,6 +571,7 @@ export class InvoiceQueryService {
       scheduled: { status: 'SCHEDULED' },
       paid: { status: 'PAID' },
       msme: { status: openStatusIn(), vendor: { isMsme: true } },
+      proforma: { ...AWAITING_TAX_INVOICE },
     };
     Object.assign(where, tabStatus[query.tab] ?? tabStatus.all);
     if (query.status?.length) where.status = { in: query.status };
@@ -553,7 +579,7 @@ export class InvoiceQueryService {
     if (query.assignedToId) where.assignedToId = query.assignedToId;
     if (query.exceptionType) {
       where.exceptions = {
-        some: { exceptionType: query.exceptionType, resolvedAt: null },
+        some: { exceptionType: query.exceptionType, resolvedAt: null, supersededAt: null },
       };
     }
     return where;

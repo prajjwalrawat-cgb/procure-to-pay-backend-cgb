@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuditLogService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { PaymentPostingService } from './payment-posting.service';
+import { PaymentPostingService, proformaPaymentBlock } from './payment-posting.service';
 import { PaymentRecordInvalidError } from './payment-run.errors';
 
 const D = (v: string) => new Decimal(v);
@@ -165,5 +165,52 @@ describe('PaymentPostingService.recordManual', () => {
     await expect(service.recordManual('inv_1', input, 'usr_fin')).rejects.toThrow(
       /already recorded/,
     );
+  });
+});
+
+describe('proforma balance block', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('lets the advance be paid against a proforma', async () => {
+    const { service } = harness({ documentKind: 'PROFORMA' });
+    const res = await service.recordManual('inv_1', input, 'usr_fin');
+    expect(res.status).toBe('PARTIALLY_PAID');
+  });
+
+  it('blocks the balance until the tax invoice replaces the proforma', async () => {
+    const { service } = harness({
+      documentKind: 'PROFORMA',
+      status: 'PARTIALLY_PAID',
+      paidAmount: D('8260'),
+      paymentRecords: [{ tds: D('0'), utr: 'UTR123' }],
+    });
+    await expect(
+      service.recordManual('inv_1', { ...input, reference: 'UTR456' }, 'usr_fin'),
+    ).rejects.toThrow(/Upload the tax invoice/);
+  });
+
+  it('pays the balance once the tax invoice is on the record', async () => {
+    const { service } = harness({
+      documentKind: 'TAX_INVOICE',
+      status: 'PARTIALLY_PAID',
+      paidAmount: D('8260'),
+      paymentRecords: [{ tds: D('0'), utr: 'UTR123' }],
+    });
+    const res = await service.recordManual(
+      'inv_1',
+      { ...input, reference: 'UTR456' },
+      'usr_fin',
+    );
+    expect(res.status).toBe('PAID');
+  });
+
+  it('is decided by document kind and what is already paid', () => {
+    expect(proformaPaymentBlock({ documentKind: 'PROFORMA', paidAmount: D('0') })).toBeNull();
+    expect(
+      proformaPaymentBlock({ documentKind: 'PROFORMA', paidAmount: D('1') }),
+    ).toMatch(/tax invoice/);
+    expect(
+      proformaPaymentBlock({ documentKind: 'TAX_INVOICE', paidAmount: D('1') }),
+    ).toBeNull();
   });
 });

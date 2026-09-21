@@ -12,7 +12,9 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { newId } from '@procureflow/db';
 import {
   PERMISSIONS,
+  TaxInvoiceInputSchema,
   VendorInvoiceSubmitInputSchema,
+  type TaxInvoiceInput,
   type VendorInvoiceSubmitInput,
   type VendorPoOption,
 } from '@procureflow/shared';
@@ -29,6 +31,7 @@ import {
 import {
   VendorInvoiceService,
   vendorUploadPrefix,
+  type VendorInvoiceDetail,
   type VendorInvoiceSummary,
 } from './vendor-invoice.service';
 
@@ -58,7 +61,7 @@ export class VendorInvoicesController {
   async getOwn(
     @CurrentUser() user: AuthUser,
     @Param('id') id: string,
-  ): Promise<VendorInvoiceSummary> {
+  ): Promise<VendorInvoiceDetail> {
     return this.vendor.getOwn(user.userId, id);
   }
 
@@ -96,5 +99,17 @@ export class VendorInvoicesController {
     dto: VendorInvoiceSubmitInput,
   ): Promise<{ id: string }> {
     return this.vendor.submit(user.tenantId, user.userId, dto);
+  }
+
+  /** Replace one of the vendor's own proformas with its tax invoice. */
+  @Post('invoices/:id/tax-invoice')
+  @RequirePermission(PERMISSIONS.INVOICE_CREATE)
+  async attachTaxInvoice(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(TaxInvoiceInputSchema)) dto: TaxInvoiceInput,
+  ): Promise<{ ok: true }> {
+    await this.vendor.attachTaxInvoice(user.tenantId, user.userId, id, dto);
+    return { ok: true };
   }
 }

@@ -21,6 +21,28 @@ export const ACTIVE_RUN_ITEM: Prisma.PaymentRunItemWhereInput = {
   bankStatus: { not: 'CONFIRMED' },
 };
 
+/**
+ * Why the balance of an invoice cannot be paid yet, or null when it can.
+ *
+ * A proforma is not a tax invoice: it carries no GST the buyer can claim and
+ * books no liability. Suppliers who need an advance send one, and the advance
+ * is paid against it — but once that has gone out, paying the rest before the
+ * real invoice arrives is how the tax invoice never gets collected. So only the
+ * first payment is allowed on a proforma; everything after waits for the tax
+ * invoice to replace it on the same record.
+ */
+export function proformaPaymentBlock(inv: {
+  documentKind: string;
+  paidAmount: { toString(): string };
+}): string | null {
+  if (inv.documentKind !== 'PROFORMA') return null;
+  if (new Decimal(inv.paidAmount.toString()).lessThanOrEqualTo(0)) return null;
+  return (
+    'The advance against this proforma has been paid. Upload the tax invoice ' +
+    'before paying the balance.'
+  );
+}
+
 export interface PostPaymentInput {
   tenantId: string;
   invoiceId: string;
@@ -162,11 +184,15 @@ export class PaymentPostingService {
         { invoiceId, status: invoice.status },
       );
     }
+    const blocked = proformaPaymentBlock(invoice);
+    if (blocked) {
+      throw new PaymentRecordInvalidError(blocked, { invoiceId });
+    }
     // The status alone is not proof the invoice cleared review: money only goes
     // out once nothing is left open against it and nobody is still to decide.
     const [openExceptions, pendingApprovals] = await Promise.all([
       this.prisma.client.invoiceException.count({
-        where: { invoiceId, resolvedAt: null },
+        where: { invoiceId, resolvedAt: null, supersededAt: null },
       }),
       this.prisma.client.approval.count({
         where: { documentType: 'INVOICE', documentId: invoiceId, decision: 'PENDING' },
