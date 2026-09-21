@@ -5,11 +5,15 @@ import {
   MsmeBucketParamSchema,
   PERMISSIONS,
   TopVendorsQuerySchema,
+  type AnalyticsOverviewResponse,
   type AnalyticsPeriodQuery,
   type AvoidedCostInput,
   type MsmeBucketKey,
+  type MsmeComplianceResponse,
   type RefreshResponse,
+  type SpendSavingsResponse,
   type TopVendorsQuery,
+  type VelocityResponse,
 } from '@procureflow/shared';
 import type { Response } from 'express';
 
@@ -18,7 +22,8 @@ import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser, RequirePermission } from '../auth/decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { PrismaService } from '../prisma/prisma.service';
-import { AnalyticsRefreshService } from './analytics-refresh.service';
+import { AnalyticsInsightsService } from './analytics-insights.service';
+import { AnalyticsRefreshService, REFRESHABLE_VIEWS } from './analytics-refresh.service';
 import { ApPerformanceService } from './ap-performance.service';
 import { MsmeComplianceService } from './msme-compliance.service';
 import { MsmeReportService } from './msme-report.service';
@@ -38,9 +43,35 @@ export class AnalyticsController {
     private readonly ap: ApPerformanceService,
     private readonly vendors: VendorAnalyticsService,
     private readonly refresh: AnalyticsRefreshService,
+    private readonly insights: AnalyticsInsightsService,
     private readonly audit: AuditLogService,
     private readonly prisma: PrismaService,
   ) {}
+
+  // ── Overview + rebuilt sections (Home/Analytics redesign) ──────────────────
+  @Get('overview')
+  @RequirePermission(PERMISSIONS.ANALYTICS_READ)
+  overview(@Query(periodPipe) q: AnalyticsPeriodQuery): Promise<AnalyticsOverviewResponse> {
+    return this.insights.getOverview(q);
+  }
+
+  @Get('spend-savings')
+  @RequirePermission(PERMISSIONS.ANALYTICS_READ)
+  spendSavings(@Query(periodPipe) q: AnalyticsPeriodQuery): Promise<SpendSavingsResponse> {
+    return this.insights.getSpendSavings(q);
+  }
+
+  @Get('velocity')
+  @RequirePermission(PERMISSIONS.ANALYTICS_READ)
+  velocity(@Query(periodPipe) q: AnalyticsPeriodQuery): Promise<VelocityResponse> {
+    return this.insights.getVelocity(q);
+  }
+
+  @Get('msme/compliance')
+  @RequirePermission(PERMISSIONS.ANALYTICS_READ)
+  msmeCompliance(@Query(periodPipe) q: AnalyticsPeriodQuery): Promise<MsmeComplianceResponse> {
+    return this.insights.getMsmeCompliance(q);
+  }
 
   // ── Spend ──────────────────────────────────────────────────────────────────
   @Get('spend/total')
@@ -177,7 +208,7 @@ export class AnalyticsController {
       after: { trigger: 'MANUAL' },
     });
     return {
-      triggered: ['spend_monthly', 'vendor_monthly', 'msme_monthly'],
+      triggered: [...REFRESHABLE_VIEWS],
       refreshedAt: new Date().toISOString(),
     };
   }

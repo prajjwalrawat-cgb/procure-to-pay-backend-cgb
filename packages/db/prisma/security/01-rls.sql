@@ -42,7 +42,7 @@ DECLARE
     -- Slice 8 analytics (RLS-protected summary tables — see ADR-028)
     'TenantComplianceConfig', 'SavingsLedgerEntry', 'AnalyticsRefreshLog',
     'AnalyticsSpendMonthly', 'AnalyticsVendorMonthly', 'AnalyticsApMonthly',
-    'AnalyticsMsmeMonthly',
+    'AnalyticsMsmeMonthly', 'AnalyticsDaily',
     -- Slice 9 contracts
     'Contract', 'ContractRateCard', 'ContractClause', 'ClauseLibrary',
     'ContractDocument', 'ContractCallOff', 'ContractVolumeTracking',

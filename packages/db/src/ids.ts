@@ -82,6 +82,7 @@ export const ID_PREFIX = {
   analyticsVendorMonthly: 'avm',
   analyticsApMonthly: 'aam',
   analyticsMsmeMonthly: 'amm',
+  analyticsDaily: 'ady',
   // Slice 9 contracts
   contract: 'ct',
   contractRateCard: 'crc',

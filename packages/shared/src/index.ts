@@ -34,6 +34,7 @@ export * from './schemas/vendor-onboarding';
 export * from './schemas/vendor-responses';
 export * from './schemas/events';
 export * from './schemas/analytics';
+export * from './schemas/home';
 export * from './schemas/contracts';
 export * from './schemas/contract-responses';
 export * from './schemas/integrations';

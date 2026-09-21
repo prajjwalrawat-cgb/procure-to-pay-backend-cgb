@@ -65,3 +65,50 @@ describe('MsmeComplianceService.getExposureDetail — interest = net × RBI×3 �
     expect(res.rows[0].interestIfBreached).toBe('0.0000');
   });
 });
+
+describe('MsmeComplianceService.getAgingDashboard — open MSME exposure', () => {
+  it('excludes rejected invoices and counts only the unpaid balance of part-paid ones', async () => {
+    const sqls: string[] = [];
+    const client = {
+      tenantComplianceConfig: { findFirst: () => Promise.resolve(null) },
+      $queryRawUnsafe: (sql: string) => {
+        sqls.push(sql);
+        return Promise.resolve(
+          sql.includes('bucket')
+            ? [{ bucket: 'BREACH_45_PLUS', cnt: 2, exposure: '1500', avg_days: 50.4 }]
+            : [{ msme: '100', total: '400' }],
+        );
+      },
+    };
+    const svc = new MsmeComplianceService({ client } as unknown as PrismaService);
+    const res = await svc.getAgingDashboard();
+
+    const bucketSql = sqls[0]!;
+    expect(bucketSql).toContain(`i.status NOT IN ('PAID','REJECTED')`);
+    expect(bucketSql).toContain(`WHEN i.status = 'PARTIALLY_PAID'`);
+    expect(bucketSql).toContain('i."grossAmount" - i.paid_amount');
+    // Response shape unchanged.
+    expect(res.buckets.map((b) => b.bucket)).toEqual(['SAFE_0_29', 'APPROACHING_30_44', 'BREACH_45_PLUS']);
+    expect(res.buckets[2]).toEqual({
+      bucket: 'BREACH_45_PLUS',
+      invoiceCount: 2,
+      totalExposure: '1500.0000',
+      avgDays: 50,
+    });
+    expect(res.msmeSpendPct).toBe(25);
+  });
+
+  it('drill-down uses the same open-invoice filter and balance as the dashboard', async () => {
+    const sqls: string[] = [];
+    const client = {
+      tenantComplianceConfig: { findFirst: () => Promise.resolve({ rbiReferenceRatePct: '6.5' }) },
+      $queryRawUnsafe: (sql: string) => {
+        sqls.push(sql);
+        return Promise.resolve([]);
+      },
+    };
+    await new MsmeComplianceService({ client } as unknown as PrismaService).getExposureDetail('SAFE_0_29');
+    expect(sqls[0]).toContain(`i.status NOT IN ('PAID','REJECTED')`);
+    expect(sqls[0]).toContain(`WHEN i.status = 'PARTIALLY_PAID'`);
+  });
+});
