@@ -22,6 +22,14 @@ export const InvoiceLineInputSchema = z.object({
 });
 export type InvoiceLineInput = z.infer<typeof InvoiceLineInputSchema>;
 
+/**
+ * What the document on an invoice is. A PROFORMA (PI) is what some suppliers
+ * send to collect an advance before supplying; the tax invoice follows and
+ * replaces it on the same record.
+ */
+export const INVOICE_DOCUMENT_KIND = ['TAX_INVOICE', 'PROFORMA'] as const;
+export type InvoiceDocumentKind = (typeof INVOICE_DOCUMENT_KIND)[number];
+
 export const InvoiceCreateInputSchema = z.object({
   vendorId: z.string().min(1),
   poId: z.string().nullish(),
@@ -41,8 +49,42 @@ export const VendorInvoiceSubmitInputSchema = z.object({
   irn: z.string().max(100).nullish(),
   ewaybillNo: z.string().max(50).nullish(),
   lines: z.array(InvoiceLineInputSchema.extend({ reason: z.string().nullish() })).min(1),
+  documentKind: z.enum(INVOICE_DOCUMENT_KIND).default('TAX_INVOICE'),
 });
 export type VendorInvoiceSubmitInput = z.infer<typeof VendorInvoiceSubmitInputSchema>;
+
+/**
+ * The tax invoice that replaces a proforma on the same record.
+ *
+ * Header and lines are asserted by whoever uploads it — seeded from the PI,
+ * which the tax invoice usually repeats — exactly as on a portal submission.
+ * OCR then reads the page and checks it against them (printed total, number,
+ * date, supplier) rather than overwriting them.
+ */
+export const TaxInvoiceInputSchema = z.object({
+  s3Key: z.string().min(1),
+  vendorInvoiceRef: z.string().min(1).max(100),
+  invoiceDate: z.string().datetime(),
+  irn: z.string().max(100).nullish(),
+  ewaybillNo: z.string().max(50).nullish(),
+  lines: z.array(InvoiceLineInputSchema).min(1),
+});
+export type TaxInvoiceInput = z.infer<typeof TaxInvoiceInputSchema>;
+
+export const DocumentKindInputSchema = z.object({
+  kind: z.enum(INVOICE_DOCUMENT_KIND),
+});
+export type DocumentKindInput = z.infer<typeof DocumentKindInputSchema>;
+
+/**
+ * What `resolve-and-route` did. A tax invoice that replaced an already-approved
+ * proforma keeps that approval unless it changed materially; `reasons` says
+ * why it went back to the approver when it did.
+ */
+export interface ResolveAndRouteResult {
+  outcome: 'ROUTED' | 'APPROVAL_CARRIED_OVER';
+  reasons: string[];
+}
 
 export const InvoiceListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
@@ -57,7 +99,16 @@ export const InvoiceListQuerySchema = z.object({
   assignedToId: z.string().nullish(),
   msmeRisk: z.coerce.boolean().nullish(),
   tab: z
-    .enum(['all', 'exceptions', 'approval', 'approved', 'scheduled', 'paid', 'msme'])
+    .enum([
+      'all',
+      'exceptions',
+      'approval',
+      'approved',
+      'scheduled',
+      'paid',
+      'msme',
+      'proforma',
+    ])
     .default('all'),
 });
 export type InvoiceListQuery = z.infer<typeof InvoiceListQuerySchema>;
@@ -86,7 +137,14 @@ export type AssignInput = z.infer<typeof AssignInputSchema>;
 // ── Response read-models (typed, shared with the frontend) ─────────────────
 
 export type InvoiceTab =
-  'all' | 'exceptions' | 'approval' | 'approved' | 'scheduled' | 'paid' | 'msme';
+  | 'all'
+  | 'exceptions'
+  | 'approval'
+  | 'approved'
+  | 'scheduled'
+  | 'paid'
+  | 'msme'
+  | 'proforma';
 
 export interface InvoiceTabCounts {
   all: number;
@@ -96,6 +154,8 @@ export interface InvoiceTabCounts {
   scheduled: number;
   paid: number;
   msme: number;
+  /** Proformas still waiting for their tax invoice. */
+  proforma: number;
 }
 
 export interface MsmeSummary {
@@ -118,6 +178,7 @@ export interface InvoiceListItem {
   exceptionCount: number;
   msme: MsmeSummary | null;
   assignedTo: { id: string; name: string } | null;
+  documentKind: InvoiceDocumentKind;
 }
 
 export interface InvoiceListResponse {
@@ -147,6 +208,12 @@ export interface InvoiceExceptionView {
    */
   resolvedByName: string | null;
   resolvedAt: string | null;
+  /**
+   * Raised on a proforma since replaced by its tax invoice. History only: not
+   * open, not an override that still counts, and not re-applied to the tax
+   * invoice, which is matched from a clean slate.
+   */
+  superseded: boolean;
 }
 
 export interface InvoiceLineView {
@@ -176,6 +243,21 @@ export interface InvoiceDetailResponse {
   source: string;
   invoiceDate: string;
   receivedAt: string;
+  documentKind: InvoiceDocumentKind;
+  /**
+   * Set once a tax invoice has replaced a proforma on this record: the PI's
+   * reference, the total approved against it, and when the tax invoice came in.
+   */
+  proformaRef: string | null;
+  proformaGrossAmount: string | null;
+  taxInvoiceReceivedAt: string | null;
+  /**
+   * An approval was given on this record before its current document arrived —
+   * resolve-and-route will keep it unless the tax invoice changed materially.
+   */
+  priorApproval: boolean;
+  /** Why the balance cannot be paid yet (an unpaid-for proforma), or null. */
+  paymentBlockedReason: string | null;
   stages: { key: string; label: string; state: 'done' | 'active' | 'todo' }[];
   vendor: {
     id: string;
@@ -249,7 +331,14 @@ export interface InvoiceDetailResponse {
     gstr2bStatus: string;
     gstinStatus: string;
   };
-  attachments: { id: string; url: string; mimeType: string }[];
+  attachments: {
+    id: string;
+    url: string;
+    mimeType: string;
+    /** INVOICE_PDF, PROFORMA_PDF (a replaced PI), EMAIL_BODY or SUPPORTING. */
+    docType: string;
+    uploadedAt: string;
+  }[];
   comments: {
     id: string;
     authorId: string;

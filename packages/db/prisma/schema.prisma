@@ -273,6 +273,14 @@ enum ExceptionType {
   VENDOR_MISMATCH
 }
 
+/// What the attached document is. A PROFORMA is a vendor's pre-supply quote
+/// that some suppliers need an advance against; the real tax invoice follows
+/// later and replaces it on the same record (see Invoice.proformaRef).
+enum InvoiceDocumentKind {
+  TAX_INVOICE
+  PROFORMA
+}
+
 enum InvoiceSource {
   EMAIL
   PORTAL
@@ -1552,6 +1560,17 @@ model Invoice {
   /// without summing records; only PaymentPostingService writes it, in step
   /// with the record it posts.
   paidAmount             Decimal       @default("0") @map("paid_amount") @db.Decimal(18, 4)
+  /// PROFORMA while the record stands on a proforma. Only the advance can be
+  /// paid against one: once anything is paid, the balance waits for the tax
+  /// invoice (see proformaPaymentBlock).
+  documentKind           InvoiceDocumentKind @default(TAX_INVOICE) @map("document_kind")
+  /// Set when a tax invoice replaced a proforma on this record: the PI's own
+  /// reference and the total that was approved against it. The approved total
+  /// is what the tax invoice is weighed against when deciding whether the
+  /// earlier approval still holds.
+  proformaRef            String?       @map("proforma_ref")
+  proformaGrossAmount    Decimal?      @map("proforma_gross_amount") @db.Decimal(18, 4)
+  taxInvoiceReceivedAt   DateTime?     @map("tax_invoice_received_at") @db.Timestamptz(6)
   approvalMatrixSnapshot Json?         @map("approval_matrix_snapshot")
   /// Admin-defined fields (Settings → Custom fields), keyed by definition key.
   customFields Json? @map("custom_fields")
@@ -1616,6 +1635,10 @@ model InvoiceException {
   resolvedBy       String?           @map("resolved_by")
   resolutionAction String?
   resolutionNotes  String?
+  /// Set when the document this exception was raised against was replaced (a
+  /// proforma superseded by its tax invoice). Kept for the record, but neither
+  /// open nor suppressing: the new document is matched from a clean slate.
+  supersededAt     DateTime?         @map("superseded_at") @db.Timestamptz(6)
 
   invoice Invoice @relation(fields: [invoiceId], references: [id])
 
@@ -1642,6 +1665,7 @@ enum InvoiceAttachmentType {
   INVOICE_PDF
   EMAIL_BODY // Slice 10a — raw inbound email body kept for audit reference
   SUPPORTING
+  PROFORMA_PDF // a proforma since replaced by the tax invoice on the same record
 }
 
 model InvoiceAttachment {

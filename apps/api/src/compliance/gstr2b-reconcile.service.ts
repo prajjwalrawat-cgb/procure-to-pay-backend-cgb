@@ -119,6 +119,10 @@ export class Gstr2bReconciliationService implements OnModuleInit, OnModuleDestro
       where: {
         status: { in: RECONCILABLE_STATUSES as never },
         vendorInvoiceRef: { not: '' },
+        // A proforma is not a GST document and never appears in GSTR-2B, so
+        // reconciling one could only ever report NOT_FOUND. Its tax invoice is
+        // reconciled once it replaces it on the same record.
+        documentKind: 'TAX_INVOICE',
       },
       include: { vendor: { select: { gstin: true } } },
       take: 1000,
@@ -186,7 +190,12 @@ export class Gstr2bReconciliationService implements OnModuleInit, OnModuleDestro
     // exception; NOT_FOUND is informational (vendor may file next period).
     if (status === 'MISMATCH_AMOUNT' || status === 'MISMATCH_DATE') {
       const existing = await this.prisma.client.invoiceException.findFirst({
-        where: { invoiceId, exceptionType: 'GSTR2B_MISMATCH', resolvedAt: null },
+        where: {
+          invoiceId,
+          exceptionType: 'GSTR2B_MISMATCH',
+          resolvedAt: null,
+          supersededAt: null,
+        },
       });
       if (!existing) {
         await this.prisma.client.invoiceException.create({

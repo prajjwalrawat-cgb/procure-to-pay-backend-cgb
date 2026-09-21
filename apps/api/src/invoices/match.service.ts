@@ -42,7 +42,11 @@ export class MatchService {
             grns: { include: { lines: true } },
           },
         },
-        exceptions: true,
+        // Exceptions raised on a document since replaced (a proforma, once its
+        // tax invoice arrives) are history. An override given on the PI was a
+        // judgement about that page — "different supplier on the document"
+        // waved through for the PI must not wave it through for the invoice.
+        exceptions: { where: { supersededAt: null } },
         vendor: { select: { lifecycleStatus: true, name: true } },
       },
     });
@@ -307,7 +311,7 @@ export class MatchService {
     actorId: string,
   ): Promise<void> {
     const exception = await this.prisma.client.invoiceException.findFirst({
-      where: { id: exceptionId, invoiceId },
+      where: { id: exceptionId, invoiceId, supersededAt: null },
     });
     if (!exception) throw new NotFoundException('Exception not found');
 
