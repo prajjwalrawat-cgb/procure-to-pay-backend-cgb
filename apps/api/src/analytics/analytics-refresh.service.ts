@@ -14,6 +14,7 @@ import {
 } from '../common/queue/queue-guard';
 import type { Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
+import { AnalyticsDailyService, SPEND_EXCLUDED_SQL } from './analytics-daily.service';
 
 export const ANALYTICS_REFRESH_QUEUE = 'analytics-refresh';
 
@@ -22,6 +23,7 @@ export const REFRESHABLE_VIEWS = [
   'spend_monthly',
   'vendor_monthly',
   'msme_monthly',
+  'daily', // AnalyticsDaily — Home tiles + analytics overview (also refreshed on read)
 ] as const;
 export type RefreshableView = (typeof REFRESHABLE_VIEWS)[number];
 
@@ -61,6 +63,7 @@ export class AnalyticsRefreshService implements OnModuleInit, OnModuleDestroy {
     private readonly config: ConfigService<Env, true>,
     private readonly prisma: PrismaService,
     private readonly routing: ApprovalRoutingService,
+    private readonly daily: AnalyticsDailyService,
     private readonly logger: PinoLogger,
   ) {
     this.logger.setContext(AnalyticsRefreshService.name);
@@ -143,6 +146,7 @@ export class AnalyticsRefreshService implements OnModuleInit, OnModuleDestroy {
     if (views.includes('spend_monthly')) await this.refreshSpendMonthly(tenantId);
     if (views.includes('vendor_monthly')) await this.refreshVendorMonthly(tenantId);
     if (views.includes('msme_monthly')) await this.refreshMsmeMonthly(tenantId);
+    if (views.includes('daily')) await this.daily.refresh(tenantId);
     this.lastRefresh.set(tenantId, Date.now());
     const durationMs = Date.now() - start;
     for (const v of views) {
@@ -181,7 +185,7 @@ export class AnalyticsRefreshService implements OnModuleInit, OnModuleDestroy {
               COALESCE(SUM("netAmount"),0)::text AS net,
               COUNT(*)::int AS cnt
        FROM "Invoice"
-       WHERE status NOT IN ('REJECTED','RECEIVED','OCR_PENDING','OCR_DONE')
+       WHERE status NOT IN (${SPEND_EXCLUDED_SQL})
        GROUP BY 1`,
     );
     const now = new Date();
@@ -209,7 +213,7 @@ export class AnalyticsRefreshService implements OnModuleInit, OnModuleDestroy {
               COALESCE(SUM("netAmount"),0)::text AS net,
               COUNT(*)::int AS cnt
        FROM "Invoice"
-       WHERE status NOT IN ('REJECTED','RECEIVED','OCR_PENDING','OCR_DONE')
+       WHERE status NOT IN (${SPEND_EXCLUDED_SQL})
        GROUP BY 1, 2`,
     );
     const now = new Date();

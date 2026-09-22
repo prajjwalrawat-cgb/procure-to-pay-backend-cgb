@@ -29,7 +29,8 @@ type PoWithRels = Prisma.PurchaseOrderGetPayload<{
   };
 }>;
 
-const OPEN: PoStatus[] = [
+/** Statuses behind the PO list's "Open" tab (also the Home open-POs tile). */
+export const OPEN_PO_STATUSES: PoStatus[] = [
   'DRAFT',
   'AWAITING_APPROVAL',
   'APPROVED',
@@ -64,7 +65,7 @@ export class PurchaseOrderQueryService {
         where.status = 'CANCELLED';
         break;
       default:
-        where.status = { in: OPEN };
+        where.status = { in: OPEN_PO_STATUSES };
     }
     if (query.status)
       where.status = query.status as Prisma.PurchaseOrderWhereInput['status'];
@@ -362,7 +363,7 @@ export class PurchaseOrderQueryService {
 
   private async counts(): Promise<PoListResponse['counts']> {
     const [open, partial, awaitingGrn, closed, cancelled] = await Promise.all([
-      this.prisma.client.purchaseOrder.count({ where: { status: { in: OPEN } } }),
+      this.prisma.client.purchaseOrder.count({ where: { status: { in: OPEN_PO_STATUSES } } }),
       this.prisma.client.purchaseOrder.count({ where: { status: 'PARTIALLY_RECEIVED' } }),
       this.prisma.client.purchaseOrder.count({
         where: { status: { in: ['ISSUED', 'ACKNOWLEDGED'] } },

@@ -17,6 +17,15 @@ const INTEREST_MULTIPLIER = 3;
 const APPROACHING_DAYS = 30;
 const BREACH_DAYS = 45; // aligned to the default 45-day cap
 
+/**
+ * What is still owed on an open MSME invoice: the net amount, or — once part
+ * of it has been paid — the unpaid balance (gross − paid). Rejected and fully
+ * paid invoices are excluded by OPEN_MSME_FILTER.
+ */
+const EXPOSURE_SQL = `CASE WHEN i.status = 'PARTIALLY_PAID'
+  THEN GREATEST(i."grossAmount" - i.paid_amount, 0) ELSE i."netAmount" END`;
+const OPEN_MSME_FILTER = `i.status NOT IN ('PAID','REJECTED')`;
+
 interface BucketRow {
   bucket: MsmeBucketKey;
   cnt: number;
@@ -57,11 +66,11 @@ export class MsmeComplianceService {
               WHEN (CURRENT_DATE - i."invoiceDate"::date) >= ${APPROACHING_DAYS} THEN 'APPROACHING_30_44'
               ELSE 'SAFE_0_29' END AS bucket,
          COUNT(*)::int AS cnt,
-         COALESCE(SUM(i."netAmount"),0)::text AS exposure,
+         COALESCE(SUM(${EXPOSURE_SQL}),0)::text AS exposure,
          COALESCE(AVG(CURRENT_DATE - i."invoiceDate"::date),0)::float AS avg_days
        FROM "Invoice" i
        JOIN "Vendor" v ON v.id = i.vendor_id AND v."isMsme" = true
-       WHERE i.status <> 'PAID'
+       WHERE ${OPEN_MSME_FILTER}
        GROUP BY 1`,
     );
     const order: MsmeBucketKey[] = ['SAFE_0_29', 'APPROACHING_30_44', 'BREACH_45_PLUS'];
@@ -114,12 +123,12 @@ export class MsmeComplianceService {
           : 100000;
     const rows = await this.prisma.client.$queryRawUnsafe<ExposureQueryRow[]>(
       `SELECT i.id, i.number, i.vendor_id AS "vendorId", v.name AS "vendorName",
-              i."invoiceDate", i."msmeDueDate", i."netAmount"::text AS "netAmount",
+              i."invoiceDate", i."msmeDueDate", (${EXPOSURE_SQL})::text AS "netAmount",
               (CURRENT_DATE - i."invoiceDate"::date)::int AS "daysOutstanding",
               GREATEST(0, (CURRENT_DATE - i."msmeDueDate"::date))::int AS "daysLate"
        FROM "Invoice" i
        JOIN "Vendor" v ON v.id = i.vendor_id AND v."isMsme" = true
-       WHERE i.status <> 'PAID'
+       WHERE ${OPEN_MSME_FILTER}
              AND (CURRENT_DATE - i."invoiceDate"::date) >= $1
              AND (CURRENT_DATE - i."invoiceDate"::date) < $2
        ORDER BY "daysOutstanding" DESC`,

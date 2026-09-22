@@ -36,6 +36,7 @@ import { SettingsModule } from './settings/settings.module';
 import { UsersModule } from './users/users.module';
 import { VendorsModule } from './vendors/vendors.module';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { HomeModule } from './home/home.module';
 import { ContractsModule } from './contracts/contracts.module';
 import { CryptoModule } from './common/crypto/crypto.service';
 import { IntegrationsModule } from './integrations/integrations.module';
@@ -91,6 +92,7 @@ import { ComplianceModule } from './compliance/compliance.module';
     SourcingModule,
     VendorsModule,
     AnalyticsModule,
+    HomeModule,
     ContractsModule,
     ComplianceModule,
   ],

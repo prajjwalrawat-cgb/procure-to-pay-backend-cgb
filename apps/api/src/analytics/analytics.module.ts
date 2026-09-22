@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 
 import { ApprovalsModule } from '../approvals/approvals.module';
 import { AnalyticsController } from './analytics.controller';
+import { AnalyticsDailyService } from './analytics-daily.service';
+import { AnalyticsInsightsService } from './analytics-insights.service';
 import { AnalyticsRefreshService } from './analytics-refresh.service';
 import { ApPerformanceService } from './ap-performance.service';
 import { MsmeComplianceService } from './msme-compliance.service';
@@ -27,7 +29,9 @@ import { VendorAnalyticsService } from './vendor-analytics.service';
     ApPerformanceService,
     VendorAnalyticsService,
     AnalyticsRefreshService,
+    AnalyticsDailyService,
+    AnalyticsInsightsService,
   ],
-  exports: [SavingsTrackerService, AnalyticsRefreshService],
+  exports: [SavingsTrackerService, AnalyticsRefreshService, AnalyticsDailyService],
 })
 export class AnalyticsModule {}

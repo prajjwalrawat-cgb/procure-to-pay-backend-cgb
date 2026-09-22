@@ -2778,6 +2778,30 @@ model AnalyticsMsmeMonthly {
   @@index([tenantId])
 }
 
+/// Summary: per-day flow counts (spend, documents created) plus a once-a-day
+/// stock snapshot (open POs, invoices in flight, active vendors, MSME
+/// compliance) — powers the Home tiles' sparklines and the analytics overview.
+/// Flow columns are recomputed for a trailing 45-day window on every refresh;
+/// snapshot columns are written for the refresh day only, so they are null for
+/// days nobody refreshed (ADR-028 summary table, RLS-protected).
+model AnalyticsDaily {
+  id                  String   @id
+  tenantId            String   @map("tenant_id") @db.Uuid
+  day                 DateTime @db.Date
+  spendNet            Decimal  @default("0") @map("spend_net") @db.Decimal(18, 4)
+  requisitionsCreated Int      @default(0) @map("requisitions_created")
+  posCreated          Int      @default(0) @map("pos_created")
+  invoicesReceived    Int      @default(0) @map("invoices_received")
+  openPos             Int?     @map("open_pos")
+  invoicesInFlight    Int?     @map("invoices_in_flight")
+  activeVendors       Int?     @map("active_vendors")
+  msmeComplianceScore Decimal? @map("msme_compliance_score") @db.Decimal(6, 2)
+  refreshedAt         DateTime @default(now()) @map("refreshed_at") @db.Timestamptz(6)
+
+  @@unique([tenantId, day])
+  @@index([tenantId, day])
+}
+
 
 // ──────────────── Admin-defined custom fields (Slice 11) ────────────────
 // Extra fields an admin adds to a document type from Settings, without a
