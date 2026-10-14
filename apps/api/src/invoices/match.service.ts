@@ -51,6 +51,10 @@ export class MatchService {
       },
     });
     if (!invoice) throw new NotFoundException('Invoice not found');
+    // Rejection is final. Matching would rewrite the status to OCR_DONE or
+    // MATCH_EXCEPTION and put a refused bill back in the queue — which is what
+    // happened when an OCR job finished just after the buyer rejected.
+    if (invoice.status === 'REJECTED') return;
 
     const config = await this.prisma.client.tenantMatchConfig.findUnique({
       where: { tenantId: invoice.tenantId },

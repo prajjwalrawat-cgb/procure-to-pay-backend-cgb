@@ -23,12 +23,14 @@ function build(invoice: {
   invoiceDate: Date;
   vendorInvoiceRef: string;
   isMsme?: boolean;
+  status?: string;
 }) {
   const updates: { data: Record<string, unknown> }[] = [];
   const tx = {
     invoice: {
       findUnique: vi.fn(async () => ({
         id: INVOICE,
+        status: invoice.status ?? 'OCR_PENDING',
         headerAwaitingOcr: invoice.headerAwaitingOcr,
         invoiceDate: invoice.invoiceDate,
         vendorInvoiceRef: invoice.vendorInvoiceRef,
@@ -55,11 +57,12 @@ function build(invoice: {
     ),
   } as unknown as PrismaService;
 
+  const runFor = vi.fn();
   const service = new InvoiceService(
     prisma,
     { record: vi.fn() } as never, // audit
     { emit: vi.fn() } as never, // events
-    { runFor: vi.fn() } as never, // match
+    { runFor } as never, // match
     {} as never, // ocr
     { computeFor: vi.fn() } as never, // tds
     {
@@ -67,7 +70,7 @@ function build(invoice: {
     } as never, // msme
     {} as never, // routing
   );
-  return { service, updates };
+  return { service, updates, runFor };
 }
 
 const extraction = (over: Partial<OcrExtraction> = {}): OcrExtraction => ({
@@ -174,5 +177,21 @@ describe('applyOcr — document header adoption', () => {
     expect(d.headerAwaitingOcr).toBe(false);
     expect(d.invoiceDate).toBeUndefined();
     expect(d.vendorInvoiceRef).toBeUndefined();
+  });
+});
+
+describe('applyOcr — rejected while extraction was queued', () => {
+  // Seen locally: the buyer rejected at 10:20:59, the OCR job landed at
+  // 10:21:01, re-ran the match and put the invoice back in MATCH_EXCEPTION.
+  it('leaves a rejected invoice alone', async () => {
+    const { service, updates, runFor } = build({
+      status: 'REJECTED',
+      headerAwaitingOcr: true,
+      invoiceDate: new Date('2026-03-07T00:00:00.000Z'),
+      vendorInvoiceRef: 'PES/2026/4471',
+    });
+    await service.applyOcr(TENANT, INVOICE, extraction());
+    expect(updates).toHaveLength(0);
+    expect(runFor).not.toHaveBeenCalled();
   });
 });

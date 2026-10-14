@@ -313,6 +313,9 @@ export class InvoiceService {
         include: { lines: true, vendor: true },
       });
       if (!invoice) return;
+      // A buyer may reject while extraction is still queued. The job finishing
+      // afterwards must not pull the invoice back into the match queue.
+      if (invoice.status === 'REJECTED') return;
 
       // Populate lines from OCR only when the invoice was uploaded without them.
       if (invoice.lines.length === 0 && extraction.lines.length > 0) {
