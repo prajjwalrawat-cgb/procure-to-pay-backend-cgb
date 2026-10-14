@@ -135,7 +135,7 @@ export class InvoiceQueryService {
     const clause = await this.scopeWhere(scope);
     const scoped = (where: Record<string, unknown>): Record<string, unknown> =>
       this.merge(where, clause);
-    const [all, exceptions, approval, approved, scheduled, paid, msme, proforma] =
+    const [all, exceptions, approval, approved, scheduled, paid, msme, proforma, rejected] =
       await Promise.all([
         c.count({ where: scoped({ status: openStatusIn() }) }),
         c.count({ where: scoped({ status: 'MATCH_EXCEPTION' }) }),
@@ -145,8 +145,9 @@ export class InvoiceQueryService {
         c.count({ where: scoped({ status: 'PAID' }) }),
         c.count({ where: scoped({ status: openStatusIn(), vendor: { isMsme: true } }) }),
         c.count({ where: scoped({ ...AWAITING_TAX_INVOICE }) }),
+        c.count({ where: scoped({ status: 'REJECTED' }) }),
       ]);
-    return { all, exceptions, approval, approved, scheduled, paid, msme, proforma };
+    return { all, exceptions, approval, approved, scheduled, paid, msme, proforma, rejected };
   }
 
   async find(
@@ -399,6 +400,7 @@ export class InvoiceQueryService {
           inv.status,
         ),
       paymentBlockedReason: proformaPaymentBlock(inv),
+      rejectionReason: inv.rejectionReason,
       stages: buildStages(inv.status),
       vendor: {
         id: inv.vendor.id,
@@ -572,6 +574,7 @@ export class InvoiceQueryService {
       paid: { status: 'PAID' },
       msme: { status: openStatusIn(), vendor: { isMsme: true } },
       proforma: { ...AWAITING_TAX_INVOICE },
+      rejected: { status: 'REJECTED' },
     };
     Object.assign(where, tabStatus[query.tab] ?? tabStatus.all);
     if (query.status?.length) where.status = { in: query.status };

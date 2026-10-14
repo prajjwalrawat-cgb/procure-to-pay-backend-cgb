@@ -1,14 +1,16 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type {
-  InvoiceDocumentKind,
-  TaxInvoiceInput,
-  VendorInvoiceSubmitInput,
-  VendorPoOption,
+import {
+  canonicalRef,
+  type InvoiceDocumentKind,
+  type TaxInvoiceInput,
+  type VendorInvoiceSubmitInput,
+  type VendorPoOption,
 } from '@procureflow/shared';
 
 import { PrismaService } from '../prisma/prisma.service';
@@ -35,6 +37,10 @@ export interface VendorInvoiceSummary {
   documentKind: InvoiceDocumentKind;
   /** The PI this record started as, once its tax invoice has replaced it. */
   proformaRef: string | null;
+  /** Why the buyer rejected it, so the vendor knows what to fix. */
+  rejectionReason: string | null;
+  /** The order it bills — after a rejection, the one to resubmit against. */
+  po: { id: string; number: string } | null;
 }
 
 /** One invoice with its lines — what the tax-invoice form seeds itself from. */
@@ -59,6 +65,8 @@ const SUMMARY_SELECT = {
   invoiceDate: true,
   documentKind: true,
   proformaRef: true,
+  rejectionReason: true,
+  po: { select: { id: true, number: true } },
 } as const;
 
 function toSummary(r: {
@@ -70,6 +78,8 @@ function toSummary(r: {
   invoiceDate: Date;
   documentKind: InvoiceDocumentKind;
   proformaRef: string | null;
+  rejectionReason: string | null;
+  po: { id: string; number: string } | null;
 }): VendorInvoiceSummary {
   return {
     id: r.id,
@@ -80,6 +90,8 @@ function toSummary(r: {
     invoiceDate: r.invoiceDate.toISOString(),
     documentKind: r.documentKind,
     proformaRef: r.proformaRef,
+    rejectionReason: r.rejectionReason,
+    po: r.po,
   };
 }
 
@@ -123,6 +135,7 @@ export class VendorInvoiceService {
     const vendorId = await this.resolveVendorId(userId);
     await this.assertUploadedKey(tenantId, input.s3Key);
     await this.assertPoStillBillable(vendorId, input.poId);
+    await this.assertRefNotUsed(vendorId, input.vendorInvoiceRef);
     const id = await this.invoices.createFromVendorPortal(tenantId, vendorId, input);
     return { id };
   }
@@ -145,6 +158,7 @@ export class VendorInvoiceService {
     });
     if (!own) throw new NotFoundException('Invoice not found');
     await this.assertUploadedKey(tenantId, input.s3Key);
+    await this.assertRefNotUsed(vendorId, input.vendorInvoiceRef, invoiceId);
     await this.invoices.attachTaxInvoice(invoiceId, input, { id: userId, type: 'VENDOR' });
   }
 
@@ -182,6 +196,54 @@ export class VendorInvoiceService {
             'to amend the purchase order if more needs to be billed against it.'
         : 'That purchase order is not open for invoicing.',
     );
+  }
+
+  /**
+   * Refuse an invoice number this vendor has already billed under.
+   *
+   * The matcher flags a repeated reference as DUPLICATE_INVOICE, but only after
+   * the copy exists — by then it sits in the buyer's queue as a critical
+   * exception somebody has to reject by hand. From the portal there is no
+   * judgement to make: the vendor typed a number they have already used, so it
+   * is refused here instead.
+   *
+   * References are compared canonically ("MAKV486/26-27" = "makv 486-26-27"),
+   * against what the vendor entered, what OCR read off the page, and the PI
+   * number a tax invoice replaced. REJECTED invoices free their number so a
+   * corrected invoice can be resubmitted under it. `exceptInvoiceId` is the
+   * proforma being replaced, which may carry its own number forward.
+   */
+  private async assertRefNotUsed(
+    vendorId: string,
+    ref: string,
+    exceptInvoiceId?: string,
+  ): Promise<void> {
+    const wanted = canonicalRef(ref);
+    if (!wanted) return;
+    const live = await this.prisma.client.invoice.findMany({
+      where: {
+        vendorId,
+        status: { not: 'REJECTED' },
+        ...(exceptInvoiceId ? { id: { not: exceptInvoiceId } } : {}),
+      },
+      select: {
+        vendorInvoiceRef: true,
+        ocrVendorInvoiceRef: true,
+        proformaRef: true,
+      },
+    });
+    const clash = live.find((inv) =>
+      [inv.vendorInvoiceRef, inv.ocrVendorInvoiceRef, inv.proformaRef].some(
+        (r) => canonicalRef(r) === wanted,
+      ),
+    );
+    if (clash) {
+      throw new ConflictException(
+        `Invoice ${ref.trim()} has already been submitted. Check its status under ` +
+          'Invoices instead of uploading it again — if it was raised in error, ask ' +
+          'your buyer to reject it first.',
+      );
+    }
   }
 
   /**

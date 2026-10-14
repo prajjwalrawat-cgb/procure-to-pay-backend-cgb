@@ -642,7 +642,7 @@ function sameUtcDay(a: Date, b: Date): boolean {
  * removed, so "PES/2026/4471" and "PES-2026-4471" are the same reference. Only
  * an actual difference in the characters that carry meaning is reported.
  */
-function canonicalRef(ref: string | null | undefined): string | null {
+export function canonicalRef(ref: string | null | undefined): string | null {
   if (!ref) return null;
   const norm = ref.toUpperCase().replace(/[^A-Z0-9]+/g, '');
   return norm.length > 0 ? norm : null;

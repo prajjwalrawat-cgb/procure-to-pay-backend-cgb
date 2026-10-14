@@ -1,0 +1,52 @@
+# =============================================================================
+# Local development infrastructure only — Postgres, Redis and S3 storage.
+# The API and web app run on the host with `pnpm dev`; production uses
+# Supabase / Upstash / Supabase Storage instead (see DEPLOY.md).
+#
+#   docker compose up -d        # start
+#   docker compose down         # stop (keeps data)
+#   docker compose down -v      # stop and wipe all local data
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: procureflow
+    ports:
+      - '5433:5432' # 5433 on host: avoids clashing with a native Postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Recreates the Supabase bits the security SQL expects (extensions schema
+      # + the RLS-enforced procureflow_app role). Runs on first start only.
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d procureflow']
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - '6379:6379'
+
+  # S3-compatible object storage (MinIO's public images were withdrawn; RustFS
+  # is a drop-in replacement). Create the bucket once with
+  # `node scripts/with-env.mjs node scripts/s3-init.mjs`.
+  s3:
+    image: rustfs/rustfs:latest
+    environment:
+      RUSTFS_ACCESS_KEY: minioadmin
+      RUSTFS_SECRET_KEY: minioadmin
+      RUSTFS_CONSOLE_ENABLE: 'true'
+    ports:
+      - '9000:9000' # S3 API
+      - '9001:9001' # web console
+    volumes:
+      - s3data:/data
+
+volumes:
+  pgdata:
+  s3data:
