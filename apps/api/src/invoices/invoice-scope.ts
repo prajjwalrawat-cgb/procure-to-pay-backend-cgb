@@ -10,8 +10,8 @@ import type { AuthUser } from '../auth/auth.types';
  * which is not "nothing": a buyer must be able to follow the invoice their own
  * purchase order attracted, and route it once the match is clean. So the narrow
  * scope resolves to *my* invoices — assigned to me, billed against a PO I
- * raised, or routed to me for approval — and never to somebody else's supplier
- * bills. `invoice:read:team` widens that to the buyers a head oversees.
+ * raised or one converted from my requisition, or routed to me for approval —
+ * and never to somebody else's supplier bills. `invoice:read:team` widens that to the buyers a head oversees.
  */
 export const INVOICE_READ_SCOPES = [
   PERMISSIONS.INVOICE_READ_TENANT,

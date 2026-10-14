@@ -62,7 +62,18 @@ describe('InvoiceQueryService scoping', () => {
     expect(branchesOf(count)).toEqual([
       { assignedToId: 'usr_1' },
       { po: { createdBy: 'usr_1' } },
+      { po: { requisition: { requesterId: 'usr_1' } } },
     ]);
+  });
+
+  // Production: an admin converted Shivam's PR-1149 into PO-0501, so every
+  // invoice on it was invisible to the person who asked for the purchase.
+  it('includes invoices on a PO somebody else raised from my requisition', async () => {
+    const { service, findFirst } = build({});
+    await service.assertVisible('inv_1', scoped);
+    expect(findFirst.mock.calls[0]?.[0]?.where.OR).toContainEqual({
+      po: { requisition: { requesterId: 'usr_1' } },
+    });
   });
 
   it('includes invoices routed to me for approval', async () => {

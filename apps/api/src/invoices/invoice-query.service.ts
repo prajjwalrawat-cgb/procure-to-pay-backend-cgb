@@ -94,6 +94,11 @@ export class InvoiceQueryService {
     const or: Record<string, unknown>[] = [
       { assignedToId: scope.userId },
       { po: { createdBy: scope.userId } },
+      // The PO may be raised by somebody else — often an admin converting the
+      // requisition — but the demand, and following its bills, stays with the
+      // person who asked for it. Without this they lost sight of every invoice
+      // the moment another user created the order.
+      { po: { requisition: { requesterId: scope.userId } } },
     ];
     if (approvals.length > 0) {
       or.push({ id: { in: [...new Set(approvals.map((a) => a.documentId))] } });
