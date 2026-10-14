@@ -1554,6 +1554,10 @@ model Invoice {
   msmeDueDate            DateTime?     @db.Timestamptz(6)
   assignedToId           String?       @map("assigned_to_id")
   holdReason             String?
+  /// Why a buyer rejected the invoice before it reached approval — shown to
+  /// the vendor so they know what to fix. Null for approver rejections, whose
+  /// reason lives on the approval decision.
+  rejectionReason        String?       @map("rejection_reason")
   paidAt                 DateTime?     @map("paid_at") @db.Timestamptz(6)
   /// How much of `grossAmount` its payment records have settled so far, before
   /// TDS. Kept on the row so the payable queue can show what is outstanding

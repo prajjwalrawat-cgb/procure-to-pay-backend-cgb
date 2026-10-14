@@ -1,4 +1,8 @@
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { PrismaService } from '../prisma/prisma.service';
@@ -12,9 +16,34 @@ const UPLOADED = `${vendorUploadPrefix(TENANT)}ia_1-tax_invoice.pdf`;
  * Only the collaborators submit() touches.
  *
  * `openPoIds` is what `refs.vendorOpenPos` will offer — an order absent from it
- * has nothing left to bill, which submit() must refuse.
+ * has nothing left to bill, which submit() must refuse. `existing` is the
+ * vendor's invoices already on file; the mock applies the status / id filters
+ * the service asks Prisma for, so REJECTED and the excluded id drop out.
  */
-function build(objectExists = true, openPoIds: string[] = ['po_1']) {
+interface ExistingInvoice {
+  id: string;
+  status: string;
+  vendorInvoiceRef: string;
+  ocrVendorInvoiceRef?: string | null;
+  proformaRef?: string | null;
+}
+
+function build(
+  objectExists = true,
+  openPoIds: string[] = ['po_1'],
+  existing: ExistingInvoice[] = [],
+) {
+  const findMany = vi.fn(
+    async (args: { where: { status?: { not: string }; id?: { not: string } } }) =>
+      existing
+        .filter((i) => i.status !== args.where.status?.not)
+        .filter((i) => i.id !== args.where.id?.not)
+        .map((i) => ({
+          vendorInvoiceRef: i.vendorInvoiceRef,
+          ocrVendorInvoiceRef: i.ocrVendorInvoiceRef ?? null,
+          proformaRef: i.proformaRef ?? null,
+        })),
+  );
   const prisma = {
     client: {
       user: { findUnique: vi.fn().mockResolvedValue({ email: 'ap@vendor.test' }) },
@@ -22,19 +51,24 @@ function build(objectExists = true, openPoIds: string[] = ['po_1']) {
       purchaseOrder: {
         findFirst: vi.fn().mockResolvedValue({ number: 'PO-0498' }),
       },
+      invoice: {
+        findMany,
+        findFirst: vi.fn().mockResolvedValue({ id: 'inv_pi' }),
+      },
     },
   } as unknown as PrismaService;
   const createFromVendorPortal = vi.fn().mockResolvedValue('inv_1');
+  const attachTaxInvoice = vi.fn().mockResolvedValue(undefined);
   const exists = vi.fn().mockResolvedValue(objectExists);
   const vendorOpenPos = vi.fn().mockResolvedValue(openPoIds.map((id) => ({ id })));
 
   const service = new VendorInvoiceService(
     prisma,
-    { createFromVendorPortal } as never,
+    { createFromVendorPortal, attachTaxInvoice } as never,
     { vendorOpenPos } as never, // refs
     { exists } as unknown as StorageService,
   );
-  return { service, createFromVendorPortal, exists, vendorOpenPos };
+  return { service, createFromVendorPortal, attachTaxInvoice, exists, vendorOpenPos };
 }
 
 const payload = (s3Key: string) =>
@@ -120,5 +154,74 @@ describe('VendorInvoiceService.submit — exhausted purchase order', () => {
     } as never);
     expect(createFromVendorPortal).toHaveBeenCalled();
     expect(vendorOpenPos).not.toHaveBeenCalled();
+  });
+});
+
+describe('VendorInvoiceService — duplicate invoice number', () => {
+  const live = (ref: string, extra: Partial<ExistingInvoice> = {}): ExistingInvoice => ({
+    id: 'inv_old',
+    status: 'MATCH_EXCEPTION',
+    vendorInvoiceRef: ref,
+    ...extra,
+  });
+
+  // The production case: the same MAKV486/26-27 filed twice, leaving the buyer
+  // with a CRITICAL duplicate exception to reject by hand.
+  it('refuses a number this vendor has already submitted', async () => {
+    const { service, createFromVendorPortal } = build(true, ['po_1'], [live('INV/1')]);
+    await expect(
+      service.submit(TENANT, 'usr_1', payload(UPLOADED)),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(createFromVendorPortal).not.toHaveBeenCalled();
+  });
+
+  it('compares numbers ignoring case, spacing and punctuation', async () => {
+    const { service } = build(true, ['po_1'], [live('inv - 1')]);
+    await expect(service.submit(TENANT, 'usr_1', payload(UPLOADED))).rejects.toThrow(
+      /INV\/1 has already been submitted/,
+    );
+  });
+
+  it('catches the number OCR read off an earlier document', async () => {
+    const { service } = build(true, ['po_1'], [
+      live('Invoice attached', { ocrVendorInvoiceRef: 'INV/1' }),
+    ]);
+    await expect(
+      service.submit(TENANT, 'usr_1', payload(UPLOADED)),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  // Rejection is how a bad invoice is sent back; the corrected one may reuse
+  // its number.
+  it('allows resubmitting the number of a rejected invoice', async () => {
+    const { service, createFromVendorPortal } = build(true, ['po_1'], [
+      live('INV/1', { status: 'REJECTED' }),
+    ]);
+    await service.submit(TENANT, 'usr_1', payload(UPLOADED));
+    expect(createFromVendorPortal).toHaveBeenCalled();
+  });
+
+  it('accepts a new number', async () => {
+    const { service, createFromVendorPortal } = build(true, ['po_1'], [live('INV/2')]);
+    await service.submit(TENANT, 'usr_1', payload(UPLOADED));
+    expect(createFromVendorPortal).toHaveBeenCalled();
+  });
+
+  it("lets a tax invoice keep its own proforma's number", async () => {
+    const { service, attachTaxInvoice } = build(true, ['po_1'], [
+      live('INV/1', { id: 'inv_pi', status: 'APPROVED' }),
+    ]);
+    await service.attachTaxInvoice(TENANT, 'usr_1', 'inv_pi', payload(UPLOADED));
+    expect(attachTaxInvoice).toHaveBeenCalled();
+  });
+
+  it("refuses a tax invoice reusing another invoice's number", async () => {
+    const { service, attachTaxInvoice } = build(true, ['po_1'], [
+      live('INV/1', { id: 'inv_other', status: 'PAID' }),
+    ]);
+    await expect(
+      service.attachTaxInvoice(TENANT, 'usr_1', 'inv_pi', payload(UPLOADED)),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(attachTaxInvoice).not.toHaveBeenCalled();
   });
 });

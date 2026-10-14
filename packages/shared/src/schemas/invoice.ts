@@ -108,6 +108,7 @@ export const InvoiceListQuerySchema = z.object({
       'paid',
       'msme',
       'proforma',
+      'rejected',
     ])
     .default('all'),
 });
@@ -129,6 +130,12 @@ export const HoldInputSchema = z.object({
 });
 export type HoldInput = z.infer<typeof HoldInputSchema>;
 
+/** Buyer rejects an invoice before approval. The reason is shown to the vendor. */
+export const RejectInvoiceInputSchema = z.object({
+  reason: z.string().trim().min(3).max(500),
+});
+export type RejectInvoiceInput = z.infer<typeof RejectInvoiceInputSchema>;
+
 export const AssignInputSchema = z.object({
   userId: z.string().min(1),
 });
@@ -144,7 +151,8 @@ export type InvoiceTab =
   | 'scheduled'
   | 'paid'
   | 'msme'
-  | 'proforma';
+  | 'proforma'
+  | 'rejected';
 
 export interface InvoiceTabCounts {
   all: number;
@@ -156,6 +164,7 @@ export interface InvoiceTabCounts {
   msme: number;
   /** Proformas still waiting for their tax invoice. */
   proforma: number;
+  rejected: number;
 }
 
 export interface MsmeSummary {
@@ -258,6 +267,8 @@ export interface InvoiceDetailResponse {
   priorApproval: boolean;
   /** Why the balance cannot be paid yet (an unpaid-for proforma), or null. */
   paymentBlockedReason: string | null;
+  /** Why a buyer rejected it before approval, or null. */
+  rejectionReason: string | null;
   stages: { key: string; label: string; state: 'done' | 'active' | 'todo' }[];
   vendor: {
     id: string;

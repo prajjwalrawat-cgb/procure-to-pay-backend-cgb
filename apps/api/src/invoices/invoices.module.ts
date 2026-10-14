@@ -21,6 +21,7 @@ import { RealOcrProvider } from './ocr/real-ocr.provider';
 import { SandboxOcrProvider } from './ocr/sandbox-ocr.provider';
 import { RefsController } from './refs.controller';
 import { RefsService } from './refs.service';
+import { InvoiceNotificationService } from './invoice-notification.service';
 import { VendorInvoiceService } from './vendor-invoice.service';
 import { VendorInvoicesController } from './vendor-invoices.controller';
 
@@ -34,6 +35,7 @@ import { VendorInvoicesController } from './vendor-invoices.controller';
   ],
   providers: [
     InvoiceService,
+    InvoiceNotificationService,
     InvoiceQueryService,
     MatchService,
     RefsService,

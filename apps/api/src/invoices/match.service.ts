@@ -79,11 +79,16 @@ export class MatchService {
      * too — but only when there is one. The null guard matters: without it every
      * invoice whose document was never read would match every other, and the
      * matcher would call them all duplicates.
+     *
+     * REJECTED invoices do not count, for the same reason they free their PO
+     * quantity below: rejecting the copy is how a duplicate is resolved, and
+     * the original must not keep failing against the copy it was rejected for.
      */
     const duplicates = await this.prisma.client.invoice.count({
       where: {
         vendorId: invoice.vendorId,
         id: { not: invoice.id },
+        status: { not: 'REJECTED' },
         OR: [
           { vendorInvoiceRef: invoice.vendorInvoiceRef },
           ...(invoice.ocrVendorInvoiceRef

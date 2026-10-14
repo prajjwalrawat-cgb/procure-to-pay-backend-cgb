@@ -21,6 +21,7 @@ import {
   DocumentKindInputSchema,
   ExceptionResolutionInputSchema,
   HoldInputSchema,
+  RejectInvoiceInputSchema,
   InvoiceCreateInputSchema,
   InvoiceListQuerySchema,
   PERMISSIONS,
@@ -30,6 +31,7 @@ import {
   type DocumentKindInput,
   type ExceptionResolutionInput,
   type HoldInput,
+  type RejectInvoiceInput,
   type InvoiceCreateInput,
   type InvoiceDetailResponse,
   type InvoiceListQuery,
@@ -152,6 +154,23 @@ export class InvoicesController {
   ): Promise<{ ok: true }> {
     await this.assertVisible(user, id);
     await this.invoices.hold(id, dto.reason, user.userId);
+    return { ok: true };
+  }
+
+  /**
+   * Reject before approval — a duplicate or the wrong document. Gated on
+   * resolve-exception like resolve-and-route: refusing a bill is a decision
+   * about money, not an intake chore.
+   */
+  @Post(':id/reject')
+  @RequirePermission(PERMISSIONS.INVOICE_RESOLVE_EXCEPTION)
+  async reject(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(RejectInvoiceInputSchema)) dto: RejectInvoiceInput,
+  ): Promise<{ ok: true }> {
+    await this.assertVisible(user, id);
+    await this.invoices.reject(id, dto.reason, user.userId);
     return { ok: true };
   }
 

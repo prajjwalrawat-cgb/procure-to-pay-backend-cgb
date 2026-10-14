@@ -20,6 +20,7 @@ import { AuditLogService } from '../audit/audit.service';
 import { DomainEventService } from '../common/events/domain-event.service';
 import { ACTIVE_RUN_ITEM } from '../payment-runs/payment-posting.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { InvoiceNotificationService } from './invoice-notification.service';
 import { MatchService } from './match.service';
 import { MsmeService } from './domain/msme.service';
 import { TdsService } from './domain/tds.service';
@@ -54,6 +55,18 @@ const TAX_INVOICE_REFUSED: Record<string, string> = {
   REJECTED: 'This proforma was rejected. Submit the tax invoice as a new invoice instead.',
 };
 
+/** Where a buyer may still reject an invoice: anywhere before approval starts. */
+const REJECTABLE = new Set([
+  'RECEIVED',
+  'OCR_PENDING',
+  'OCR_DONE',
+  'OCR_LOW_CONFIDENCE',
+  'OCR_FAILED',
+  'PENDING_VENDOR_MATCH',
+  'MATCH_EXCEPTION',
+  'HELD',
+]);
+
 /** ₹ a tax invoice may differ from its approved proforma by before it counts. */
 const APPROVED_TOTAL_ROUNDING = new Decimal(1);
 
@@ -73,6 +86,7 @@ export class InvoiceService {
     private readonly tds: TdsService,
     private readonly msme: MsmeService,
     private readonly routing: ApprovalRoutingService,
+    private readonly notifications: InvoiceNotificationService,
   ) {}
 
   /** Manual creation by AP. Skips OCR (Slice 1 decision); runs match immediately. */
@@ -569,6 +583,64 @@ export class InvoiceService {
       holdReason: null,
     });
     await this.match.runFor(invoiceId, actorId);
+  }
+
+  /**
+   * Reject an invoice before it reaches approval — a duplicate, the wrong
+   * document, a bill from the wrong vendor.
+   *
+   * Without this the only way to REJECTED was to route the invoice anyway and
+   * have the approver refuse it, which meant first "resolving" the very
+   * exception that proved it wrong. Once approval has started it is the
+   * approver's call, so AWAITING_APPROVAL and later are refused. Money that has
+   * moved, or is committed to a run, cannot be un-billed by a status change.
+   *
+   * REJECTED frees the PO quantity and the vendor's invoice number, so the
+   * vendor can resubmit a corrected invoice.
+   */
+  async reject(invoiceId: string, reason: string, actorId: string): Promise<void> {
+    const inv = await this.requireInvoice(invoiceId);
+    if (!REJECTABLE.has(inv.status)) {
+      throw new ForbiddenException(
+        inv.status === 'REJECTED'
+          ? 'This invoice has already been rejected.'
+          : inv.status === 'AWAITING_APPROVAL'
+            ? 'This invoice is with its approver — they can reject it from the approval step.'
+            : 'Only invoices that have not been approved yet can be rejected here.',
+      );
+    }
+    if (new Decimal(inv.paidAmount.toString()).gt(0)) {
+      throw new ForbiddenException(
+        'A payment has already been recorded against this invoice, so it cannot be rejected.',
+      );
+    }
+    const inRun = await this.prisma.client.paymentRunItem.findFirst({
+      where: { invoiceId, ...ACTIVE_RUN_ITEM },
+      include: { paymentRun: { select: { number: true } } },
+    });
+    if (inRun) {
+      throw new ForbiddenException(
+        `This invoice is in payment run ${inRun.paymentRun.number}. Remove it from that run first.`,
+      );
+    }
+    // A held invoice may have been on its way through approval; nobody should
+    // be left asked to decide on something already refused.
+    await this.prisma.client.approval.deleteMany({
+      where: { documentType: 'INVOICE', documentId: invoiceId, decision: 'PENDING' },
+    });
+    await this.transition(
+      invoiceId,
+      actorId,
+      'invoice.rejected',
+      { status: 'REJECTED', rejectionReason: reason },
+      { reason },
+    );
+    await this.events.emit(
+      'InvoiceRejected',
+      { invoiceId, vendorId: inv.vendorId },
+      inv.tenantId,
+    );
+    await this.notifications.invoiceRejected(invoiceId);
   }
 
   async addComment(invoiceId: string, authorId: string, body: string): Promise<void> {
