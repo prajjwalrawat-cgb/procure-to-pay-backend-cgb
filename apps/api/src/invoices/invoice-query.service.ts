@@ -140,8 +140,18 @@ export class InvoiceQueryService {
     const clause = await this.scopeWhere(scope);
     const scoped = (where: Record<string, unknown>): Record<string, unknown> =>
       this.merge(where, clause);
-    const [all, exceptions, approval, approved, scheduled, paid, msme, proforma, rejected] =
-      await Promise.all([
+    const [
+      all,
+      exceptions,
+      approval,
+      approved,
+      scheduled,
+      paid,
+      msme,
+      proforma,
+      rejected,
+      everything,
+    ] = await Promise.all([
         c.count({ where: scoped({ status: openStatusIn() }) }),
         c.count({ where: scoped({ status: 'MATCH_EXCEPTION' }) }),
         c.count({ where: scoped({ status: 'AWAITING_APPROVAL' }) }),
@@ -151,8 +161,20 @@ export class InvoiceQueryService {
         c.count({ where: scoped({ status: openStatusIn(), vendor: { isMsme: true } }) }),
         c.count({ where: scoped({ ...AWAITING_TAX_INVOICE }) }),
         c.count({ where: scoped({ status: 'REJECTED' }) }),
+        c.count({ where: scoped({}) }),
       ]);
-    return { all, exceptions, approval, approved, scheduled, paid, msme, proforma, rejected };
+    return {
+      all,
+      exceptions,
+      approval,
+      approved,
+      scheduled,
+      paid,
+      msme,
+      proforma,
+      rejected,
+      everything,
+    };
   }
 
   async find(
@@ -580,6 +602,9 @@ export class InvoiceQueryService {
       msme: { status: openStatusIn(), vendor: { isMsme: true } },
       proforma: { ...AWAITING_TAX_INVOICE },
       rejected: { status: 'REJECTED' },
+      // No status narrowing: a supplier's bills are spread over every tab, and
+      // "how many invoices do we have from X" needs them in one list.
+      everything: {},
     };
     Object.assign(where, tabStatus[query.tab] ?? tabStatus.all);
     if (query.status?.length) where.status = { in: query.status };

@@ -109,6 +109,7 @@ export const InvoiceListQuerySchema = z.object({
       'msme',
       'proforma',
       'rejected',
+      'everything',
     ])
     .default('all'),
 });
@@ -152,7 +153,9 @@ export type InvoiceTab =
   | 'paid'
   | 'msme'
   | 'proforma'
-  | 'rejected';
+  | 'rejected'
+  /** Every invoice in every status — for finding a supplier's whole history. */
+  | 'everything';
 
 export interface InvoiceTabCounts {
   all: number;
@@ -165,6 +168,7 @@ export interface InvoiceTabCounts {
   /** Proformas still waiting for their tax invoice. */
   proforma: number;
   rejected: number;
+  everything: number;
 }
 
 export interface MsmeSummary {
