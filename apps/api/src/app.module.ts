@@ -40,6 +40,7 @@ import { HomeModule } from './home/home.module';
 import { ContractsModule } from './contracts/contracts.module';
 import { CryptoModule } from './common/crypto/crypto.service';
 import { IntegrationsModule } from './integrations/integrations.module';
+import { AskmiraModule } from './integrations/askmira/askmira.module';
 import { ComplianceModule } from './compliance/compliance.module';
 
 @Module({
@@ -75,6 +76,7 @@ import { ComplianceModule } from './compliance/compliance.module';
     StorageModule,
     CryptoModule,
     IntegrationsModule,
+    AskmiraModule,
     AuthModule,
     TenantModule,
     UsersModule,

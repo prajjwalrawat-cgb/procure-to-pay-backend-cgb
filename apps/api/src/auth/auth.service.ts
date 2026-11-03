@@ -129,6 +129,54 @@ export class AuthService {
     };
   }
 
+  /**
+   * A buyer-portal session for someone who opened ProcureFlow from AskMira.
+   *
+   * The second half of `login`: AskMira's signed, one-time link stood in for
+   * the password (integrations/askmira checked it, the tenant, that the user is
+   * active and that they do not use two-step sign-in). Roles, permissions and
+   * the portal check are this tenant's own, exactly as at login.
+   */
+  async signInFromAskMira(
+    tenantId: string,
+    userId: string,
+    meta: RequestMeta,
+  ): Promise<LoginResponse> {
+    const user = await this.prisma.runInTenantContext(tenantId, (tx) =>
+      tx.user.findUnique({ where: { id: userId } }),
+    );
+    if (!user || !user.isActive || user.tenantId !== tenantId) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+    const { roles, perms } = await this.loadRolesAndPerms(tenantId, userId);
+    if (!AuthService.isPortalAllowed('buyer', roles)) {
+      await this.auditAuth(tenantId, userId, 'auth.portal_denied', meta);
+      throw new UnauthorizedException('This account cannot sign in to this portal');
+    }
+    const issue = { userId, tenantId, audience: 'buyer' as const, roles, perms };
+    const access = await this.tokens.issueAccess(issue);
+    const refreshToken = await this.tokens.issueRefresh(issue);
+    await this.persistSession(userId, refreshToken, meta);
+    await this.auditAuth(tenantId, userId, 'auth.login_askmira', meta);
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        roles,
+        perms,
+        mfaEnabled: user.mfaEnabled,
+        tenant: await this.loadTenant(tenantId),
+      },
+      tokens: {
+        accessToken: access.token,
+        refreshToken,
+        tokenType: 'Bearer',
+        expiresIn: access.expiresIn,
+      },
+    };
+  }
+
   async refresh(refreshToken: string): Promise<LoginResponse['tokens']> {
     let payload;
     try {

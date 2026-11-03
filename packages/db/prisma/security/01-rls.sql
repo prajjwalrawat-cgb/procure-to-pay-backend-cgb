@@ -58,7 +58,9 @@ DECLARE
     -- Slice 13 mobile scanner
     'ScanEvent', 'CycleCountSession', 'CycleCountVariance', 'PickList', 'PickListLine',
     -- Slice 14 physical box tracking
-    'Box', 'BoxMove'
+    'Box', 'BoxMove',
+    -- The AskMira link (04-askmira.sql has its pre-tenant lookups)
+    'AskmiraLink', 'AskmiraConnectCode', 'AskmiraPerson'
   ];
 BEGIN
   FOREACH t IN ARRAY tenanted_tables LOOP
@@ -96,6 +98,8 @@ GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA extensions TO procureflow_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON "Session" TO procureflow_app;
 GRANT SELECT ON "Role" TO procureflow_app;
 GRANT SELECT ON "Tenant" TO procureflow_app;
+-- AskMira tokens are spent once each (jti); not tenanted.
+GRANT SELECT, INSERT, DELETE ON "AskmiraUsedToken" TO procureflow_app;
 
 -- Slice 12 — derived stock summary. Read-only; tenant isolation comes from the
 -- view's `security_invoker` setting plus the RLS policy on StockLedgerEntry,

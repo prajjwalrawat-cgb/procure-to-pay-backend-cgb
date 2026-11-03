@@ -12,7 +12,9 @@ import type { Env } from './config/env';
 import { setupSwagger } from './swagger';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  // rawBody: the AskMira link checks its signed token against the exact bytes
+  // sent (integrations/askmira). JSON is still parsed as before.
+  const app = await NestFactory.create(AppModule, { bufferLogs: true, rawBody: true });
   app.useLogger(app.get(Logger));
 
   const config = app.get(ConfigService<Env, true>);

@@ -41,6 +41,7 @@ import { SlaService } from './sla.service';
     NotificationService,
     SlaService,
   ],
-  exports: [ApprovalRoutingService, ApprovalMatrixService, NotificationService],
+  // InboxService: the AskMira link reads a person's approvals the same way.
+  exports: [ApprovalRoutingService, ApprovalMatrixService, NotificationService, InboxService],
 })
 export class ApprovalsModule {}

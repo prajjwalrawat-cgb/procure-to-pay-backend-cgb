@@ -3888,3 +3888,57 @@ model BoxMove {
   @@index([tenantId])
   @@index([boxId, movedAt])
 }
+
+// ─────────────────────────── AskMira link ───────────────────────────
+//
+// A tenant here connects to one AskMira workspace (AskMira is the company's
+// HRMS): AskMira's admin presses Connect there, an admin here presses Allow
+// (apps/api/src/integrations/askmira). The connection's secret is derived from
+// ASKMIRA_LINK_SECRET and the nonce kept here, so the database never holds it.
+//
+// The three tenanted tables carry RLS like every other (security/01-rls.sql).
+// The two lookups that must run before a tenant is known — which tenant an
+// AskMira token names, and a one-time connect code — go through narrow
+// SECURITY DEFINER functions (security/04-askmira.sql), as login does.
+
+model AskmiraLink {
+  tenantId        String   @id @map("tenant_id") @db.Uuid
+  askmiraTenantId String   @unique @map("askmira_tenant_id") @db.Uuid
+  askmiraName     String?  @map("askmira_name")
+  askmiraOrigin   String?  @map("askmira_origin")
+  secretNonce     String   @map("secret_nonce")
+  connectedBy     String?  @map("connected_by")
+  connectedAt     DateTime @default(now()) @map("connected_at") @db.Timestamptz(6)
+}
+
+model AskmiraConnectCode {
+  codeHash        String    @id @map("code_hash")
+  tenantId        String    @map("tenant_id") @db.Uuid
+  askmiraTenantId String    @map("askmira_tenant_id") @db.Uuid
+  askmiraName     String?   @map("askmira_name")
+  askmiraOrigin   String    @map("askmira_origin")
+  challenge       String
+  approvedBy      String    @map("approved_by")
+  expiresAt       DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt          DateTime? @map("used_at") @db.Timestamptz(6)
+
+  @@index([tenantId])
+}
+
+/// Action and sign-in tokens work once: their `jti`, until they expire. Not tenanted.
+model AskmiraUsedToken {
+  jti       String   @id
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+}
+
+/// People AskMira manages: linked by email by its people sync, switched off
+/// (never deleted) when they leave the company in AskMira.
+model AskmiraPerson {
+  tenantId      String    @map("tenant_id") @db.Uuid
+  userId        String    @map("user_id")
+  askmiraUserId String?   @map("askmira_user_id")
+  linkedAt      DateTime  @default(now()) @map("linked_at") @db.Timestamptz(6)
+  deactivatedAt DateTime? @map("deactivated_at") @db.Timestamptz(6)
+
+  @@id([tenantId, userId])
+}

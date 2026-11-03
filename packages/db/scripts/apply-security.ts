@@ -17,6 +17,7 @@ const FILES = [
   '01-rls.sql',
   '02-audit-chain.sql',
   '03-auth-functions.sql',
+  '04-askmira.sql',
 ];
 
 async function main(): Promise<void> {
