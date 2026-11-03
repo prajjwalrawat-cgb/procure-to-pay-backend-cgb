@@ -60,7 +60,9 @@ DECLARE
     -- Slice 14 physical box tracking
     'Box', 'BoxMove',
     -- The AskMira link (04-askmira.sql has its pre-tenant lookups)
-    'AskmiraLink', 'AskmiraConnectCode', 'AskmiraPerson'
+    'AskmiraLink', 'AskmiraConnectCode', 'AskmiraPerson',
+    -- PO amendments (maker-checker)
+    'PoAmendment'
   ];
 BEGIN
   FOREACH t IN ARRAY tenanted_tables LOOP

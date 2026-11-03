@@ -569,7 +569,12 @@ export class PoDocumentService {
           15,
         );
 
-      kv('GSTIN of vendor', po.vendor.gstin ?? '—', 'Purchase order no.', po.number);
+      kv(
+        'GSTIN of vendor',
+        po.vendor.gstin ?? '—',
+        'Purchase order no.',
+        po.amendmentNo > 0 ? `${po.number} (Amendment ${po.amendmentNo})` : po.number,
+      );
       kv(
         'State code of vendor',
         vendorState ? formatGstState(vendorState) : '—',

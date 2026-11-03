@@ -29,6 +29,8 @@ const ENTITY: Record<string, { label: string; doc?: DocumentType }> = {
   PaymentRun: { label: 'Payment run', doc: 'PAYMENT_RUN' },
   Contract: { label: 'Contract', doc: 'CONTRACT' },
   ContractAmendment: { label: 'Contract amendment', doc: 'CONTRACT_AMENDMENT' },
+  // Resolved to the PO's id (home-activity), so it links to the PO page.
+  PoAmendment: { label: 'PO amendment', doc: 'PURCHASE_ORDER' },
   Award: { label: 'RFQ award', doc: 'RFQ_AWARD' },
   VendorOnboarding: { label: 'Vendor onboarding', doc: 'VENDOR_ONBOARDING' },
   VendorChangeRequest: { label: 'Vendor change', doc: 'VENDOR_CHANGE' },

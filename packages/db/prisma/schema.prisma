@@ -352,6 +352,7 @@ enum DocumentType {
   RFQ_AWARD // Slice 6 — sourcing award routes through the Slice 2 engine
   VENDOR_ONBOARDING // Slice 7 — vendor onboarding approval
   VENDOR_CHANGE // Slice 7 — material post-activation change approval
+  PO_AMENDMENT // price/qty change to an approved or issued PO (maker-checker)
 }
 
 // ─────────────────────────── Sourcing / RFQ enums (Slice 6) ───────────────────────────
@@ -982,6 +983,8 @@ model PurchaseOrder {
   poType                 PoType    @default(STANDARD) @map("po_type")
   isSpotBuy              Boolean   @default(false) @map("is_spot_buy")
   isAmendmentOf          String?   @map("is_amendment_of")
+  /// Count of approved amendments; the PDF revision suffix (A1, A2…).
+  amendmentNo            Int       @default(0) @map("amendment_no")
   contractId             String?   @map("contract_id") // Slice 9 — set for CONTRACT_CALLOFF POs
   totalAmount            Decimal   @default("0") @db.Decimal(18, 4)
   taxAmount              Decimal   @default("0") @db.Decimal(18, 4)
@@ -1026,6 +1029,7 @@ model PurchaseOrder {
   inventoryLedgerEntries StockLedgerEntry[]
   attachments            PurchaseOrderAttachment[]
   terms                  PurchaseOrderTerm[]
+  amendments             PoAmendment[]
 
   @@unique([tenantId, number])
   @@index([tenantId])
@@ -1066,6 +1070,39 @@ model PurchaseOrderLine {
   @@index([tenantId])
   @@index([poId])
   @@index([itemId])
+}
+
+enum PoAmendmentStatus {
+  AWAITING_APPROVAL
+  APPROVED
+  REJECTED
+  RETURNED // approver requested changes; the buyer raises a fresh amendment
+}
+
+/// Maker-checker change to an approved or issued PO's line prices/quantities.
+/// The proposed values live here until the PO_AMENDMENT approval completes;
+/// only then are they written onto the PO lines, so the live order never
+/// carries an unapproved price.
+model PoAmendment {
+  id                     String            @id
+  tenantId               String            @map("tenant_id") @db.Uuid
+  poId                   String            @map("po_id")
+  amendmentNo            Int               @map("amendment_no")
+  status                 PoAmendmentStatus @default(AWAITING_APPROVAL)
+  reason                 String
+  /// [{ lineId, lineNo, itemDesc, uom, before: {qtyOrdered, unitPrice}, after: {...} }]
+  lineChanges            Json              @map("line_changes")
+  beforeTotal            Decimal           @map("before_total") @db.Decimal(18, 4)
+  afterTotal             Decimal           @map("after_total") @db.Decimal(18, 4)
+  approvalMatrixSnapshot Json?             @map("approval_matrix_snapshot")
+  requestedBy            String?           @map("requested_by")
+  requestedAt            DateTime          @default(now()) @map("requested_at") @db.Timestamptz(6)
+  appliedAt              DateTime?         @map("applied_at") @db.Timestamptz(6)
+
+  po PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([poId])
 }
 
 /// Supporting documents on a PO — above all the offline vendor quote a spot buy

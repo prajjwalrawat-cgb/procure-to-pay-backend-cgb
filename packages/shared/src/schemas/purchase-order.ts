@@ -196,6 +196,24 @@ export const PoHoldInputSchema = z.object({
 });
 export type PoHoldInput = z.infer<typeof PoHoldInputSchema>;
 
+/** A maker-checker change to an approved or issued PO. Only lines whose price
+ *  or quantity actually changes need be sent; the reason is shown to the
+ *  approver alongside the before/after. */
+export const PoAmendInputSchema = z.object({
+  reason: z.string().trim().min(1).max(1000),
+  lines: z
+    .array(
+      z.object({
+        lineId: z.string().min(1),
+        qtyOrdered: decimalString,
+        unitPrice: decimalString,
+      }),
+    )
+    .min(1)
+    .max(200),
+});
+export type PoAmendInput = z.infer<typeof PoAmendInputSchema>;
+
 export const PoCommentInputSchema = z.object({
   body: z.string().min(1).max(4000),
 });
@@ -427,7 +445,39 @@ export interface PoDetailResponse {
   canIssue: boolean;
   canCancel: boolean;
   canHold: boolean;
+  /** Approved/issued, nothing received or invoiced, no amendment in flight. */
+  canAmend: boolean;
+  /** Approved amendments so far — the PDF revision (A1, A2…). */
+  amendmentNo: number;
+  /** Newest first; includes the one awaiting approval, if any. */
+  amendments: PoAmendmentView[];
   fulfilmentPct: number;
+}
+
+export interface PoAmendmentLineChange {
+  lineId: string;
+  lineNo: number;
+  itemDesc: string;
+  uom: string;
+  before: { qtyOrdered: string; unitPrice: string };
+  after: { qtyOrdered: string; unitPrice: string };
+}
+
+export interface PoAmendmentView {
+  id: string;
+  amendmentNo: number;
+  status: 'AWAITING_APPROVAL' | 'APPROVED' | 'REJECTED' | 'RETURNED';
+  reason: string;
+  lineChanges: PoAmendmentLineChange[];
+  beforeTotal: string;
+  afterTotal: string;
+  requestedBy: string | null;
+  requestedByName: string | null;
+  requestedAt: string;
+  appliedAt: string | null;
+  liveApprovalChain: LiveApprovalStep[];
+  /** Set when the viewer is the pending approver of this amendment. */
+  myApprovalId: string | null;
 }
 
 // ── Vendor-portal read models ────────────────────────────────────────────────

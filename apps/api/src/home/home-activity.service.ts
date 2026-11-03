@@ -153,6 +153,18 @@ export class HomeActivityService {
         });
       }
     }
+    if (ids('PoAmendment').length) {
+      const rows = await c.poAmendment.findMany({
+        where: { id: { in: ids('PoAmendment') } },
+        select: { id: true, amendmentNo: true, po: { select: { id: true, number: true } } },
+      });
+      for (const r of rows) {
+        out.set(`PoAmendment:${r.id}`, {
+          ref: `${r.po.number} amendment ${r.amendmentNo}`,
+          hrefId: r.po.id,
+        });
+      }
+    }
     return out;
   }
 }

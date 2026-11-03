@@ -16,6 +16,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import {
   PERMISSIONS,
+  PoAmendInputSchema,
   PoAttachmentUploadMetaSchema,
   PoCancelInputSchema,
   PoCommentInputSchema,
@@ -25,6 +26,7 @@ import {
   PoListQuerySchema,
   PoTermsSetInputSchema,
   PoUpdateInputSchema,
+  type PoAmendInput,
   type PoAttachmentUploadMeta,
   type PoAttachmentView,
   type PoCancelInput,
@@ -72,6 +74,15 @@ export class PurchaseOrdersController {
     @Query(new ZodValidationPipe(PoListQuerySchema)) q: PoListQuery,
   ): Promise<PoListResponse> {
     return this.query.list(q);
+  }
+
+  /** Resolves an amendment to its PO — approval notifications link by amendment id. */
+  @Get('amendments/:amendmentId')
+  @RequirePermission(PERMISSIONS.PURCHASE_ORDER_READ_TENANT)
+  async amendmentPo(
+    @Param('amendmentId') amendmentId: string,
+  ): Promise<{ poId: string }> {
+    return this.query.amendmentPo(amendmentId);
   }
 
   @Get(':id')
@@ -160,6 +171,17 @@ export class PurchaseOrdersController {
     @Body(new ZodValidationPipe(PoCancelInputSchema)) dto: PoCancelInput,
   ): Promise<{ ok: true }> {
     return this.pos.cancel(id, dto.reason, user.userId);
+  }
+
+  /** Propose new line prices/quantities; applied only once approved. */
+  @Post(':id/amendments')
+  @RequirePermission(PERMISSIONS.PURCHASE_ORDER_UPDATE)
+  async amend(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(PoAmendInputSchema)) dto: PoAmendInput,
+  ): Promise<{ id: string }> {
+    return this.pos.requestAmendment(id, dto, user.userId);
   }
 
   @Post(':id/hold')

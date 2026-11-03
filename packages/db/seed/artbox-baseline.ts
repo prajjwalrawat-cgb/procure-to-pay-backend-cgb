@@ -183,6 +183,7 @@ async function main(): Promise<void> {
     { documentType: 'RFQ_AWARD', name: 'Award — standard', role: 'FINANCE_HEAD' },
     { documentType: 'CONTRACT', name: 'Contract — standard', role: 'PROCUREMENT_HEAD' },
     { documentType: 'CONTRACT_AMENDMENT', name: 'Contract amendment — standard', role: 'PROCUREMENT_HEAD' },
+    { documentType: 'PO_AMENDMENT', name: 'PO amendment — finance officer', role: 'FINANCE_OFFICER' },
   ] as const;
   for (const m of EXTRA_MATRICES) {
     const existing = await prisma.approvalMatrix.findFirst({
