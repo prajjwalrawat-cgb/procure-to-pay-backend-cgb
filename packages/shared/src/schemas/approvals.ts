@@ -366,6 +366,16 @@ const CONTRACT_AMENDMENT_FIELDS: ApprovalFieldDef[] = [
   { field: 'currency', label: 'Currency', type: 'enum', ops: ENUM_OPS },
 ];
 
+/** Fields mirror `ApprovalContextService.buildPoAmendment`. `total_amount` is
+ *  the order value after the change, so PO value tiers carry over unchanged. */
+const PO_AMENDMENT_FIELDS: ApprovalFieldDef[] = [
+  { field: 'total_amount', label: 'Order value after change', type: 'money', ops: MONEY_OPS },
+  { field: 'change_value', label: 'Change value', type: 'money', ops: MONEY_OPS },
+  { field: 'po_type', label: 'PO type', type: 'enum', ops: ENUM_OPS },
+  { field: 'vendor.is_msme', label: 'Vendor is MSME', type: 'boolean', ops: BOOL_OPS },
+  { field: 'currency', label: 'Currency', type: 'enum', ops: ENUM_OPS },
+];
+
 /** Fields mirror `ApprovalContextService.buildAward`. */
 const RFQ_AWARD_FIELDS: ApprovalFieldDef[] = [
   { field: 'total_amount', label: 'Award value', type: 'money', ops: MONEY_OPS },
@@ -383,6 +393,7 @@ export const APPROVAL_FIELDS: Partial<Record<DocumentType, ApprovalFieldDef[]>> 
   CONTRACT: CONTRACT_FIELDS,
   CONTRACT_AMENDMENT: CONTRACT_AMENDMENT_FIELDS,
   RFQ_AWARD: RFQ_AWARD_FIELDS,
+  PO_AMENDMENT: PO_AMENDMENT_FIELDS,
 };
 
 /** Document types the approval engine routes end-to-end. GRN is the only
@@ -397,6 +408,7 @@ export const LIVE_APPROVAL_DOC_TYPES: DocumentType[] = [
   'VENDOR_CHANGE',
   'CONTRACT',
   'CONTRACT_AMENDMENT',
+  'PO_AMENDMENT',
 ];
 
 /** Roles selectable as approval step approvers in the builder. TENANT_ADMIN is

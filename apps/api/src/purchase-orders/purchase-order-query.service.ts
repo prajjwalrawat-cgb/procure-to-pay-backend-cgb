@@ -5,6 +5,8 @@ import {
   taxKindLabel,
   type DeliveryAddress,
   type PaymentTerms,
+  type PoAmendmentLineChange,
+  type PoAmendmentView,
   type PoDetailResponse,
   type PoFulfilment,
   type PoLineView,
@@ -96,6 +98,15 @@ export class PurchaseOrderQueryService {
     };
   }
 
+  async amendmentPo(amendmentId: string): Promise<{ poId: string }> {
+    const a = await this.prisma.client.poAmendment.findUnique({
+      where: { id: amendmentId },
+      select: { poId: true },
+    });
+    if (!a) throw new NotFoundException('PO amendment not found');
+    return { poId: a.poId };
+  }
+
   async detail(id: string, userId: string): Promise<PoDetailResponse> {
     const billed = await this.billedByPoLine([id]);
     const po = await this.prisma.client.purchaseOrder.findUnique({
@@ -134,6 +145,12 @@ export class PurchaseOrderQueryService {
     const myStep = chain.find((s) => s.approverId === userId && s.decision === 'PENDING');
     const authors = await this.userNames(po.comments.map((c) => c.authorId));
     const activity = await this.activity(id);
+    const amendments = await this.amendments(id, userId);
+    const canAmend =
+      ['APPROVED', 'ISSUED', 'ACKNOWLEDGED'].includes(po.status) &&
+      po.lines.every((l) => new Decimal(l.qtyReceived.toString()).isZero()) &&
+      po.invoices.every((i) => i.status === 'REJECTED') &&
+      !amendments.some((a) => a.status === 'AWAITING_APPROVAL');
 
     return {
       id: po.id,
@@ -223,12 +240,48 @@ export class PurchaseOrderQueryService {
         'CANCELLED',
       ].includes(po.status),
       canHold: po.status === 'APPROVED' || po.status === 'ISSUED',
+      canAmend,
+      amendmentNo: po.amendmentNo,
+      amendments,
       fulfilmentPct: this.fulfilment(po.lines),
       fulfilment: this.fulfilmentOf(po.lines, billed),
     };
   }
 
   // ── internals ──────────────────────────────────────────────────────────────
+
+  /** Every amendment on the PO, newest first, each with its own approval chain. */
+  private async amendments(poId: string, userId: string): Promise<PoAmendmentView[]> {
+    const rows = await this.prisma.client.poAmendment.findMany({
+      where: { poId },
+      orderBy: { requestedAt: 'desc' },
+    });
+    if (rows.length === 0) return [];
+    const names = await this.userNames(
+      rows.map((r) => r.requestedBy).filter((v): v is string => !!v),
+    );
+    return Promise.all(
+      rows.map(async (r): Promise<PoAmendmentView> => {
+        const chain = await this.routing.getLiveChain('PO_AMENDMENT', r.id);
+        const mine = chain.find((s) => s.approverId === userId && s.decision === 'PENDING');
+        return {
+          id: r.id,
+          amendmentNo: r.amendmentNo,
+          status: r.status,
+          reason: r.reason,
+          lineChanges: r.lineChanges as unknown as PoAmendmentLineChange[],
+          beforeTotal: r.beforeTotal.toString(),
+          afterTotal: r.afterTotal.toString(),
+          requestedBy: r.requestedBy,
+          requestedByName: r.requestedBy ? (names.get(r.requestedBy) ?? null) : null,
+          requestedAt: r.requestedAt.toISOString(),
+          appliedAt: r.appliedAt?.toISOString() ?? null,
+          liveApprovalChain: chain,
+          myApprovalId: mine?.approvalId ?? null,
+        };
+      }),
+    );
+  }
 
   /**
    * Quantity billed per PO line by live invoices.

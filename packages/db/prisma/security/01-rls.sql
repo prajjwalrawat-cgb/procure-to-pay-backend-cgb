@@ -58,7 +58,9 @@ DECLARE
     -- Slice 13 mobile scanner
     'ScanEvent', 'CycleCountSession', 'CycleCountVariance', 'PickList', 'PickListLine',
     -- Slice 14 physical box tracking
-    'Box', 'BoxMove'
+    'Box', 'BoxMove',
+    -- PO amendments (maker-checker)
+    'PoAmendment'
   ];
 BEGIN
   FOREACH t IN ARRAY tenanted_tables LOOP

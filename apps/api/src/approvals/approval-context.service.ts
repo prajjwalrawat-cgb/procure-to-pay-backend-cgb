@@ -32,6 +32,8 @@ export class ApprovalContextService {
         return this.buildContract(documentId);
       case 'CONTRACT_AMENDMENT':
         return this.buildContractAmendment(documentId);
+      case 'PO_AMENDMENT':
+        return this.buildPoAmendment(documentId);
       default:
         throw new NotFoundException(
           `Approval context for ${documentType} is not available yet.`,
@@ -104,6 +106,13 @@ export class ApprovalContextService {
       });
       return a?.requestedBy ?? null;
     }
+    if (documentType === 'PO_AMENDMENT') {
+      const a = await this.prisma.client.poAmendment.findUnique({
+        where: { id: documentId },
+        select: { requestedBy: true },
+      });
+      return a?.requestedBy ?? null;
+    }
     return null;
   }
 
@@ -138,6 +147,33 @@ export class ApprovalContextService {
       total_amount: a.changeValue.toString(),
       currency: a.contract.currency,
       category: a.contract.category,
+    };
+  }
+
+  private async buildPoAmendment(id: string): Promise<ApprovalContext> {
+    const a = await this.prisma.client.poAmendment.findUnique({
+      where: { id },
+      include: {
+        po: {
+          select: {
+            poType: true,
+            currency: true,
+            vendor: { select: { isMsme: true, gstin: true } },
+          },
+        },
+      },
+    });
+    if (!a) throw new NotFoundException('PO amendment not found');
+    return {
+      documentType: 'PO_AMENDMENT',
+      documentId: id,
+      // The order value after the change, so a matrix tiered on PO value reads
+      // the same way here; `change_value` is the size of the swing either way.
+      total_amount: a.afterTotal.toString(),
+      change_value: a.afterTotal.minus(a.beforeTotal).abs().toString(),
+      currency: a.po.currency,
+      po_type: a.po.poType,
+      vendor: { is_msme: a.po.vendor?.isMsme ?? false, gstin: a.po.vendor?.gstin ?? null },
     };
   }
 

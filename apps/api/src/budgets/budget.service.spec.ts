@@ -135,3 +135,72 @@ describe('BudgetService.commitAmount', () => {
     );
   });
 });
+
+describe('BudgetService.adjustForPoAmendment', () => {
+  function withCommitments(
+    budget: ReturnType<typeof budgetRow>,
+    po: { amount: string; requisitionId: string | null },
+    pr: { amount: string } | null,
+  ) {
+    const built = build(budget);
+    const c = built.client.budgetCommitment as Record<string, unknown>;
+    c.findFirst = vi.fn().mockImplementation((args: { where: { poId?: string } }) =>
+      Promise.resolve(
+        args.where.poId
+          ? {
+              id: 'bcm_po',
+              budgetId: 'bdg_1',
+              costCenterId: 'cc_1',
+              requisitionId: po.requisitionId,
+              amount: new Decimal(po.amount),
+            }
+          : pr && { id: 'bcm_pr', amount: new Decimal(pr.amount) },
+      ),
+    );
+    c.update = vi.fn().mockResolvedValue({});
+    return built;
+  }
+  const updates = (client: ReturnType<typeof build>['client']) =>
+    (
+      (client.budgetCommitment as unknown as { update: ReturnType<typeof vi.fn> }).update.mock
+        .calls as [{ where: { id: string }; data: { amount: Decimal; status?: string } }][]
+    ).map(([a]) => [a.where.id, a.data.amount.toString(), a.data.status]);
+
+  it('draws an increase from the PR reservation first', async () => {
+    const { service, client } = withCommitments(
+      budgetRow(),
+      { amount: '45312', requisitionId: 'pr_1' },
+      { amount: '2000' },
+    );
+    await service.adjustForPoAmendment('po_1', '46256', 'usr_1');
+    expect(updates(client)).toEqual([
+      ['bcm_pr', '1056', 'PARTIALLY_TRANSFERRED'],
+      ['bcm_po', '46256', undefined],
+    ]);
+  });
+
+  it('refuses an increase the budget cannot cover', async () => {
+    const { service, client } = withCommitments(
+      budgetRow({ committedAmount: new Decimal('8000000') }),
+      { amount: '45312', requisitionId: null },
+      null,
+    );
+    await expect(service.adjustForPoAmendment('po_1', '46256', 'usr_1')).rejects.toThrow(
+      'exceeds the remaining budget',
+    );
+    expect(updates(client)).toEqual([]);
+  });
+
+  it('returns a decrease to the PR reservation', async () => {
+    const { service, client } = withCommitments(
+      budgetRow(),
+      { amount: '46256', requisitionId: 'pr_1' },
+      { amount: '0' },
+    );
+    await service.adjustForPoAmendment('po_1', '45312', 'usr_1');
+    expect(updates(client)).toEqual([
+      ['bcm_pr', '944', 'PARTIALLY_TRANSFERRED'],
+      ['bcm_po', '45312', undefined],
+    ]);
+  });
+});

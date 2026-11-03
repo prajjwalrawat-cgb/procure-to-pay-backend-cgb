@@ -1,8 +1,12 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, type OnModuleInit } from '@nestjs/common';
 import { Prisma, newId } from '@procureflow/db';
 import {
   computeDocTax,
+  computeLineTax,
   DOMAIN_EVENTS,
+  type PoAmendInput,
+  type PoAmendmentLineChange,
+  type TaxContext,
   type PoCreateFromContractInput,
   type PoCreateFromPrInput,
   type PoCreateInput,
@@ -21,7 +25,6 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PoDocumentService } from './po-document.service';
 import { PoTermsService } from './po-terms.service';
 import {
-  NotImplementedError,
   PurchaseOrderStateError,
   PurchaseOrderValidationError,
   VendorNotEligibleError,
@@ -39,12 +42,19 @@ const ISSUED_OR_BEYOND = [
 ];
 
 /**
+ * Statuses an amendment may be raised from — and must still be in when it is
+ * approved. Anything later has goods or invoices priced off the current lines,
+ * so cancel-and-replace stays the route there.
+ */
+const AMENDABLE = ['APPROVED', 'ISSUED', 'ACKNOWLEDGED'];
+
+/**
  * PurchaseOrderService (Slice 4). Creates POs from an approved PR (split-award
  * supported) or as a spot buy, routes them through the Slice 2 approval engine,
  * and issues them — generating a signed PDF and transferring budget from the PR.
  */
 @Injectable()
-export class PurchaseOrderService {
+export class PurchaseOrderService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
@@ -56,6 +66,12 @@ export class PurchaseOrderService {
     private readonly notifications: NotificationService,
     private readonly terms: PoTermsService,
   ) {}
+
+  onModuleInit(): void {
+    this.routing.onApproved('PO_AMENDMENT', (id, actorId) =>
+      this.onAmendmentApproved(id, actorId),
+    );
+  }
 
   /** Dispatch the union create schema (from-PR, spot-buy, or contract call-off). */
   /**
@@ -94,6 +110,34 @@ export class PurchaseOrderService {
       ...defaultPlantQuery(this.tenantId()),
       select: { id: true, stateCode: true },
     });
+  }
+
+  /**
+   * Stamp each line's tax-inclusive total, computed against the same place of
+   * supply as the header totals so the lines always add up to the order value.
+   */
+  private withLineTotals<
+    L extends {
+      qtyOrdered: Prisma.Decimal;
+      unitPrice: Prisma.Decimal;
+      discountPct: Prisma.Decimal;
+      taxRate: Prisma.Decimal;
+    },
+  >(lines: L[], ctx: TaxContext): (L & { lineTotal: Prisma.Decimal })[] {
+    return lines.map((l) => ({
+      ...l,
+      lineTotal: new Prisma.Decimal(
+        computeLineTax(
+          {
+            qty: l.qtyOrdered.toString(),
+            unitPrice: l.unitPrice.toString(),
+            discountPct: l.discountPct.toString(),
+            taxRate: l.taxRate.toString(),
+          },
+          ctx,
+        ).lineTotal,
+      ),
+    }));
   }
 
   async create(input: PoCreateInput, actorId: string): Promise<{ id: string }> {
@@ -186,13 +230,17 @@ export class PurchaseOrderService {
     });
 
     const plant = await this.resolveBillToPlant(input.billToPlantId);
+    const taxCtx: TaxContext = {
+      plantStateCode: plant?.stateCode ?? '',
+      vendorGstin: vendor.gstin,
+    };
     const tax = computeDocTax(
       lines.map((l) => ({
         qty: l.qtyOrdered.toString(),
         unitPrice: l.unitPrice.toString(),
         taxRate: l.taxRate.toString(),
       })),
-      { plantStateCode: plant?.stateCode ?? '', vendorGstin: vendor.gstin },
+      taxCtx,
     );
 
     const skip = contract.skipPoApprovalWithinContract;
@@ -218,7 +266,7 @@ export class PurchaseOrderService {
         expectedDeliveryDate: new Date(input.expectedDeliveryDate),
         expectedAt: new Date(input.expectedDeliveryDate),
         createdBy: actorId,
-        lines: { createMany: { data: lines } },
+        lines: { createMany: { data: this.withLineTotals(lines, taxCtx) } },
       },
     });
 
@@ -318,16 +366,17 @@ export class PurchaseOrderService {
     });
 
     const billTo = await this.resolveBillToPlant(input.billToPlantId, pr.plantId);
+    const taxCtx: TaxContext = {
+      plantStateCode: billTo?.stateCode ?? pr.plant.stateCode,
+      vendorGstin: vendor.gstin,
+    };
     const tax = computeDocTax(
       lines.map((l) => ({
         qty: l.qtyOrdered.toString(),
         unitPrice: l.unitPrice.toString(),
         taxRate: l.taxRate.toString(),
       })),
-      {
-        plantStateCode: billTo?.stateCode ?? pr.plant.stateCode,
-        vendorGstin: vendor.gstin,
-      },
+      taxCtx,
     );
 
     const id = newId('purchaseOrder');
@@ -351,7 +400,7 @@ export class PurchaseOrderService {
         expectedDeliveryDate: new Date(input.expectedDeliveryDate),
         expectedAt: new Date(input.expectedDeliveryDate),
         createdBy: actorId,
-        lines: { createMany: { data: lines } },
+        lines: { createMany: { data: this.withLineTotals(lines, taxCtx) } },
       },
     });
 
@@ -403,6 +452,10 @@ export class PurchaseOrderService {
       taxRate: new Prisma.Decimal(line.taxRate),
       glAccount: line.glAccount ?? null,
     }));
+    const taxCtx: TaxContext = {
+      plantStateCode: plant?.stateCode ?? '',
+      vendorGstin: vendor.gstin,
+    };
     const tax = computeDocTax(
       lines.map((l) => ({
         qty: l.qtyOrdered.toString(),
@@ -410,7 +463,7 @@ export class PurchaseOrderService {
         discountPct: l.discountPct.toString(),
         taxRate: l.taxRate.toString(),
       })),
-      { plantStateCode: plant?.stateCode ?? '', vendorGstin: vendor.gstin },
+      taxCtx,
     );
 
     // No value ceiling on a spot buy: procurement raises these against an
@@ -439,7 +492,7 @@ export class PurchaseOrderService {
         expectedDeliveryDate: new Date(input.expectedDeliveryDate),
         expectedAt: new Date(input.expectedDeliveryDate),
         createdBy: actorId,
-        lines: { createMany: { data: lines } },
+        lines: { createMany: { data: this.withLineTotals(lines, taxCtx) } },
       },
     });
     // Reserve budget immediately (no PR to transfer from).
@@ -659,6 +712,24 @@ export class PurchaseOrderService {
     await this.prisma.client.approval.deleteMany({
       where: { documentType: 'PURCHASE_ORDER', documentId: id },
     });
+    // An amendment still in flight has nothing left to amend.
+    const openAmendments = await this.prisma.client.poAmendment.findMany({
+      where: { poId: id, status: 'AWAITING_APPROVAL' },
+      select: { id: true },
+    });
+    if (openAmendments.length > 0) {
+      await this.prisma.client.approval.deleteMany({
+        where: {
+          documentType: 'PO_AMENDMENT',
+          documentId: { in: openAmendments.map((a) => a.id) },
+          decision: 'PENDING',
+        },
+      });
+      await this.prisma.client.poAmendment.updateMany({
+        where: { id: { in: openAmendments.map((a) => a.id) } },
+        data: { status: 'REJECTED' },
+      });
+    }
     for (const line of po.lines) {
       if (line.prLineId) {
         await this.prisma.client.requisitionLine.update({
@@ -718,11 +789,326 @@ export class PurchaseOrderService {
     return { ok: true };
   }
 
-  /** Slice 4: amendment is stubbed — create an amendment PO instead (Slice 5.5). */
-  amend(_id: string, _actorId: string): never {
-    throw new NotImplementedError(
-      'PO amendment is not implemented in Slice 4 (backlog: Slice 5.5).',
+  /**
+   * Maker-checker change to an approved or issued PO's line prices/quantities.
+   *
+   * Nothing on the PO changes here: the proposed values are parked on a
+   * PoAmendment and routed through the PO_AMENDMENT approval. Only once that
+   * is approved does `onAmendmentApproved` write them onto the order.
+   */
+  async requestAmendment(
+    id: string,
+    input: PoAmendInput,
+    actorId: string,
+  ): Promise<{ id: string }> {
+    const po = await this.prisma.client.purchaseOrder.findUnique({
+      where: { id },
+      include: { lines: { orderBy: { lineNo: 'asc' } }, vendor: true, requisition: true },
+    });
+    if (!po) throw new NotFoundException('Purchase order not found');
+    await this.assertAmendable(po);
+    const pending = await this.prisma.client.poAmendment.count({
+      where: { poId: id, status: 'AWAITING_APPROVAL' },
+    });
+    if (pending > 0) {
+      throw new PurchaseOrderStateError(
+        'An amendment to this PO is already awaiting approval.',
+      );
+    }
+
+    const lineById = new Map(po.lines.map((l) => [l.id, l]));
+    const seen = new Set<string>();
+    const changes: PoAmendmentLineChange[] = [];
+    for (const proposed of input.lines) {
+      const line = lineById.get(proposed.lineId);
+      if (!line) {
+        throw new PurchaseOrderValidationError('Line is not on this PO.', {
+          lineId: proposed.lineId,
+        });
+      }
+      if (seen.has(line.id)) {
+        throw new PurchaseOrderValidationError('Duplicate line in the amendment.', {
+          lineId: line.id,
+        });
+      }
+      seen.add(line.id);
+      const qty = new Decimal(proposed.qtyOrdered);
+      const price = new Decimal(proposed.unitPrice);
+      if (qty.lessThanOrEqualTo(0)) {
+        throw new PurchaseOrderValidationError('Quantity must be greater than zero.', {
+          lineNo: line.lineNo,
+        });
+      }
+      if (price.lessThan(0)) {
+        throw new PurchaseOrderValidationError('Price cannot be negative.', {
+          lineNo: line.lineNo,
+        });
+      }
+      const priceChanged = !price.equals(line.unitPrice.toString());
+      const qtyChanged = !qty.equals(line.qtyOrdered.toString());
+      if (!priceChanged && !qtyChanged) continue;
+      // A call-off's price comes from the contract's rate card; the contract
+      // amendment is the only sanctioned way to change it (ADR-029).
+      if (priceChanged && line.contractLineId) {
+        throw new PurchaseOrderValidationError(
+          'Contract call-off prices come from the rate card — amend the contract instead.',
+          { lineNo: line.lineNo },
+        );
+      }
+      changes.push({
+        lineId: line.id,
+        lineNo: line.lineNo,
+        itemDesc: line.itemDesc,
+        uom: line.uom,
+        before: {
+          qtyOrdered: line.qtyOrdered.toString(),
+          unitPrice: line.unitPrice.toString(),
+        },
+        after: { qtyOrdered: qty.toFixed(4), unitPrice: price.toFixed(4) },
+      });
+    }
+    if (changes.length === 0) {
+      throw new PurchaseOrderValidationError('Nothing changed — edit a price or quantity.');
+    }
+    await this.assertPrQtyAvailable(changes, po.lines);
+
+    const taxCtx = await this.taxContextFor(po);
+    const before = this.totalsOf(po.lines, [], taxCtx);
+    const after = this.totalsOf(po.lines, changes, taxCtx);
+
+    const amendmentId = newId('poAmendment');
+    const amendmentNo =
+      (await this.prisma.client.poAmendment.count({ where: { poId: id } })) + 1;
+    await this.prisma.client.poAmendment.create({
+      data: {
+        id: amendmentId,
+        tenantId: this.tenantId(),
+        poId: id,
+        amendmentNo,
+        reason: input.reason,
+        lineChanges: changes as unknown as Prisma.InputJsonValue,
+        beforeTotal: new Prisma.Decimal(before.total),
+        afterTotal: new Prisma.Decimal(after.total),
+        requestedBy: actorId,
+      },
+    });
+    await this.audit.record({
+      action: 'PO_AMENDMENT_REQUESTED',
+      entityType: 'PurchaseOrder',
+      entityId: id,
+      actorId,
+      before: { total: before.total },
+      after: { amendmentId, amendmentNo, total: after.total, reason: input.reason },
+    });
+    await this.routing.submit('PO_AMENDMENT', amendmentId, actorId);
+    return { id: amendmentId };
+  }
+
+  /** Approval hook: write an approved amendment onto the PO. */
+  private async onAmendmentApproved(amendmentId: string, actorId: string): Promise<void> {
+    const amendment = await this.prisma.client.poAmendment.findUnique({
+      where: { id: amendmentId },
+    });
+    if (!amendment) throw new NotFoundException('PO amendment not found');
+
+    // Maker-checker: the routing engine skips the requester's own step, so a
+    // matrix that resolves only to them would approve with no one checking.
+    // Throwing here rolls the whole request back.
+    const checked = await this.prisma.client.approval.count({
+      where: {
+        documentType: 'PO_AMENDMENT',
+        documentId: amendmentId,
+        decision: 'APPROVED',
+        approverId: { not: amendment.requestedBy ?? '' },
+      },
+    });
+    if (checked === 0) {
+      throw new PurchaseOrderStateError(
+        'A PO amendment must be approved by someone other than the person who requested it, ' +
+          'and the PO amendment approver is the requester here.',
+      );
+    }
+
+    const po = await this.prisma.client.purchaseOrder.findUnique({
+      where: { id: amendment.poId },
+      include: { lines: { orderBy: { lineNo: 'asc' } }, vendor: true, requisition: true },
+    });
+    if (!po) throw new NotFoundException('Purchase order not found');
+    // The order may have moved on (received, invoiced, held) while this waited.
+    await this.assertAmendable(po);
+
+    const changes = amendment.lineChanges as unknown as PoAmendmentLineChange[];
+    await this.assertPrQtyAvailable(changes, po.lines);
+    const taxCtx = await this.taxContextFor(po);
+    const before = this.totalsOf(po.lines, [], taxCtx);
+    const after = this.totalsOf(po.lines, changes, taxCtx);
+
+    // Budget first: a breach refuses the approval before anything is written.
+    await this.budgets.adjustForPoAmendment(po.id, after.total, actorId);
+
+    const changeById = new Map(changes.map((c) => [c.lineId, c]));
+    for (const line of this.withLineTotals(after.lines, taxCtx)) {
+      await this.prisma.client.purchaseOrderLine.update({
+        where: { id: line.id },
+        data: {
+          qtyOrdered: line.qtyOrdered,
+          unitPrice: line.unitPrice,
+          lineTotal: line.lineTotal,
+        },
+      });
+      // Keep the PR's split-award tracking in step with the new quantity.
+      const change = changeById.get(line.id);
+      if (change && line.prLineId) {
+        const qtyDelta = new Decimal(change.after.qtyOrdered).minus(
+          change.before.qtyOrdered,
+        );
+        if (!qtyDelta.isZero()) {
+          await this.prisma.client.requisitionLine.update({
+            where: { id: line.prLineId },
+            data: { qtyIssued: { increment: new Prisma.Decimal(qtyDelta.toFixed(4)) } },
+          });
+        }
+      }
+    }
+
+    // An issued order goes back to the vendor: new PDF revision, and their
+    // acknowledgement was of the old terms, so they acknowledge again.
+    const issued = po.status === 'ISSUED' || po.status === 'ACKNOWLEDGED';
+    await this.prisma.client.purchaseOrder.update({
+      where: { id: po.id },
+      data: {
+        totalAmount: new Prisma.Decimal(after.total),
+        taxAmount: new Prisma.Decimal(after.taxAmount),
+        amendmentNo: amendment.amendmentNo,
+        ...(po.status === 'ACKNOWLEDGED'
+          ? { status: 'ISSUED', acknowledgedAt: null, acknowledgedBy: null }
+          : {}),
+      },
+    });
+    await this.prisma.client.poAmendment.update({
+      where: { id: amendmentId },
+      data: { appliedAt: new Date() },
+    });
+    if (issued) {
+      const { buffer, hash } = await this.pdf.generate(po.id);
+      const s3Key = `${po.tenantId}/purchase-orders/${po.id}/${po.number}-A${amendment.amendmentNo}.pdf`;
+      await this.storage.put(s3Key, buffer, 'application/pdf').catch(() => s3Key);
+      await this.prisma.client.purchaseOrder.update({
+        where: { id: po.id },
+        data: { pdfS3Key: s3Key, pdfGeneratedHash: hash },
+      });
+      await this.notifyVendor(po.vendorId, po.id, po.number, 'PO_AMENDED');
+    }
+    await this.recomputePrStatus(po.requisitionId);
+    await this.audit.record({
+      action: 'PO_AMENDED',
+      entityType: 'PurchaseOrder',
+      entityId: po.id,
+      actorId,
+      before: {
+        total: before.total,
+        lines: changes.map((c) => ({ lineNo: c.lineNo, ...c.before })),
+      },
+      after: {
+        amendmentId,
+        amendmentNo: amendment.amendmentNo,
+        total: after.total,
+        lines: changes.map((c) => ({ lineNo: c.lineNo, ...c.after })),
+      },
+    });
+  }
+
+  /** Status and fulfilment gate shared by request and approval. */
+  private async assertAmendable(po: {
+    id: string;
+    status: string;
+    lines: { qtyReceived: Prisma.Decimal }[];
+  }): Promise<void> {
+    if (!AMENDABLE.includes(po.status)) {
+      throw new PurchaseOrderStateError(
+        'Only an approved, issued or acknowledged PO can be amended.',
+        { status: po.status },
+      );
+    }
+    if (po.lines.some((l) => new Decimal(l.qtyReceived.toString()).greaterThan(0))) {
+      throw new PurchaseOrderStateError(
+        'Goods have been received against this PO — cancel it and raise a replacement instead.',
+      );
+    }
+    const invoices = await this.prisma.client.invoice.count({
+      where: { poId: po.id, status: { not: 'REJECTED' } },
+    });
+    if (invoices > 0) {
+      throw new PurchaseOrderStateError(
+        'This PO has been invoiced — cancel it and raise a replacement instead.',
+      );
+    }
+  }
+
+  /** A PR-backed line cannot grow past what its requisition line has left. */
+  private async assertPrQtyAvailable(
+    changes: PoAmendmentLineChange[],
+    lines: { id: string; prLineId: string | null }[],
+  ): Promise<void> {
+    for (const c of changes) {
+      const prLineId = lines.find((l) => l.id === c.lineId)?.prLineId;
+      if (!prLineId) continue;
+      const increase = new Decimal(c.after.qtyOrdered).minus(c.before.qtyOrdered);
+      if (increase.lessThanOrEqualTo(0)) continue;
+      const prLine = await this.prisma.client.requisitionLine.findUnique({
+        where: { id: prLineId },
+      });
+      if (!prLine) continue;
+      const left = new Decimal(prLine.qty.toString()).minus(prLine.qtyIssued.toString());
+      if (increase.greaterThan(left)) {
+        throw new PurchaseOrderValidationError(
+          'Quantity exceeds what is left on the requisition line.',
+          { lineNo: c.lineNo, remaining: left.toFixed(4), requested: increase.toFixed(4) },
+        );
+      }
+    }
+  }
+
+  private async taxContextFor(po: {
+    billToPlantId: string | null;
+    requisition: { plantId: string } | null;
+    vendor: { gstin: string | null };
+  }): Promise<TaxContext> {
+    const plant = await this.resolveBillToPlant(po.billToPlantId, po.requisition?.plantId);
+    return { plantStateCode: plant?.stateCode ?? '', vendorGstin: po.vendor.gstin };
+  }
+
+  /** The PO's lines with `changes` applied, and the document totals they give. */
+  private totalsOf<
+    L extends {
+      id: string;
+      qtyOrdered: Prisma.Decimal;
+      unitPrice: Prisma.Decimal;
+      discountPct: Prisma.Decimal;
+      taxRate: Prisma.Decimal;
+    },
+  >(lines: L[], changes: PoAmendmentLineChange[], ctx: TaxContext) {
+    const changeById = new Map(changes.map((c) => [c.lineId, c]));
+    const next = lines.map((l) => {
+      const c = changeById.get(l.id);
+      return c
+        ? {
+            ...l,
+            qtyOrdered: new Prisma.Decimal(c.after.qtyOrdered),
+            unitPrice: new Prisma.Decimal(c.after.unitPrice),
+          }
+        : l;
+    });
+    const tax = computeDocTax(
+      next.map((l) => ({
+        qty: l.qtyOrdered.toString(),
+        unitPrice: l.unitPrice.toString(),
+        discountPct: l.discountPct.toString(),
+        taxRate: l.taxRate.toString(),
+      })),
+      ctx,
     );
+    return { lines: next, total: tax.total, taxAmount: tax.taxAmount };
   }
 
   async addComment(id: string, body: string, actorId: string): Promise<{ id: string }> {
@@ -837,7 +1223,9 @@ export class PurchaseOrderService {
         title:
           type === 'PO_CANCELLED'
             ? `Purchase order ${poNumber} cancelled`
-            : `New purchase order ${poNumber}`,
+            : type === 'PO_AMENDED'
+              ? `Purchase order ${poNumber} amended — please review and acknowledge`
+              : `New purchase order ${poNumber}`,
         entityType: 'PurchaseOrder',
         entityId: poId,
         href: `/purchase-orders/${poId}`,

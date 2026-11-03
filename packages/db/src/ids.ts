@@ -27,6 +27,7 @@ export const ID_PREFIX = {
   budgetAdjustment: 'badj',
   purchaseOrder: 'po',
   purchaseOrderLine: 'pol',
+  poAmendment: 'pam',
   purchaseOrderComment: 'poc',
   purchaseOrderAttachment: 'poa',
   purchaseOrderTerm: 'pot',

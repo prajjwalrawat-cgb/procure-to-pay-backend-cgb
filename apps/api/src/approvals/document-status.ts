@@ -113,6 +113,18 @@ const DOC_META: Partial<Record<DocumentType, DocMeta>> = {
       REVERTED: 'DRAFT',
     },
   },
+  // PO amendments (maker-checker). PurchaseOrderService.onAmendmentApproved
+  // writes the proposed lines onto the PO; until then the PO is untouched.
+  // Changes-requested ends this amendment — the buyer raises a fresh one.
+  PO_AMENDMENT: {
+    table: '"PoAmendment"',
+    status: {
+      AWAITING: 'AWAITING_APPROVAL',
+      APPROVED: 'APPROVED',
+      REJECTED: 'REJECTED',
+      REVERTED: 'RETURNED',
+    },
+  },
 };
 
 export function docMeta(documentType: DocumentType): DocMeta {

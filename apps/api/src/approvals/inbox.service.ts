@@ -97,7 +97,8 @@ export class InboxService {
     const runIds = idsOf('PAYMENT_RUN');
     const prIds = idsOf('REQUISITION');
     const poIds = idsOf('PURCHASE_ORDER');
-    const [invoices, runs, requisitions, purchaseOrders] = await Promise.all([
+    const amendmentIds = idsOf('PO_AMENDMENT');
+    const [invoices, runs, requisitions, purchaseOrders, amendments] = await Promise.all([
       this.prisma.client.invoice.findMany({
         where: { id: { in: invoiceIds } },
         select: {
@@ -141,11 +142,22 @@ export class InboxService {
           vendor: { select: { name: true } },
         },
       }),
+      this.prisma.client.poAmendment.findMany({
+        where: { id: { in: amendmentIds } },
+        select: {
+          id: true,
+          amendmentNo: true,
+          afterTotal: true,
+          requestedBy: true,
+          po: { select: { number: true, currency: true, vendor: { select: { name: true } } } },
+        },
+      }),
     ]);
     const invById = new Map(invoices.map((i) => [i.id, i]));
     const runById = new Map(runs.map((r) => [r.id, r]));
     const prById = new Map(requisitions.map((p) => [p.id, p]));
     const poById = new Map(purchaseOrders.map((p) => [p.id, p]));
+    const amendmentById = new Map(amendments.map((m) => [m.id, m]));
 
     const userIds = [
       ...new Set(
@@ -154,6 +166,7 @@ export class InboxService {
           ...runs.map((r) => r.composedBy),
           ...requisitions.map((p) => p.requesterId),
           ...purchaseOrders.map((p) => p.createdBy),
+          ...amendments.map((m) => m.requestedBy),
           ...approvals.map((a) => a.delegatedFromId),
         ].filter((v): v is string => !!v),
       ),
@@ -172,21 +185,42 @@ export class InboxService {
       const pr = a.documentType === 'REQUISITION' ? prById.get(a.documentId) : undefined;
       const po =
         a.documentType === 'PURCHASE_ORDER' ? poById.get(a.documentId) : undefined;
+      const amd =
+        a.documentType === 'PO_AMENDMENT' ? amendmentById.get(a.documentId) : undefined;
       const submitterId =
-        inv?.assignedToId ?? run?.composedBy ?? pr?.requesterId ?? po?.createdBy ?? null;
+        inv?.assignedToId ??
+        run?.composedBy ??
+        pr?.requesterId ??
+        po?.createdBy ??
+        amd?.requestedBy ??
+        null;
       const number =
-        inv?.number ?? run?.number ?? pr?.number ?? po?.number ?? a.documentId;
+        inv?.number ??
+        run?.number ??
+        pr?.number ??
+        po?.number ??
+        (amd ? `${amd.po.number} · amendment ${amd.amendmentNo}` : a.documentId);
       const amount =
-        inv?.grossAmount ?? run?.grossAmount ?? pr?.totalAmount ?? po?.totalAmount;
+        inv?.grossAmount ??
+        run?.grossAmount ??
+        pr?.totalAmount ??
+        po?.totalAmount ??
+        amd?.afterTotal;
       return {
         approvalId: a.id,
         documentType: a.documentType,
         documentId: a.documentId,
-        title: run?.name ?? pr?.title ?? po?.vendor?.name ?? number,
+        title: run?.name ?? pr?.title ?? po?.vendor?.name ?? amd?.po.vendor.name ?? number,
         number,
         submitterName: submitterId ? (nameById.get(submitterId) ?? null) : null,
         amount: amount?.toString() ?? null,
-        currency: inv?.currency ?? run?.currency ?? pr?.currency ?? po?.currency ?? 'INR',
+        currency:
+          inv?.currency ??
+          run?.currency ??
+          pr?.currency ??
+          po?.currency ??
+          amd?.po.currency ??
+          'INR',
         daysPending: Math.max(
           0,
           Math.floor((now - a.createdAt.getTime()) / (24 * 60 * 60 * 1000)),
