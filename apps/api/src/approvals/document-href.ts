@@ -20,6 +20,8 @@ const HREFS: Record<DocumentType, (id: string) => string> = {
   CONTRACT: (id) => `/contracts/${id}`,
   CONTRACT_AMENDMENT: (id) => `/contracts/${id}`,
   VENDOR_ONBOARDING: (id) => `/vendors/onboarding/${id}`,
+  // Keyed by amendment id; the page redirects to the PO it amends.
+  PO_AMENDMENT: (id) => `/purchase-orders/amendments/${id}`,
   // No detail page yet for either of these (the award page is keyed by RFQ id,
   // not award id, and vendor change requests are only shown inside Vendor 360),
   // so both land on the list the reviewer can work from rather than a 404.

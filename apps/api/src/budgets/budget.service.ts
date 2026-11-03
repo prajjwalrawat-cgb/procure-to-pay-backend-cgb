@@ -399,6 +399,90 @@ export class BudgetService {
     }
   }
 
+  /**
+   * Move a PO's live commitment to its amended total.
+   *
+   * An increase draws first on what the originating PR still holds in reserve,
+   * then on the cost center's free budget, and is refused if that would breach
+   * it. A decrease goes back to the PR's reservation (or, for a spot buy, simply
+   * frees the budget). A PO that holds no commitment yet (approved, not issued)
+   * has nothing to adjust: issue() commits whatever the total is by then.
+   */
+  async adjustForPoAmendment(
+    poId: string,
+    newTotal: string,
+    actorId: string,
+  ): Promise<void> {
+    const commitment = await this.prisma.client.budgetCommitment.findFirst({
+      where: { poId, sourceType: { in: ['PO', 'SPOT_BUY'] }, status: 'COMMITTED' },
+    });
+    if (!commitment) return;
+    const before = new Decimal(commitment.amount.toString());
+    const after = new Decimal(newTotal);
+    const delta = after.minus(before);
+    if (delta.isZero()) return;
+    await this.lockBudget(commitment.budgetId);
+
+    const prCommitment = commitment.requisitionId
+      ? await this.prisma.client.budgetCommitment.findFirst({
+          where: {
+            requisitionId: commitment.requisitionId,
+            sourceType: 'PR',
+            status: { in: ['COMMITTED', 'PARTIALLY_TRANSFERRED', 'TRANSFERRED'] },
+          },
+        })
+      : null;
+    const prRemaining = new Decimal(prCommitment?.amount.toString() ?? '0');
+
+    let prAfter = prRemaining;
+    if (delta.greaterThan(0)) {
+      const fromPr = Decimal.min(prRemaining, delta);
+      prAfter = prRemaining.minus(fromPr);
+      const fromBudget = delta.minus(fromPr);
+      if (fromBudget.greaterThan(0)) {
+        const check = await this.checkAvailability(
+          commitment.costCenterId,
+          fromBudget.toFixed(4),
+        );
+        if (!check.available) {
+          throw new BudgetBreachError('The amended order exceeds the remaining budget.', {
+            ...check,
+          });
+        }
+      }
+    } else if (prCommitment) {
+      prAfter = prRemaining.plus(delta.negated());
+    }
+
+    if (prCommitment && !prAfter.equals(prRemaining)) {
+      await this.prisma.client.budgetCommitment.update({
+        where: { id: prCommitment.id },
+        data: {
+          amount: new Prisma.Decimal(prAfter.toFixed(4)),
+          status: prAfter.isZero() ? 'TRANSFERRED' : 'PARTIALLY_TRANSFERRED',
+        },
+      });
+    }
+    await this.prisma.client.budgetCommitment.update({
+      where: { id: commitment.id },
+      data: { amount: new Prisma.Decimal(after.toFixed(4)) },
+    });
+    await this.recompute(commitment.budgetId);
+    await this.audit.record({
+      action: 'BUDGET_ADJUSTED',
+      entityType: 'Budget',
+      entityId: commitment.budgetId,
+      actorId,
+      before: { commitmentId: commitment.id, amount: before.toFixed(4) },
+      after: {
+        poId,
+        amount: after.toFixed(4),
+        prCommitmentId: prCommitment?.id ?? null,
+        prRemaining: prAfter.toFixed(4),
+      },
+    });
+  }
+
   async getUtilization(budgetId: string): Promise<BudgetUtilization> {
     const budget = await this.prisma.client.budget.findUniqueOrThrow({
       where: { id: budgetId },

@@ -342,5 +342,6 @@ export const DOCUMENT_TYPE = [
   'RFQ_AWARD', // Slice 6 — sourcing award routes through the Slice 2 engine
   'VENDOR_ONBOARDING', // Slice 7 — vendor onboarding routes through the Slice 2 engine
   'VENDOR_CHANGE', // Slice 7 — material post-activation change approval
+  'PO_AMENDMENT', // price/qty change to an approved or issued PO (maker-checker)
 ] as const;
 export type DocumentType = (typeof DOCUMENT_TYPE)[number];

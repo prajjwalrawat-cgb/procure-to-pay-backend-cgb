@@ -717,6 +717,11 @@ export class ApprovalRoutingService {
         where: { id: documentId },
         data: { status: status as Prisma.ContractAmendmentUpdateInput['status'] },
       });
+    } else if (documentType === 'PO_AMENDMENT') {
+      await this.prisma.client.poAmendment.update({
+        where: { id: documentId },
+        data: { status: status as Prisma.PoAmendmentUpdateInput['status'] },
+      });
     }
   }
 
@@ -768,6 +773,11 @@ export class ApprovalRoutingService {
       });
     } else if (documentType === 'CONTRACT_AMENDMENT') {
       await this.prisma.client.contractAmendment.update({
+        where: { id: documentId },
+        data: { approvalMatrixSnapshot: json },
+      });
+    } else if (documentType === 'PO_AMENDMENT') {
+      await this.prisma.client.poAmendment.update({
         where: { id: documentId },
         data: { approvalMatrixSnapshot: json },
       });
@@ -836,6 +846,13 @@ export class ApprovalRoutingService {
     }
     if (documentType === 'CONTRACT_AMENDMENT') {
       const a = await this.prisma.client.contractAmendment.findUnique({
+        where: { id: documentId },
+        select: { approvalMatrixSnapshot: true },
+      });
+      return (a?.approvalMatrixSnapshot as unknown as MatrixSnapshot | null) ?? null;
+    }
+    if (documentType === 'PO_AMENDMENT') {
+      const a = await this.prisma.client.poAmendment.findUnique({
         where: { id: documentId },
         select: { approvalMatrixSnapshot: true },
       });
@@ -919,6 +936,8 @@ function entityType(documentType: DocumentType): string {
       return 'VendorOnboarding';
     case 'VENDOR_CHANGE':
       return 'VendorChangeRequest';
+    case 'PO_AMENDMENT':
+      return 'PoAmendment';
   }
 }
 
