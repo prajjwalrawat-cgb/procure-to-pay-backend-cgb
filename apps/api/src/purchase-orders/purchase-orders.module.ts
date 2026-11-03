@@ -7,6 +7,7 @@ import { StorageModule } from '../common/storage/storage.service';
 import { SettingsModule } from '../settings/settings.module';
 import { PoAttachmentService } from './po-attachment.service';
 import { PoDocumentService } from './po-document.service';
+import { PoInvoiceReminderService } from './po-invoice-reminder.service';
 import { PoTermsService } from './po-terms.service';
 import { PurchaseOrderQueryService } from './purchase-order-query.service';
 import { PurchaseOrderService } from './purchase-order.service';
@@ -34,6 +35,8 @@ import { VendorPoService } from './vendor-po.service';
     PurchaseOrderQueryService,
     PoDocumentService,
     PoAttachmentService,
+    // Daily chase for issued POs still waiting on an invoice.
+    PoInvoiceReminderService,
     PoTermsService,
     VendorPoService,
   ],
