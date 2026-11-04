@@ -32,7 +32,10 @@ AS $$
   -- and reported "Invalid credentials", and forgot-password silently sent
   -- nothing. Writes normalise now, but the lookup must not depend on that.
   WHERE lower(u.email) = lower(p_email)
-  LIMIT 1;
+  -- One person can hold a row per organisation (see 05-workspaces.sql), so this
+  -- returns every match in a stable order: active and verified first, oldest
+  -- first. Login takes the first row whose password verifies.
+  ORDER BY u."isActive" DESC, (u.email_verified_at IS NULL), u."createdAt", u.id;
 $$;
 
 REVOKE EXECUTE ON FUNCTION auth_find_user(text) FROM PUBLIC;

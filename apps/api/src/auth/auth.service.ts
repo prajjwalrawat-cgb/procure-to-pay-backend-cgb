@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   Logger,
   UnauthorizedException,
@@ -38,6 +39,12 @@ interface AuthRow {
   is_active: boolean;
 }
 
+export interface WorkspaceRow {
+  userId: string;
+  tenantId: string;
+  tenantName: string;
+}
+
 interface RequestMeta {
   ipAddress?: string;
   userAgent?: string;
@@ -60,13 +67,25 @@ export class AuthService {
     portal: Portal,
     meta: RequestMeta,
   ): Promise<LoginResponse> {
-    const user = await this.findUserForAuth(input.email);
+    // One person may hold an account in several organisations under the same
+    // email (workspaces), each with its own password hash. Sign in to the first
+    // active account the password opens; the rest are reachable by switching.
+    const candidates = (await this.findUsersForAuth(input.email)).filter(
+      (u) => u.is_active,
+    );
     // Uniform failure — never reveal whether the email exists (§ Slice 0 auth).
-    if (!user || !user.is_active) throw new UnauthorizedException('Invalid credentials');
+    if (candidates.length === 0) throw new UnauthorizedException('Invalid credentials');
 
-    const passwordOk = await argonVerify(user.argon_hash, input.password);
-    if (!passwordOk) {
-      await this.auditAuth(user.tenant_id, user.id, 'auth.login_failed', meta);
+    let user: AuthRow | undefined;
+    for (const candidate of candidates) {
+      if (await argonVerify(candidate.argon_hash, input.password)) {
+        user = candidate;
+        break;
+      }
+    }
+    if (!user) {
+      const first = candidates[0]!;
+      await this.auditAuth(first.tenant_id, first.id, 'auth.login_failed', meta);
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -234,6 +253,104 @@ export class AuthService {
     };
   }
 
+  /**
+   * Move the session into another organisation the caller belongs to. Public
+   * at the guard (like refresh): the refresh token in the body is the proof of
+   * identity, and the request must not run inside the current tenant's RLS
+   * transaction because it reads the target tenant. The old session is revoked
+   * and a new one is issued for the caller's account in the target tenant.
+   */
+  async switchWorkspace(
+    refreshToken: string,
+    tenantId: string,
+    meta: RequestMeta,
+  ): Promise<LoginResponse> {
+    let payload;
+    try {
+      payload = await this.tokens.verify(refreshToken);
+    } catch {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+    if (payload.type !== 'refresh')
+      throw new UnauthorizedException('Not a refresh token');
+    if (payload.aud !== 'buyer') {
+      throw new ForbiddenException('Workspaces are not available on this portal');
+    }
+
+    const session = await this.prisma.session.findFirst({
+      where: {
+        refreshTokenHash: hashToken(refreshToken),
+        userId: payload.sub,
+        revokedAt: null,
+      },
+    });
+    if (!session || session.expiresAt < new Date()) {
+      throw new UnauthorizedException('Refresh token expired or revoked');
+    }
+
+    const target = (await this.listWorkspaces(payload.sub)).find(
+      (w) => w.tenantId === tenantId,
+    );
+    if (!target) throw new ForbiddenException('You are not a member of that organisation');
+
+    const { roles, perms } = await this.loadRolesAndPerms(target.tenantId, target.userId);
+    if (!AuthService.isPortalAllowed('buyer', roles)) {
+      throw new ForbiddenException('You are not a member of that organisation');
+    }
+
+    const issue = {
+      userId: target.userId,
+      tenantId: target.tenantId,
+      audience: 'buyer' as const,
+      roles,
+      perms,
+    };
+    const access = await this.tokens.issueAccess(issue);
+    const newRefresh = await this.tokens.issueRefresh(issue);
+    await this.prisma.session.update({
+      where: { id: session.id },
+      data: { revokedAt: new Date() },
+    });
+    await this.persistSession(target.userId, newRefresh, meta);
+    await this.auditAuth(target.tenantId, target.userId, 'auth.workspace_switched', meta);
+
+    const profile = await this.prisma.runInTenantContext(target.tenantId, (tx) =>
+      tx.user.findUniqueOrThrow({
+        where: { id: target.userId },
+        select: { id: true, email: true, name: true, mfaEnabled: true },
+      }),
+    );
+
+    return {
+      user: {
+        ...profile,
+        roles,
+        perms,
+        tenant: { id: target.tenantId, name: target.tenantName },
+      },
+      tokens: {
+        accessToken: access.token,
+        refreshToken: newRefresh,
+        tokenType: 'Bearer',
+        expiresIn: access.expiresIn,
+      },
+    };
+  }
+
+  /** Every organisation `userId` can switch to, including its own. Linked by a
+   *  verified email (see 05-workspaces.sql); safe to call inside or outside a
+   *  tenant transaction — the lookup is a SECURITY DEFINER function. */
+  async listWorkspaces(userId: string): Promise<WorkspaceRow[]> {
+    const rows = await this.prisma.client.$queryRaw<
+      { user_id: string; tenant_id: string; tenant_name: string }[]
+    >(Prisma.sql`SELECT * FROM auth_user_workspaces(${userId})`);
+    return rows.map((r) => ({
+      userId: r.user_id,
+      tenantId: r.tenant_id,
+      tenantName: r.tenant_name,
+    }));
+  }
+
   async logout(refreshToken: string): Promise<void> {
     const hash = hashToken(refreshToken);
     await this.prisma.session.updateMany({
@@ -253,8 +370,8 @@ export class AuthService {
     portal: Portal,
     meta: RequestMeta,
   ): Promise<void> {
-    const user = await this.findUserForAuth(email);
-    if (!user || !user.is_active) return;
+    const user = (await this.findUsersForAuth(email)).find((u) => u.is_active);
+    if (!user) return;
 
     // A vendor asking on the buyer page (or vice versa) gets no link: the reset
     // would land them on a portal their account cannot sign in to.
@@ -299,7 +416,11 @@ export class AuthService {
       }
 
       const argon = await argonHash(password, { type: 2 /* argon2id */ });
-      await tx.user.update({ where: { id: user.id }, data: { argonHash: argon } });
+      // Following the emailed link proves the holder controls the address.
+      await tx.user.update({
+        where: { id: user.id },
+        data: { argonHash: argon, emailVerifiedAt: user.emailVerifiedAt ?? new Date() },
+      });
       await tx.session.updateMany({
         where: { userId: user.id, revokedAt: null },
         data: { revokedAt: new Date() },
@@ -391,11 +512,11 @@ export class AuthService {
 
   // ── helpers ──────────────────────────────────────────────────────────────
 
-  private async findUserForAuth(email: string): Promise<AuthRow | null> {
-    const rows = await this.prisma.$queryRaw<AuthRow[]>(
+  /** Every account under this email, active and verified first. */
+  private async findUsersForAuth(email: string): Promise<AuthRow[]> {
+    return this.prisma.$queryRaw<AuthRow[]>(
       Prisma.sql`SELECT * FROM auth_find_user(${email})`,
     );
-    return rows[0] ?? null;
   }
 
   private async loadRolesAndPerms(
