@@ -130,6 +130,10 @@ export const PERMISSIONS = {
   SETTINGS_READ: 'settings:read',
   SETTINGS_WRITE: 'settings:write',
 
+  // Create a brand-new organisation (tenant). The creator becomes its admin and
+  // can switch between every organisation their verified email belongs to.
+  TENANT_CREATE: 'tenant:create',
+
   USER_READ: 'user:read',
   USER_CREATE: 'user:create',
   USER_UPDATE: 'user:update',
@@ -335,6 +339,7 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     PERMISSIONS.USER_UPDATE,
     PERMISSIONS.SETTINGS_READ,
     PERMISSIONS.SETTINGS_WRITE,
+    PERMISSIONS.TENANT_CREATE,
     PERMISSIONS.BANK_ACCOUNT_READ,
     PERMISSIONS.BANK_ACCOUNT_MANAGE,
     ...PURCHASING,
