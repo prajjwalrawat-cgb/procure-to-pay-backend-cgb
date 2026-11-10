@@ -602,6 +602,8 @@ export class AskmiraService {
           return this.invoices(me, params);
         case 'budgets':
           return this.budgets(me);
+        case 'receipts':
+          return this.receipts(me, params);
         default:
           throw new UnprocessableEntityException('Unknown query.');
       }
@@ -783,6 +785,63 @@ export class AskmiraService {
         invoice_date: inv.invoiceDate.toISOString().slice(0, 10),
         created_at: inv.createdAt.toISOString(),
         href: `/invoices/${inv.id}`,
+      })),
+    };
+  }
+
+  /**
+   * Goods received and accepted (posted GRNs) in the last `days` (default 90,
+   * at most 366): each line with its item, accepted quantity, serial numbers,
+   * landed unit cost, the PO and who asked for it. AskMira adds equipment from
+   * here to its asset register; nothing here changes.
+   */
+  private async receipts(me: Person, params: Record<string, unknown>) {
+    this.need(me, PERMISSIONS.GRN_READ, 'goods receipts');
+    const days = Math.min(Math.max(Number.parseInt(String(params.days ?? 90), 10) || 90, 1), 366);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const lines = await this.prisma.client.grnLine.findMany({
+      where: {
+        qtyAccepted: { gt: 0 },
+        grn: { status: 'POSTED', receivedAt: { gte: since } },
+      },
+      orderBy: [{ grn: { receivedAt: 'desc' } }, { id: 'asc' }],
+      take: Math.min(limitOf(params) * 4, 200),
+      include: {
+        grn: { select: { number: true, receivedAt: true } },
+        poLine: {
+          select: {
+            itemDesc: true,
+            uom: true,
+            item: { select: { name: true, category: true, skuCode: true } },
+            po: {
+              select: {
+                number: true,
+                vendor: { select: { name: true } },
+                requisition: { select: { requester: { select: { email: true, name: true } } } },
+              },
+            },
+          },
+        },
+      },
+    });
+    return {
+      days,
+      receipts: lines.map((l) => ({
+        ref: l.id,
+        grn: l.grn.number,
+        received_on: l.grn.receivedAt.toISOString().slice(0, 10),
+        item: l.poLine.item?.name ?? l.poLine.itemDesc,
+        description: l.poLine.itemDesc,
+        category: l.poLine.item?.category ?? null,
+        sku: l.poLine.item?.skuCode ?? null,
+        quantity: l.qtyAccepted.toFixed(0),
+        uom: l.poLine.uom,
+        serial_numbers: l.serialNumbers ?? [],
+        unit_cost: money(l.unitLandedCost),
+        po: l.poLine.po.number,
+        vendor: l.poLine.po.vendor?.name ?? null,
+        requested_by: l.poLine.po.requisition?.requester?.name ?? null,
+        requested_by_email: l.poLine.po.requisition?.requester?.email ?? null,
       })),
     };
   }
