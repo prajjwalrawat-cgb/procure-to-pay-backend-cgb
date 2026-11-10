@@ -582,6 +582,12 @@ model User {
   // Set when an admin invites this user; cleared when they accept and activate.
   // A row with invitedAt != null && isActive = false is a PENDING invitation.
   invitedAt  DateTime? @map("invited_at") @db.Timestamptz(6)
+  // Set once the holder has proven they control this email (accepted an invite
+  // or completed a password reset). Workspace switching links User rows that
+  // share an email ONLY when both are verified — an admin can create a user
+  // with any address and a password of their choosing, so an unverified row
+  // must never unlock another organisation.
+  emailVerifiedAt DateTime? @map("email_verified_at") @db.Timestamptz(6)
   createdAt  DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(6)
 

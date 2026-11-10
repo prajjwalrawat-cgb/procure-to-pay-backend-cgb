@@ -130,6 +130,31 @@ function build(
 describe('AuthService.login', () => {
   beforeEach(() => argonMock.mockReset());
 
+  it('signs in to the account whose password matches when one email has several', async () => {
+    // Same person, two organisations, different passwords: only the second opens.
+    const other = { ...USER_ROW, id: 'usr_2', tenant_id: 'ten_2', argon_hash: 'argon$two' };
+    argonMock.mockImplementation(async (h: string) => h === 'argon$two');
+    const { service, tokens } = build([USER_ROW, other]);
+
+    await service.login({ email: USER_ROW.email, password: 'pw' }, 'buyer', {});
+
+    expect(tokens.issueAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'usr_2', tenantId: 'ten_2' }),
+    );
+  });
+
+  it('skips inactive accounts when one email has several', async () => {
+    argonMock.mockResolvedValue(true);
+    const inactive = { ...USER_ROW, id: 'usr_0', tenant_id: 'ten_0', is_active: false };
+    const { service, tokens } = build([inactive, USER_ROW]);
+
+    await service.login({ email: USER_ROW.email, password: 'pw' }, 'buyer', {});
+
+    expect(tokens.issueAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: USER_ROW.id }),
+    );
+  });
+
   it('issues tokens and audits a successful login', async () => {
     argonMock.mockResolvedValue(true);
     const { service, tokens, audit, sessionCreate } = build([USER_ROW]);
@@ -263,7 +288,9 @@ describe('AuthService.resetPassword', () => {
 
     expect(res.email).toBe(USER_ROW.email);
     expect(userUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { argonHash: 'argon$new' } }),
+      expect.objectContaining({
+        data: { argonHash: 'argon$new', emailVerifiedAt: expect.any(Date) },
+      }),
     );
     expect(sessionRevoke).toHaveBeenCalledOnce();
     expect(audit.record).toHaveBeenCalledWith(

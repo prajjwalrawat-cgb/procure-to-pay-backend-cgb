@@ -309,7 +309,13 @@ export class UsersService {
       const argon = await argonHash(password, { type: 2 });
       await this.prisma.client.user.update({
         where: { id: user.id },
-        data: { argonHash: argon, isActive: true, invitedAt: null },
+        // The invite link reached this inbox, so the address is proven.
+        data: {
+          argonHash: argon,
+          isActive: true,
+          invitedAt: null,
+          emailVerifiedAt: user.emailVerifiedAt ?? new Date(),
+        },
       });
       await this.audit.record({
         action: 'user.invite_accepted',
