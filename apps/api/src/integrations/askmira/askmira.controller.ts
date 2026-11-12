@@ -1,9 +1,10 @@
-import { Body, Controller, Delete, Get, HttpCode, Post, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, NotFoundException, Param, Post, Req } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
 import type { Request } from 'express';
 
 import type { AuthUser } from '../../auth/auth.types';
 import { CurrentUser, Public } from '../../auth/decorators';
+import { AskmiraPlatformService } from './askmira.platform';
 import { AskmiraService } from './askmira.service';
 
 type RawRequest = Request & { rawBody?: Buffer };
@@ -18,7 +19,22 @@ type RawRequest = Request & { rawBody?: Buffer };
 @ApiExcludeController()
 @Controller('integrations/askmira')
 export class AskmiraController {
-  constructor(private readonly askmira: AskmiraService) {}
+  constructor(
+    private readonly askmira: AskmiraService,
+    private readonly platform: AskmiraPlatformService,
+  ) {}
+
+  /** AskMira's platform: check the key, find an organisation, create or attach one. */
+  @Public()
+  @Post('platform/:action')
+  @HttpCode(200)
+  async platformCall(@Param('action') action: string, @Req() req: RawRequest) {
+    const { body, claims } = this.platform.assertion(req.rawBody, req.headers.authorization);
+    if (action === 'ping') return this.platform.ping();
+    if (action === 'organizations') return this.platform.organizations(body);
+    if (action === 'provision') return this.platform.provision(body, claims);
+    throw new NotFoundException('Not found');
+  }
 
   @Public()
   @Post('users/sync')

@@ -19,6 +19,7 @@ const FILES = [
   '03-auth-functions.sql',
   '04-askmira.sql',
   '05-workspaces.sql',
+  '06-askmira-platform.sql',
 ];
 
 async function main(): Promise<void> {

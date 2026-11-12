@@ -86,7 +86,7 @@ const CODE_LIFETIME_MS = 5 * 60 * 1000;
 const CALLBACK_PATH = '/settings/connectors/callback';
 const LIMIT = 25;
 
-function serverKey(): string {
+export function serverKey(): string {
   const own = process.env.ASKMIRA_LINK_SECRET ?? '';
   if (own.length >= 32) return own;
   // The API's own signing key is a secret only this server holds.
