@@ -156,10 +156,17 @@ export class AskmiraPlatformService {
       // One AskMira workspace per organisation here: the old link goes.
       await this.prisma.runInTenantContext(elsewhere.tenantId, async (tx) => {
         await tx.askmiraLink.deleteMany({ where: { tenantId: elsewhere.tenantId } });
+        await tx.askmiraPerson.deleteMany({ where: { tenantId: elsewhere.tenantId, deactivatedAt: null } });
       });
     }
     const nonce = crypto.randomBytes(32).toString('base64url');
     const name = await this.prisma.runInTenantContext(tenantId, async (tx) => {
+      // Linked anew, or to another AskMira workspace: it manages nobody yet. Marks
+      // left by an earlier connection must not let this roster switch people off.
+      const before = await tx.askmiraLink.findUnique({ where: { tenantId } });
+      if (!before || before.askmiraTenantId !== askmira.id) {
+        await tx.askmiraPerson.deleteMany({ where: { tenantId, deactivatedAt: null } });
+      }
       await tx.askmiraLink.upsert({
         where: { tenantId },
         create: {

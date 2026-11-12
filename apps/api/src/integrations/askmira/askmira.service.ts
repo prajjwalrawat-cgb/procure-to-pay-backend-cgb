@@ -404,6 +404,9 @@ export class AskmiraService {
       if (mine && mine.askmiraTenantId !== askmiraTenantId) {
         throw new ConflictException('This company is already connected to another AskMira workspace.');
       }
+      // A new connection manages nobody yet: marks left by an earlier one must not
+      // let this workspace's roster switch those people off.
+      if (!mine) await tx.askmiraPerson.deleteMany({ where: { tenantId: row.tenant_id, deactivatedAt: null } });
       await tx.askmiraLink.upsert({
         where: { tenantId: row.tenant_id },
         create: {
@@ -445,6 +448,9 @@ export class AskmiraService {
   async revoke(found: Linked) {
     await this.prisma.runInTenantContext(found.tenantId, async (tx) => {
       await tx.askmiraLink.deleteMany({ where: { tenantId: found.tenantId } });
+      // Nobody is AskMira's any more (people it switched off stay off, and are
+      // switched back on only if a later roster names them).
+      await tx.askmiraPerson.deleteMany({ where: { tenantId: found.tenantId, deactivatedAt: null } });
       await this.audit.record({
         action: 'askmira.disconnected',
         entityType: 'AskmiraLink',
@@ -461,6 +467,9 @@ export class AskmiraService {
     this.requireAdmin(admin);
     await this.prisma.runInTenantContext(admin.tenantId, async (tx) => {
       await tx.askmiraLink.deleteMany({ where: { tenantId: admin.tenantId } });
+      // Nobody is AskMira's any more (people it switched off stay off, and are
+      // switched back on only if a later roster names them).
+      await tx.askmiraPerson.deleteMany({ where: { tenantId: admin.tenantId, deactivatedAt: null } });
       await this.audit.record({
         action: 'askmira.disconnected',
         entityType: 'AskmiraLink',
