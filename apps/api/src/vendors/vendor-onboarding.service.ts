@@ -581,7 +581,10 @@ export class VendorOnboardingService implements OnModuleInit {
     const stale = state.extracted ?? {};
     const oldGstin = vendor.gstin ?? stale.gstin?.value ?? null;
     const oldPan =
-      vendor.businessPan ?? vendor.pan ?? stale.businessPan?.value ?? panFromGstin(oldGstin);
+      vendor.businessPan ??
+      vendor.pan ??
+      stale.businessPan?.value ??
+      panFromGstin(oldGstin);
     const newGstin = result.fields.gstin?.value ?? null;
     const newPan = result.fields.businessPan?.value ?? null;
 
@@ -591,7 +594,8 @@ export class VendorOnboardingService implements OnModuleInit {
     state.extracted = withoutIdentity(stale);
     for (const key of ['step1', 'step2']) {
       const saved = state.steps?.[key];
-      if (saved) state.steps[key] = { done: false, data: withoutIdentity(saved.data ?? {}) };
+      if (saved)
+        state.steps[key] = { done: false, data: withoutIdentity(saved.data ?? {}) };
     }
     state.completionPct = this.completionPct(state);
     state.currentStep = 1;
@@ -1069,6 +1073,81 @@ export class VendorOnboardingService implements OnModuleInit {
   }
 
   /**
+   * Re-send the set-password invitation for a buyer invite the vendor has not
+   * accepted yet — the "they never got the email" fix. Rotates the token, so
+   * only the newest link works (an old one forwarded around stops working), and
+   * restarts the 14-day validity.
+   *
+   * Only offered before the vendor sets a password: after that the link would
+   * silently overwrite a password they chose, which is a reset, not a re-send —
+   * they should use "Forgot password" instead.
+   */
+  async resendInvite(onboardingId: string, actorId: string): Promise<{ email: string }> {
+    const onboarding = await this.prisma.client.vendorOnboarding.findUnique({
+      where: { id: onboardingId },
+      include: { vendor: { select: { id: true, name: true, lifecycleStatus: true } } },
+    });
+    if (!onboarding) throw new NotFoundException('Onboarding not found');
+    if (onboarding.invitationSource === 'SELF_REGISTRATION') {
+      throw new VendorStateError(
+        'This vendor registered themselves — there is no buyer invitation to re-send.',
+        { onboardingId },
+      );
+    }
+    if (onboarding.reviewDecision) {
+      throw new VendorStateError(
+        `This onboarding was already ${onboarding.reviewDecision.toLowerCase().replace(/_/g, ' ')}.`,
+        { onboardingId, reviewDecision: onboarding.reviewDecision },
+      );
+    }
+    if (onboarding.submittedAt) {
+      throw new VendorStateError(
+        'This application has already been submitted — there is no invitation left to re-send.',
+        { onboardingId, submittedAt: onboarding.submittedAt.toISOString() },
+      );
+    }
+    if (onboarding.emailVerifiedAt) {
+      throw new VendorStateError(
+        `${onboarding.vendor.name} has already accepted the invitation and set a password. ` +
+          'If they cannot sign in, ask them to use "Forgot password" on the vendor login page.',
+        { onboardingId },
+      );
+    }
+    const contact = await this.prisma.client.vendorContact.findFirst({
+      where: { vendorId: onboarding.vendorId, isPrimary: true },
+      select: { email: true },
+    });
+    if (!contact?.email) {
+      throw new VendorStateError('This vendor has no primary contact email to send to.', {
+        vendorId: onboarding.vendorId,
+      });
+    }
+
+    const token = randomBytes(24).toString('hex');
+    await this.prisma.client.vendorOnboarding.update({
+      where: { id: onboardingId },
+      data: {
+        selfRegistrationToken: token,
+        tokenExpiresAt: new Date(Date.now() + TOKEN_TTL_DAYS * 86_400_000),
+      },
+    });
+    await this.audit.record({
+      action: 'VENDOR_INVITE_RESENT',
+      entityType: 'Vendor',
+      entityId: onboarding.vendorId,
+      actorId,
+      after: { onboardingId, email: contact.email },
+    });
+    await this.sendInviteEmail(
+      this.tenantId(),
+      contact.email,
+      onboarding.vendor.name,
+      token,
+    );
+    return { email: contact.email };
+  }
+
+  /**
    * Deactivate the auto-created login of a cancelled vendor — but only if no
    * other live vendor still uses that email. A duplicate invite reuses the
    * existing user (ensureVendorUser), so blindly deactivating here would lock
@@ -1470,7 +1549,7 @@ export class VendorOnboardingService implements OnModuleInit {
         byEmail.lifecycleStatus === 'BLACKLISTED'
           ? `${byEmail.name} (${byEmail.code}) is blacklisted — this contact cannot be invited.`
           : `${input.email} is already the contact for ${byEmail.name} (${byEmail.code}). ` +
-              'Resend that invitation or add the category to the existing vendor — a second ' +
+              'Use "Resend invite" in the Onboarding queue, or add the category to the existing vendor — a second ' +
               'record would share the same vendor login.',
         await this.duplicateContext(byEmail, 'EMAIL', false),
       );

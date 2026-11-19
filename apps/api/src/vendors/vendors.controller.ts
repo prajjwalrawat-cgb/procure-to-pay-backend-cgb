@@ -80,6 +80,7 @@ export class VendorsController {
       q,
       user.userId,
       user.perms.includes(PERMISSIONS.VENDOR_ONBOARDING_CANCEL),
+      user.perms.includes(PERMISSIONS.VENDOR_INVITE),
     );
   }
 
@@ -151,6 +152,17 @@ export class VendorsController {
       user.userId,
       user.perms.includes(PERMISSIONS.VENDOR_SUSPEND),
     );
+  }
+
+  /** Re-send the invitation email with a fresh link — for a vendor who says the
+   *  first one never arrived. Same authority as inviting in the first place. */
+  @Post('onboarding/:id/resend-invite')
+  @RequirePermission(PERMISSIONS.VENDOR_INVITE)
+  async resendInvite(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+  ): Promise<{ email: string }> {
+    return this.onboarding.resendInvite(id, user.userId);
   }
 
   @Post('onboarding/:id/return')

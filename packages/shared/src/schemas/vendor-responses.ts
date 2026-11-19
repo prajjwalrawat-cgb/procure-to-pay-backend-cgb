@@ -62,6 +62,10 @@ export interface OnboardingListItem {
   /** True while *this viewer* can withdraw the invitation: nothing submitted, no
    *  decision recorded, and they hold the authority the stage requires. */
   canCancel: boolean;
+  /** True while *this viewer* can re-send the invitation email with a fresh
+   *  link: a buyer invite the vendor has not accepted, nothing submitted or
+   *  decided, and the viewer holds VENDOR_INVITE. */
+  canResendInvite: boolean;
 }
 
 export interface OnboardingListResponse {

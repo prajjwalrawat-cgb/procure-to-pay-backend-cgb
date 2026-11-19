@@ -36,6 +36,7 @@ interface OnboardingRow {
   reviewDecision: string | null;
   /** Set when the vendor used the invitation link to set a password. */
   emailVerifiedAt: Date | null;
+  invitationSource?: string;
   vendor: { id: string; name: string; lifecycleStatus: string };
 }
 
@@ -69,6 +70,7 @@ function makeService(fixture: Fixture = {}): {
   audit: ReturnType<typeof vi.fn>;
   approvalDeleteMany: ReturnType<typeof vi.fn>;
   routingDecide: ReturnType<typeof vi.fn>;
+  mailSend: ReturnType<typeof vi.fn>;
 } {
   const vendorCreate = vi.fn().mockResolvedValue({});
   const vendorUpdate = vi.fn().mockResolvedValue({});
@@ -77,6 +79,7 @@ function makeService(fixture: Fixture = {}): {
   const auditRecord = vi.fn().mockResolvedValue(undefined);
   const approvalDeleteMany = vi.fn().mockResolvedValue({ count: 0 });
   const routingDecide = vi.fn().mockResolvedValue(undefined);
+  const mailSend = vi.fn().mockResolvedValue(undefined);
   const prisma = {
     currentTenantId: 'ten_1',
     client: {
@@ -141,7 +144,7 @@ function makeService(fixture: Fixture = {}): {
     {} as unknown as VendorVerificationService,
     {} as unknown as VendorScorecardService,
     {} as unknown as VendorKycService,
-    { send: vi.fn().mockResolvedValue(undefined) } as unknown as MailService,
+    { send: mailSend } as unknown as MailService,
     {} as unknown as StorageService,
     { get: vi.fn().mockReturnValue('http://localhost:3000') } as never,
     {} as unknown as IPennyDropProvider,
@@ -150,7 +153,9 @@ function makeService(fixture: Fixture = {}): {
     // Categories are tenant data; the invite only needs the SLA off the one it
     // resolves, so a stub standing in for "this tenant offers it" is enough.
     {
-      findActive: vi.fn().mockResolvedValue({ categoryKey: 'RAW_MATERIALS', slaHours: 120 }),
+      findActive: vi
+        .fn()
+        .mockResolvedValue({ categoryKey: 'RAW_MATERIALS', slaHours: 120 }),
     } as unknown as VendorCategoriesService,
   );
   return {
@@ -162,6 +167,7 @@ function makeService(fixture: Fixture = {}): {
     audit: auditRecord,
     approvalDeleteMany,
     routingDecide,
+    mailSend,
   };
 }
 
@@ -267,7 +273,12 @@ describe('VendorOnboardingService.cancelOnboarding', () => {
       onboarding: OPEN_ONBOARDING,
     });
     await expect(
-      svc.cancelOnboarding('vob_1', { reason: 'Duplicate invite' }, 'usr_officer', OFFICER),
+      svc.cancelOnboarding(
+        'vob_1',
+        { reason: 'Duplicate invite' },
+        'usr_officer',
+        OFFICER,
+      ),
     ).resolves.toEqual({ ok: true });
     expect(onboardingUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -354,6 +365,72 @@ describe('VendorOnboardingService.cancelOnboarding', () => {
     await expect(
       svc.cancelOnboarding('vob_1', { reason: 'Again' }, 'usr_officer', OFFICER),
     ).rejects.toBeInstanceOf(VendorStateError);
+  });
+});
+
+describe('VendorOnboardingService.resendInvite', () => {
+  it('rotates the link, restarts the validity and emails the primary contact', async () => {
+    const { svc, onboardingUpdate, audit, mailSend } = makeService({
+      onboarding: OPEN_ONBOARDING,
+    });
+    await expect(svc.resendInvite('vob_1', 'usr_officer')).resolves.toEqual({
+      email: 'ops@vendor.example',
+    });
+
+    const data = onboardingUpdate.mock.calls[0][0].data as {
+      selfRegistrationToken: string;
+      tokenExpiresAt: Date;
+    };
+    expect(data.selfRegistrationToken).toMatch(/^[0-9a-f]{48}$/);
+    // 14 days out, give or take the test's own runtime.
+    expect(data.tokenExpiresAt.getTime() - Date.now()).toBeGreaterThan(13.9 * 86_400_000);
+
+    expect(mailSend).toHaveBeenCalledOnce();
+    const mail = mailSend.mock.calls[0][0] as { to: string; text: string };
+    expect(mail.to).toBe('ops@vendor.example');
+    // The emailed link must carry the *new* token, not the one being replaced.
+    expect(mail.text).toContain(`token=${data.selfRegistrationToken}`);
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'VENDOR_INVITE_RESENT' }),
+    );
+  });
+
+  it('refuses once the vendor has set a password — that would be a reset', async () => {
+    const { svc, onboardingUpdate, mailSend } = makeService({
+      onboarding: ACCEPTED_ONBOARDING,
+    });
+    await expect(svc.resendInvite('vob_1', 'usr_officer')).rejects.toBeInstanceOf(
+      VendorStateError,
+    );
+    expect(onboardingUpdate).not.toHaveBeenCalled();
+    expect(mailSend).not.toHaveBeenCalled();
+  });
+
+  it('refuses a submitted application', async () => {
+    const { svc } = makeService({
+      onboarding: { ...OPEN_ONBOARDING, submittedAt: new Date('2026-08-01') },
+    });
+    await expect(svc.resendInvite('vob_1', 'usr_officer')).rejects.toBeInstanceOf(
+      VendorStateError,
+    );
+  });
+
+  it('refuses a cancelled invitation', async () => {
+    const { svc } = makeService({
+      onboarding: { ...OPEN_ONBOARDING, reviewDecision: 'CANCELLED' },
+    });
+    await expect(svc.resendInvite('vob_1', 'usr_officer')).rejects.toBeInstanceOf(
+      VendorStateError,
+    );
+  });
+
+  it('refuses a self-registration — there is no buyer invite to re-send', async () => {
+    const { svc } = makeService({
+      onboarding: { ...OPEN_ONBOARDING, invitationSource: 'SELF_REGISTRATION' },
+    });
+    await expect(svc.resendInvite('vob_1', 'usr_officer')).rejects.toBeInstanceOf(
+      VendorStateError,
+    );
   });
 });
 

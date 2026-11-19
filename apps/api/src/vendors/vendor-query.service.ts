@@ -140,6 +140,8 @@ export class VendorQueryService {
     /** Whether the viewer may withdraw invitations at all — admin-only, since
      *  the queue is shared across every procurement officer. */
     viewerCanCancel = false,
+    /** Whether the viewer may re-send invitation emails (VENDOR_INVITE). */
+    viewerCanInvite = false,
   ): Promise<{ items: OnboardingListItem[] }> {
     let where: Prisma.VendorOnboardingWhereInput =
       query.tab === 'in_progress'
@@ -223,6 +225,13 @@ export class VendorQueryService {
         // to pull the rug out mid-application.
         canCancel:
           !ob.submittedAt && !ob.reviewDecision && !ob.emailVerifiedAt && viewerCanCancel,
+        // Mirrors the guards in VendorOnboardingService.resendInvite.
+        canResendInvite:
+          ob.invitationSource !== 'SELF_REGISTRATION' &&
+          !ob.submittedAt &&
+          !ob.reviewDecision &&
+          !ob.emailVerifiedAt &&
+          viewerCanInvite,
       };
     });
     return { items };
