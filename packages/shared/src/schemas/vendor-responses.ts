@@ -43,6 +43,8 @@ export interface OnboardingListItem {
   id: string;
   vendorId: string;
   vendorName: string;
+  /** Primary contact email — where the invitation was sent. */
+  contactEmail: string | null;
   category: string | null;
   isMsme: boolean;
   invitationSource: OnboardingInvitationSource;

@@ -178,7 +178,18 @@ export class VendorQueryService {
     const onboardings = await this.prisma.client.vendorOnboarding.findMany({
       where,
       include: {
-        vendor: { include: { documents: true } },
+        vendor: {
+          include: {
+            documents: true,
+            // Shown on the row so two invites with the same vendor name (re-sent
+            // to a different address) can be told apart.
+            contacts: {
+              where: { isPrimary: true },
+              select: { email: true },
+              take: 1,
+            },
+          },
+        },
       },
       orderBy: { startedAt: 'desc' },
       take: query.limit ?? 50,
@@ -205,6 +216,7 @@ export class VendorQueryService {
         id: ob.id,
         vendorId: ob.vendorId,
         vendorName: ob.vendor.name,
+        contactEmail: ob.vendor.contacts[0]?.email ?? null,
         category: ob.vendor.categoryConfigKey,
         isMsme: ob.vendor.isMsme,
         invitationSource: ob.invitationSource,
