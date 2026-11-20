@@ -59,6 +59,7 @@ function buildService(client: MockClient): {
   const match = { runFor: vi.fn() };
   const stock = { record: vi.fn().mockResolvedValue('stk_1') };
   const rma = { autoCreateFromGrn: vi.fn() };
+  const poStatus = { recompute: vi.fn() };
   const service = new GrnService(
     prisma,
     audit as unknown as AuditLogService,
@@ -71,8 +72,9 @@ function buildService(client: MockClient): {
     match as unknown as MatchService,
     // Slice 10a — live e-Way validity check; benign in tests (no eway bill number).
     { checkForGrn: async () => null } as unknown as EwayBillValidationService,
+    poStatus as never,
   );
-  return { service, client, audit, events, match, stock, rma };
+  return { service, client, audit, events, match, stock, rma, poStatus };
 }
 
 describe('GrnService.createDraft', () => {
@@ -238,9 +240,9 @@ describe('GrnService.post', () => {
     };
   }
 
-  it('increments PO qty, records stock, transitions PO to PARTIALLY_RECEIVED, re-matches invoices', async () => {
+  it('increments PO qty, records stock, recomputes PO status, re-matches invoices', async () => {
     const client = baseClient(grn('CONDITIONAL_PASS'));
-    const { service, client: c, stock, match } = buildService(client);
+    const { service, client: c, stock, match, poStatus } = buildService(client);
     await service.post('grn_1', 'usr_1');
     expect(c.purchaseOrderLine.update).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -250,8 +252,10 @@ describe('GrnService.post', () => {
     expect(stock.record).toHaveBeenCalledWith(
       expect.objectContaining({ movementType: 'GRN_RECEIPT' }),
     );
-    expect(c.purchaseOrder.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { status: 'PARTIALLY_RECEIVED' } }),
+    // Receipt → status rules live in PoStatusService (see po-status.service.spec).
+    expect(poStatus.recompute).toHaveBeenCalledWith(
+      grn('CONDITIONAL_PASS').poId,
+      'usr_1',
     );
     expect(match.runFor).toHaveBeenCalledWith('inv_9');
   });

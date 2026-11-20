@@ -51,7 +51,11 @@ describe('receive — PO requirement (business rule 1)', () => {
   it('posts a VENDOR_INWARD against a receivable PO', async () => {
     const { service, posts } = makeService();
     await service.receive({ ...baseReceipt, purchaseOrderId: 'po_1' }, 'usr_1');
-    expect(posts[0]).toMatchObject({ txnType: 'VENDOR_INWARD', qty: 250, purchaseOrderId: 'po_1' });
+    expect(posts[0]).toMatchObject({
+      txnType: 'VENDOR_INWARD',
+      qty: 250,
+      purchaseOrderId: 'po_1',
+    });
   });
 
   it('refuses a receipt with no PO and no override', async () => {
@@ -78,14 +82,18 @@ describe('receive — PO requirement (business rule 1)', () => {
     },
   );
 
-  it.each(['APPROVED', 'ISSUED', 'ACKNOWLEDGED', 'PARTIALLY_RECEIVED'])(
-    'accepts a PO in %s',
-    async (status) => {
-      const { service, posts } = makeService({ po: { number: 'PO-0481', status } });
-      await service.receive({ ...baseReceipt, purchaseOrderId: 'po_1' }, 'usr_1');
-      expect(posts).toHaveLength(1);
-    },
-  );
+  it.each([
+    'APPROVED',
+    'ISSUED',
+    'ACKNOWLEDGED',
+    'PARTIALLY_RECEIVED',
+    'PARTIALLY_INVOICED',
+    'INVOICED',
+  ])('accepts a PO in %s', async (status) => {
+    const { service, posts } = makeService({ po: { number: 'PO-0481', status } });
+    await service.receive({ ...baseReceipt, purchaseOrderId: 'po_1' }, 'usr_1');
+    expect(posts).toHaveLength(1);
+  });
 
   it('allows a Challan-only receipt behind the explicit override', async () => {
     const { service, client, posts } = makeService();
@@ -153,7 +161,11 @@ describe('recordQc — the QC gate (business rule 2)', () => {
       { qcStatus: 'REJECTED', rejectedQty: 100, disposition: 'RETURN_TO_VENDOR' },
       'usr_1',
     );
-    expect(posts[0]).toMatchObject({ txnType: 'VENDOR_RETURN_OUT', qty: 100, correctionOfId: 'sle_1' });
+    expect(posts[0]).toMatchObject({
+      txnType: 'VENDOR_RETURN_OUT',
+      qty: 100,
+      correctionOfId: 'sle_1',
+    });
     expect(res.dispositionEntryId).toBe('sle_1');
   });
 
@@ -187,7 +199,11 @@ describe('recordQc — the QC gate (business rule 2)', () => {
   it('refuses to re-decide a receipt that already has a verdict', async () => {
     const { service } = withEntry({ qcStatus: 'OK' });
     await expect(
-      service.recordQc('sle_1', { qcStatus: 'REJECTED', disposition: 'WRITE_OFF' }, 'usr_1'),
+      service.recordQc(
+        'sle_1',
+        { qcStatus: 'REJECTED', disposition: 'WRITE_OFF' },
+        'usr_1',
+      ),
     ).rejects.toBeInstanceOf(LedgerStateError);
   });
 

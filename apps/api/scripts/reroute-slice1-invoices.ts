@@ -15,6 +15,7 @@ import { NotificationService } from '../src/approvals/notification.service';
 import { AuditLogService } from '../src/audit/audit.service';
 import { DomainEventService } from '../src/common/events/domain-event.service';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { PoStatusService } from '../src/purchase-orders/po-status.service';
 
 async function main(): Promise<void> {
   const prisma = new PrismaService();
@@ -32,6 +33,7 @@ async function main(): Promise<void> {
     context,
     resolver,
     notifications,
+    new PoStatusService(prisma, audit),
   );
 
   try {

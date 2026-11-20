@@ -51,6 +51,8 @@ function build(submit: () => Promise<string>) {
     { computeFor: vi.fn().mockResolvedValue({ toString: () => '0' }) } as never, // tds
     { computeDueDate: vi.fn() } as never, // msme
     {} as never, // routing
+    {} as never, // notifications
+    { recompute: vi.fn() } as never, // poStatus
   );
   return { service, stored, prisma };
 }

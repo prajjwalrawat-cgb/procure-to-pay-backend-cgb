@@ -25,7 +25,7 @@ function build(
 ) {
   const submit = vi.fn().mockResolvedValue(undefined);
   const record = vi.fn().mockResolvedValue(undefined);
-  const invoiceUpdate = vi.fn().mockResolvedValue(undefined);
+  const invoiceUpdate = vi.fn().mockResolvedValue({ poId: 'po_1' });
   const approvalDelete = vi.fn().mockResolvedValue({ count: 1 });
   const row = invoice && {
     id: 'inv_1',
@@ -76,6 +76,8 @@ function build(
     {} as never, // tds
     {} as never, // msme
     { submit } as never, // routing
+    {} as never, // notifications
+    { recompute: vi.fn() } as never, // poStatus
   );
   return { service, submit, record, invoiceUpdate, approvalDelete };
 }
@@ -97,7 +99,10 @@ describe('InvoiceService.resolveAndRoute', () => {
   });
 
   it('refuses while an exception is still open', async () => {
-    const { service, submit } = build({ status: 'MATCH_EXCEPTION' }, { openExceptions: 2 });
+    const { service, submit } = build(
+      { status: 'MATCH_EXCEPTION' },
+      { openExceptions: 2 },
+    );
     await expect(service.resolveAndRoute('inv_1', 'usr_1')).rejects.toBeInstanceOf(
       ForbiddenException,
     );

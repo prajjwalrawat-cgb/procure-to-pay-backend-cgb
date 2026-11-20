@@ -69,7 +69,11 @@ function harness(
   };
   const prisma = { client } as unknown as PrismaService;
   const audit = { record: vi.fn() } as unknown as AuditLogService;
-  return { service: new PaymentPostingService(prisma, audit), row, records };
+  return {
+    service: new PaymentPostingService(prisma, audit, { recompute: vi.fn() } as never),
+    row,
+    records,
+  };
 }
 
 const input = {
@@ -128,7 +132,9 @@ describe('PaymentPostingService.recordManual', () => {
   it('refuses while a payment run still holds the invoice', async () => {
     const { service } = harness(
       {},
-      { inRun: { paymentRunId: 'pay_1', paymentRun: { number: 'PR-1', status: 'DRAFT' } } },
+      {
+        inRun: { paymentRunId: 'pay_1', paymentRun: { number: 'PR-1', status: 'DRAFT' } },
+      },
     );
     await expect(service.recordManual('inv_1', input, 'usr_fin')).rejects.toThrow(
       /draft payment run PR-1/,
@@ -205,7 +211,9 @@ describe('proforma balance block', () => {
   });
 
   it('is decided by document kind and what is already paid', () => {
-    expect(proformaPaymentBlock({ documentKind: 'PROFORMA', paidAmount: D('0') })).toBeNull();
+    expect(
+      proformaPaymentBlock({ documentKind: 'PROFORMA', paidAmount: D('0') }),
+    ).toBeNull();
     expect(
       proformaPaymentBlock({ documentKind: 'PROFORMA', paidAmount: D('1') }),
     ).toMatch(/tax invoice/);

@@ -13,6 +13,7 @@ import {
 
 import { AuditLogService } from '../audit/audit.service';
 import { DomainEventService } from '../common/events/domain-event.service';
+import { PoStatusService } from '../purchase-orders/po-status.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ApprovalContextService } from './approval-context.service';
 import {
@@ -53,6 +54,7 @@ export class ApprovalRoutingService {
     private readonly context: ApprovalContextService,
     private readonly resolver: ApproverResolver,
     private readonly notifications: NotificationService,
+    private readonly poStatus: PoStatusService,
   ) {}
 
   private readonly approvedHooks = new Map<DocumentType, DocumentApprovedHook[]>();
@@ -659,10 +661,14 @@ export class ApprovalRoutingService {
             : 'PARTIALLY_PAID';
         }
       }
-      await this.prisma.client.invoice.update({
+      const updated = await this.prisma.client.invoice.update({
         where: { id: documentId },
         data: { status: next as Prisma.InvoiceUpdateInput['status'] },
+        select: { poId: true },
       });
+      // An approver's rejection un-bills the order; a re-approval onto an
+      // already-settled invoice may close it.
+      await this.poStatus.recompute(updated.poId);
     } else if (documentType === 'PAYMENT_RUN') {
       await this.prisma.client.paymentRun.update({
         where: { id: documentId },

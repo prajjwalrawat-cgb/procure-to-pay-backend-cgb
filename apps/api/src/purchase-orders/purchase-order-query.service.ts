@@ -31,14 +31,34 @@ type PoWithRels = Prisma.PurchaseOrderGetPayload<{
   };
 }>;
 
-/** Statuses behind the PO list's "Open" tab (also the Home open-POs tile). */
+/**
+ * Statuses behind the PO list's "Open" tab (also the Home open-POs tile).
+ * Received and invoiced orders are still open — money is owed or goods are
+ * due — until PoStatusService closes them on full payment.
+ */
 export const OPEN_PO_STATUSES: PoStatus[] = [
   'DRAFT',
   'AWAITING_APPROVAL',
   'APPROVED',
   'ISSUED',
   'ACKNOWLEDGED',
+  'RECEIVED',
+  'PARTIALLY_INVOICED',
+  'INVOICED',
   'ON_HOLD',
+];
+
+/** Billed and paid in full. RECEIVED/INVOICED used to stand in here while nothing set CLOSED. */
+const CLOSED_PO_STATUSES: PoStatus[] = ['CLOSED'];
+
+/** An order with an invoice against it is cancelled only after the invoice is rejected. */
+export const NON_CANCELLABLE_PO_STATUSES: PoStatus[] = [
+  'PARTIALLY_RECEIVED',
+  'RECEIVED',
+  'PARTIALLY_INVOICED',
+  'INVOICED',
+  'CLOSED',
+  'CANCELLED',
 ];
 
 /** Read-side for purchase orders: list (tabbed + filtered) and detail. */
@@ -61,7 +81,7 @@ export class PurchaseOrderQueryService {
         where.status = { in: ['ISSUED', 'ACKNOWLEDGED'] };
         break;
       case 'closed':
-        where.status = { in: ['RECEIVED', 'INVOICED', 'CLOSED'] };
+        where.status = { in: CLOSED_PO_STATUSES };
         break;
       case 'cancelled':
         where.status = 'CANCELLED';
@@ -240,13 +260,7 @@ export class PurchaseOrderQueryService {
       myApprovalId: myStep?.approvalId ?? null,
       canDecide: !!myStep,
       canIssue: po.status === 'APPROVED',
-      canCancel: ![
-        'PARTIALLY_RECEIVED',
-        'RECEIVED',
-        'INVOICED',
-        'CLOSED',
-        'CANCELLED',
-      ].includes(po.status),
+      canCancel: !NON_CANCELLABLE_PO_STATUSES.includes(po.status),
       canHold: po.status === 'APPROVED' || po.status === 'ISSUED',
       canAmend,
       amendmentNo: po.amendmentNo,
@@ -426,13 +440,15 @@ export class PurchaseOrderQueryService {
 
   private async counts(): Promise<PoListResponse['counts']> {
     const [open, partial, awaitingGrn, closed, cancelled] = await Promise.all([
-      this.prisma.client.purchaseOrder.count({ where: { status: { in: OPEN_PO_STATUSES } } }),
+      this.prisma.client.purchaseOrder.count({
+        where: { status: { in: OPEN_PO_STATUSES } },
+      }),
       this.prisma.client.purchaseOrder.count({ where: { status: 'PARTIALLY_RECEIVED' } }),
       this.prisma.client.purchaseOrder.count({
         where: { status: { in: ['ISSUED', 'ACKNOWLEDGED'] } },
       }),
       this.prisma.client.purchaseOrder.count({
-        where: { status: { in: ['RECEIVED', 'INVOICED', 'CLOSED'] } },
+        where: { status: { in: CLOSED_PO_STATUSES } },
       }),
       this.prisma.client.purchaseOrder.count({ where: { status: 'CANCELLED' } }),
     ]);

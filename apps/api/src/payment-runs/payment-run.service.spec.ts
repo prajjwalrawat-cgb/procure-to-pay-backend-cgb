@@ -251,7 +251,7 @@ describe('UtrReconciliationService.confirmRun (real UTRs, never rewrites stubs)'
       d.audit,
       d.events,
       submission,
-      new PaymentPostingService(prisma, d.audit),
+      new PaymentPostingService(prisma, d.audit, { recompute: vi.fn() } as never),
       gateway(),
     );
 

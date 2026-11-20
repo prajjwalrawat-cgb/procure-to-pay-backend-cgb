@@ -4,6 +4,7 @@ import type { RecordManualPaymentInput } from '@procureflow/shared';
 import Decimal from 'decimal.js';
 
 import { AuditLogService } from '../audit/audit.service';
+import { PoStatusService } from '../purchase-orders/po-status.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentRecordInvalidError } from './payment-run.errors';
 
@@ -73,6 +74,7 @@ export class PaymentPostingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
+    private readonly poStatus: PoStatusService,
   ) {}
 
   /** What is left to settle, before TDS. Never negative. */
@@ -129,7 +131,7 @@ export class PaymentPostingService {
     const invoice = await this.prisma.client.invoice.update({
       where: { id: input.invoiceId },
       data: { paidAmount: { increment: new Prisma.Decimal(gross.toFixed(4)) } },
-      select: { grossAmount: true, paidAmount: true, status: true },
+      select: { grossAmount: true, paidAmount: true, status: true, poId: true },
     });
     const settled = PaymentPostingService.outstanding(invoice).isZero();
     const status = settled ? 'PAID' : 'PARTIALLY_PAID';
@@ -158,6 +160,8 @@ export class PaymentPostingService {
         isStub: input.isStub,
       },
     });
+    // A fully paid invoice may be what closes its purchase order.
+    await this.poStatus.recompute(invoice.poId, input.recordedById ?? null);
     return { status };
   }
 
@@ -205,10 +209,10 @@ export class PaymentPostingService {
       );
     }
     if (pendingApprovals > 0) {
-      throw new PaymentRecordInvalidError(
-        'This invoice is still waiting for approval.',
-        { invoiceId, pendingApprovals },
-      );
+      throw new PaymentRecordInvalidError('This invoice is still waiting for approval.', {
+        invoiceId,
+        pendingApprovals,
+      });
     }
     // A run already holding the invoice will pay the amount it was composed
     // with; recording a payment beside it would pay that part twice.

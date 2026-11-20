@@ -213,7 +213,7 @@ function harness(
     audit,
     events,
     submission,
-    new PaymentPostingService(prisma, audit),
+    new PaymentPostingService(prisma, audit, { recompute: vi.fn() } as never),
     gateway,
   );
   const service = new PaymentRunService(

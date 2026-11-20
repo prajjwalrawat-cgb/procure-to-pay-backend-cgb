@@ -28,6 +28,7 @@ import { ItemMasterModule } from './item-master/item-master.module';
 import { PaymentRunsModule } from './payment-runs/payment-runs.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
+import { PoStatusModule } from './purchase-orders/po-status.service';
 import { RequisitionsModule } from './requisitions/requisitions.module';
 import { SourcingModule } from './sourcing/sourcing.module';
 import { TenantInterceptor } from './tenant/tenant.interceptor';
@@ -72,6 +73,7 @@ import { ComplianceModule } from './compliance/compliance.module';
     PrismaModule,
     AuditModule,
     DomainEventsModule,
+    PoStatusModule,
     MailModule,
     StorageModule,
     CryptoModule,

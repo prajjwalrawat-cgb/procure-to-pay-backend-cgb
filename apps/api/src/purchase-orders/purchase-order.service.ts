@@ -23,6 +23,7 @@ import { DomainEventService } from '../common/events/domain-event.service';
 import { StorageService } from '../common/storage/storage.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PoDocumentService } from './po-document.service';
+import { NON_CANCELLABLE_PO_STATUSES } from './purchase-order-query.service';
 import { PoTermsService } from './po-terms.service';
 import {
   PurchaseOrderStateError,
@@ -700,8 +701,7 @@ export class PurchaseOrderService implements OnModuleInit {
       include: { lines: true },
     });
     if (!po) throw new NotFoundException('Purchase order not found');
-    const blocked = ['PARTIALLY_RECEIVED', 'RECEIVED', 'INVOICED', 'CLOSED', 'CANCELLED'];
-    if (blocked.includes(po.status)) {
+    if (NON_CANCELLABLE_PO_STATUSES.includes(po.status)) {
       throw new PurchaseOrderStateError('This PO can no longer be cancelled.', {
         status: po.status,
       });
@@ -868,7 +868,9 @@ export class PurchaseOrderService implements OnModuleInit {
       });
     }
     if (changes.length === 0) {
-      throw new PurchaseOrderValidationError('Nothing changed — edit a price or quantity.');
+      throw new PurchaseOrderValidationError(
+        'Nothing changed — edit a price or quantity.',
+      );
     }
     await this.assertPrQtyAvailable(changes, po.lines);
 
@@ -1063,7 +1065,11 @@ export class PurchaseOrderService implements OnModuleInit {
       if (increase.greaterThan(left)) {
         throw new PurchaseOrderValidationError(
           'Quantity exceeds what is left on the requisition line.',
-          { lineNo: c.lineNo, remaining: left.toFixed(4), requested: increase.toFixed(4) },
+          {
+            lineNo: c.lineNo,
+            remaining: left.toFixed(4),
+            requested: increase.toFixed(4),
+          },
         );
       }
     }
@@ -1074,7 +1080,10 @@ export class PurchaseOrderService implements OnModuleInit {
     requisition: { plantId: string } | null;
     vendor: { gstin: string | null };
   }): Promise<TaxContext> {
-    const plant = await this.resolveBillToPlant(po.billToPlantId, po.requisition?.plantId);
+    const plant = await this.resolveBillToPlant(
+      po.billToPlantId,
+      po.requisition?.plantId,
+    );
     return { plantStateCode: plant?.stateCode ?? '', vendorGstin: po.vendor.gstin };
   }
 

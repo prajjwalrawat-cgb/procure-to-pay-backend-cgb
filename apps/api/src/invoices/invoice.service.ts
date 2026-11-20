@@ -20,6 +20,7 @@ import { AuditLogService } from '../audit/audit.service';
 import { DomainEventService } from '../common/events/domain-event.service';
 import { ACTIVE_RUN_ITEM } from '../payment-runs/payment-posting.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { PoStatusService } from '../purchase-orders/po-status.service';
 import { InvoiceNotificationService } from './invoice-notification.service';
 import { MatchService } from './match.service';
 import { MsmeService } from './domain/msme.service';
@@ -52,7 +53,8 @@ const TAX_INVOICE_REFUSED: Record<string, string> = {
   SCHEDULED:
     'The proforma is in a payment run the bank has not confirmed yet. Wait for it to settle first.',
   HELD: 'This invoice is on hold. Release the hold first.',
-  REJECTED: 'This proforma was rejected. Submit the tax invoice as a new invoice instead.',
+  REJECTED:
+    'This proforma was rejected. Submit the tax invoice as a new invoice instead.',
 };
 
 /** Where a buyer may still reject an invoice: anywhere before approval starts. */
@@ -87,6 +89,7 @@ export class InvoiceService {
     private readonly msme: MsmeService,
     private readonly routing: ApprovalRoutingService,
     private readonly notifications: InvoiceNotificationService,
+    private readonly poStatus: PoStatusService,
   ) {}
 
   /** Manual creation by AP. Skips OCR (Slice 1 decision); runs match immediately. */
@@ -157,7 +160,13 @@ export class InvoiceService {
       documentKind: input.documentKind,
     });
     await this.queueOcr(tenantId, id, input.s3Key);
-    await this.auditCreated(id, vendorId, 'PORTAL', input.vendorInvoiceRef, input.documentKind);
+    await this.auditCreated(
+      id,
+      vendorId,
+      'PORTAL',
+      input.vendorInvoiceRef,
+      input.documentKind,
+    );
     return id;
   }
 
@@ -425,6 +434,8 @@ export class InvoiceService {
         after: { confidence: extraction.confidence, floorPct, belowFloor },
         tenantId,
       });
+      // OCR may have just supplied the lines (and value) this order is billed by.
+      await this.poStatus.recompute(invoice.poId);
       if (belowFloor) {
         await this.events.emit(
           'InvoiceOcrLowConfidence',
@@ -552,6 +563,7 @@ export class InvoiceService {
       actorId,
       after: { lines: input.lines.length },
     });
+    await this.poStatus.recompute(inv.poId, actorId);
     await this.match.runFor(invoiceId, actorId);
     return { ok: true };
   }
@@ -638,6 +650,8 @@ export class InvoiceService {
       { status: 'REJECTED', rejectionReason: reason },
       { reason },
     );
+    // A rejected invoice no longer bills the order.
+    await this.poStatus.recompute(inv.poId, actorId);
     await this.events.emit(
       'InvoiceRejected',
       { invoiceId, vendorId: inv.vendorId },
@@ -824,7 +838,9 @@ export class InvoiceService {
         grossAmount: new Prisma.Decimal(totals.gross.toFixed(4)),
         taxAmount: new Prisma.Decimal(totals.taxAmount.toFixed(4)),
         tdsAmount,
-        netAmount: new Prisma.Decimal(totals.gross.minus(tdsAmount.toString()).toFixed(4)),
+        netAmount: new Prisma.Decimal(
+          totals.gross.minus(tdsAmount.toString()).toFixed(4),
+        ),
         irn: input.irn ?? null,
         ewaybillNo: input.ewaybillNo ?? null,
         // Asserted by the uploader, so OCR checks them rather than adopting.
@@ -859,6 +875,9 @@ export class InvoiceService {
       },
     });
     await this.events.emit('InvoiceTaxInvoiceAttached', { invoiceId });
+    // New lines and value; and a paid proforma is back in the pipeline until
+    // its approval carries over, so a closed order reopens meanwhile.
+    await this.poStatus.recompute(inv.poId, actor.type === 'USER' ? actor.id : null);
     await this.queueOcr(inv.tenantId, invoiceId, input.s3Key);
   }
 
@@ -980,11 +999,17 @@ export class InvoiceService {
    * trip through OCR and the match moved back into the pipeline.
    */
   private async carryOverApproval(
-    inv: { id: string; status: string; grossAmount: Prisma.Decimal; paidAmount: Prisma.Decimal },
+    inv: {
+      id: string;
+      status: string;
+      grossAmount: Prisma.Decimal;
+      paidAmount: Prisma.Decimal;
+    },
     actorId: string,
   ): Promise<void> {
     const paid = new Decimal(inv.paidAmount.toString());
-    const settled = paid.greaterThan(0) && paid.greaterThanOrEqualTo(inv.grossAmount.toString());
+    const settled =
+      paid.greaterThan(0) && paid.greaterThanOrEqualTo(inv.grossAmount.toString());
     const status = settled ? 'PAID' : paid.greaterThan(0) ? 'PARTIALLY_PAID' : 'APPROVED';
     const lastPayment = settled
       ? await this.prisma.client.paymentRecord.findFirst({
@@ -993,10 +1018,12 @@ export class InvoiceService {
           select: { paidAt: true },
         })
       : null;
-    await this.prisma.client.invoice.update({
+    const updated = await this.prisma.client.invoice.update({
       where: { id: inv.id },
       data: { status, ...(lastPayment ? { paidAt: lastPayment.paidAt } : {}) },
+      select: { poId: true },
     });
+    await this.poStatus.recompute(updated.poId, actorId);
     await this.audit.record({
       action: 'invoice.approval_carried_over',
       entityType: 'Invoice',
@@ -1113,6 +1140,8 @@ export class InvoiceService {
           : {}),
       },
     });
+    // Every create path lands here: an incoming invoice bills its order.
+    await this.poStatus.recompute(args.poId);
   }
 
   private async transition(

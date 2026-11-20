@@ -19,13 +19,15 @@ import { ProductService } from './product.service';
 /**
  * PO states that can still legitimately receive goods. A DRAFT or AWAITING_
  * APPROVAL order has no commercial commitment behind it; a CANCELLED or CLOSED
- * one is finished.
+ * one is finished. An order invoiced ahead of delivery still takes its goods.
  */
 const RECEIVABLE_PO_STATUSES = [
   'APPROVED',
   'ISSUED',
   'ACKNOWLEDGED',
   'PARTIALLY_RECEIVED',
+  'PARTIALLY_INVOICED',
+  'INVOICED',
 ] as const;
 
 /**
@@ -71,7 +73,9 @@ export class InventoryReceiptService {
     const sellableQty = rejectedUpFront ? 0 : input.qty - input.damageQty;
 
     const remark = this.composeRemark(input.remark, [
-      input.nonPoReceipt ? `Non-PO receipt: ${input.nonPoReason ?? 'no reason given'}` : null,
+      input.nonPoReceipt
+        ? `Non-PO receipt: ${input.nonPoReason ?? 'no reason given'}`
+        : null,
       input.invoiceNo ? `Invoice ${input.invoiceNo}` : null,
     ]);
 
@@ -153,7 +157,8 @@ export class InventoryReceiptService {
       );
     }
 
-    const rejectedQty = input.qcStatus === 'REJECTED' ? (input.rejectedQty ?? entry.qty) : 0;
+    const rejectedQty =
+      input.qcStatus === 'REJECTED' ? (input.rejectedQty ?? entry.qty) : 0;
     if (rejectedQty > entry.qty) {
       throw new LedgerStateError(
         `Rejected quantity ${rejectedQty} exceeds the received quantity ${entry.qty}.`,
@@ -173,7 +178,9 @@ export class InventoryReceiptService {
         productId: entry.productId,
         locationId: entry.locationId,
         txnType:
-          input.disposition === 'RETURN_TO_VENDOR' ? 'VENDOR_RETURN_OUT' : 'DAMAGE_WRITE_OFF',
+          input.disposition === 'RETURN_TO_VENDOR'
+            ? 'VENDOR_RETURN_OUT'
+            : 'DAMAGE_WRITE_OFF',
         qty: rejectedQty,
         vendorId: entry.vendorId,
         purchaseOrderId: entry.purchaseOrderId,
@@ -201,16 +208,17 @@ export class InventoryReceiptService {
       entityId: entryId,
       actorId,
       before: { qcStatus: entry.qcStatus },
-      after: { qcStatus: input.qcStatus, rejectedQty, disposition: input.disposition ?? null },
+      after: {
+        qcStatus: input.qcStatus,
+        rejectedQty,
+        disposition: input.disposition ?? null,
+      },
     });
     return { ok: true, dispositionEntryId };
   }
 
   /** POST /inventory/vendor-returns — VENDOR_RETURN_OUT (gate pass out). */
-  async vendorReturn(
-    input: VendorReturnInput,
-    actorId: string,
-  ): Promise<{ id: string }> {
+  async vendorReturn(input: VendorReturnInput, actorId: string): Promise<{ id: string }> {
     await this.products.require(input.productId);
     await this.locations.require(input.locationId);
 
@@ -238,7 +246,11 @@ export class InventoryReceiptService {
       entityType: 'StockLedgerEntry',
       entityId: id,
       actorId,
-      after: { productId: input.productId, qty: input.qty, purpose: input.purpose ?? null },
+      after: {
+        productId: input.productId,
+        qty: input.qty,
+        purpose: input.purpose ?? null,
+      },
     });
     return { id };
   }
@@ -248,10 +260,7 @@ export class InventoryReceiptService {
    * sellable stock in the business sense; they are kept in the ledger so the
    * Sample Inward Sheet stays reproducible.
    */
-  async sampleInward(
-    input: SampleInwardInput,
-    actorId: string,
-  ): Promise<{ id: string }> {
+  async sampleInward(input: SampleInwardInput, actorId: string): Promise<{ id: string }> {
     await this.products.require(input.productId);
     await this.locations.require(input.locationId);
 
@@ -294,7 +303,11 @@ export class InventoryReceiptService {
     if (!po) {
       throw new PoRequiredError(`Purchase order ${purchaseOrderId} does not exist.`);
     }
-    if (!RECEIVABLE_PO_STATUSES.includes(po.status as (typeof RECEIVABLE_PO_STATUSES)[number])) {
+    if (
+      !RECEIVABLE_PO_STATUSES.includes(
+        po.status as (typeof RECEIVABLE_PO_STATUSES)[number],
+      )
+    ) {
       throw new PoRequiredError(
         `Purchase order ${po.number} is ${po.status} and cannot receive goods.`,
         { purchaseOrderId, status: po.status, receivable: RECEIVABLE_PO_STATUSES },

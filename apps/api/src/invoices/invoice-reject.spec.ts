@@ -48,6 +48,7 @@ function build(
     {} as never, // msme
     {} as never, // routing
     { invoiceRejected } as never, // notifications
+    { recompute: vi.fn() } as never, // poStatus
   );
   return { service, record, emit, invoiceUpdate, approvalDelete, invoiceRejected };
 }

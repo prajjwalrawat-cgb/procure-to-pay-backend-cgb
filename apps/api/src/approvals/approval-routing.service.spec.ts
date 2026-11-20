@@ -102,6 +102,7 @@ function makeRouting(opts: {
     context,
     resolver,
     notifications,
+    { recompute: vi.fn() } as never, // poStatus
   );
   return { service, invoiceUpdate, approvalCreate, deleteMany, audit, events };
 }

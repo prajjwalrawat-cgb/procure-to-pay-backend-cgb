@@ -225,15 +225,14 @@ export class RefsService {
         /*
          * A purchase order with nothing left to bill is not invoiceable.
          *
-         * The status filter above already excludes INVOICED — the intent has always
-         * been that a fully-billed order drops out — but nothing in the codebase
-         * ever sets that status: `INVOICED` and `PARTIALLY_INVOICED` appear only in
-         * read filters, never in an update. So an order stayed ISSUED forever and
-         * kept accepting invoices, which is how PO-0498 came to carry 200 units
-         * billed against 100 ordered.
+         * The status filter above excludes INVOICED, and PoStatusService now sets
+         * it — but only once an invoice exists, and by quantity *or* value. An
+         * invoice still in flight, or one whose lines carry no PO-line link,
+         * leaves remaining quantity as the precise test; PO-0498 came to carry
+         * 200 units billed against 100 ordered while nothing set the status.
          *
-         * Filtering on remaining quantity enforces the intent without depending on
-         * a status nothing maintains. A supplier who needs to bill more needs the
+         * Filtering on remaining quantity enforces the intent independently of
+         * the stored status. A supplier who needs to bill more needs the
          * order amended — the PO is the authorisation, and billing past it is not
          * the supplier's call to make.
          */

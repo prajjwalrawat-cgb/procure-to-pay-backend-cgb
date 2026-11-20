@@ -69,6 +69,8 @@ function build(invoice: {
       computeDueDate: (d: Date, cap: number) => new Date(d.getTime() + cap * 86_400_000),
     } as never, // msme
     {} as never, // routing
+    {} as never, // notifications
+    { recompute: vi.fn() } as never, // poStatus
   );
   return { service, updates, runFor };
 }

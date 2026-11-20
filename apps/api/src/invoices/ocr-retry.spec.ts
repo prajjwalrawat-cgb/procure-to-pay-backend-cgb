@@ -45,6 +45,8 @@ function build(invoice: { status: string } | null, hasAttachment = true) {
     { computeFor: vi.fn() } as never, // tds
     { computeDueDate: vi.fn() } as never, // msme
     {} as never, // routing
+    {} as never, // notifications
+    { recompute: vi.fn() } as never, // poStatus
   );
   return { service, submit, updates };
 }

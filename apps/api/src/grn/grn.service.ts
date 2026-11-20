@@ -14,6 +14,7 @@ import { AuditLogService } from '../audit/audit.service';
 import { DomainEventService } from '../common/events/domain-event.service';
 import { MatchService } from '../invoices/match.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { PoStatusService } from '../purchase-orders/po-status.service';
 import { GrnStateError, GrnValidationError, OverReceiptError } from './grn.errors';
 import { EwayBillValidationService } from '../compliance/eway-validation.service';
 import { InventoryValuationService } from './inventory-valuation.service';
@@ -22,7 +23,18 @@ import { RmaService } from './rma.service';
 import { SamplingPlanService } from './sampling-plan.service';
 import { StockLedgerService } from './stock-ledger.service';
 
-const RECEIVABLE_PO = ['ISSUED', 'ACKNOWLEDGED', 'PARTIALLY_RECEIVED'];
+/**
+ * PO states that can still take goods. An order may be invoiced before anything
+ * is received (the vendor bills on dispatch), so the invoiced states stay
+ * receivable; CLOSED (billed and paid in full) and CANCELLED do not.
+ */
+const RECEIVABLE_PO = [
+  'ISSUED',
+  'ACKNOWLEDGED',
+  'PARTIALLY_RECEIVED',
+  'PARTIALLY_INVOICED',
+  'INVOICED',
+];
 const INVOICE_LOCKED: Prisma.InvoiceWhereInput['status'] = {
   in: ['AWAITING_APPROVAL', 'APPROVED', 'SCHEDULED', 'PARTIALLY_PAID', 'PAID'],
 };
@@ -45,6 +57,7 @@ export class GrnService {
     private readonly rma: RmaService,
     private readonly match: MatchService,
     private readonly eway: EwayBillValidationService,
+    private readonly poStatus: PoStatusService,
   ) {}
 
   async createDraft(input: GrnCreateInput, actorId: string): Promise<{ id: string }> {
@@ -493,7 +506,7 @@ export class GrnService {
       where: { id },
       data: { status: 'POSTED', postedAt: new Date(), postedBy: actorId },
     });
-    await this.recomputePoStatus(grn.poId);
+    await this.poStatus.recompute(grn.poId, actorId);
 
     await this.audit.record({
       action: 'GRN_POSTED',
@@ -581,7 +594,7 @@ export class GrnService {
       where: { grnId: id, status: { in: ['DRAFT', 'ISSUED'] } },
       data: { status: 'CANCELLED' },
     });
-    await this.recomputePoStatus(grn.poId);
+    await this.poStatus.recompute(grn.poId, actorId);
     await this.audit.record({
       action: 'GRN_REVERSED',
       entityType: 'GoodsReceiptNote',
@@ -650,34 +663,6 @@ export class GrnService {
       select: { id: true },
     });
     for (const inv of invoices) await this.match.runFor(inv.id);
-  }
-
-  private async recomputePoStatus(poId: string): Promise<void> {
-    const po = await this.prisma.client.purchaseOrder.findUnique({
-      where: { id: poId },
-      include: { lines: true },
-    });
-    if (!po) return;
-    const anyReceived = po.lines.some((l) =>
-      new Decimal(l.qtyReceived.toString()).greaterThan(0),
-    );
-    const allReceived =
-      po.lines.length > 0 &&
-      po.lines.every((l) =>
-        new Decimal(l.qtyReceived.toString()).greaterThanOrEqualTo(
-          l.qtyOrdered.toString(),
-        ),
-      );
-    let status = po.status;
-    if (allReceived) status = 'RECEIVED';
-    else if (anyReceived) status = 'PARTIALLY_RECEIVED';
-    else if (['PARTIALLY_RECEIVED', 'RECEIVED'].includes(po.status)) status = 'ISSUED';
-    if (status !== po.status) {
-      await this.prisma.client.purchaseOrder.update({
-        where: { id: poId },
-        data: { status },
-      });
-    }
   }
 
   private async priorReceived(poLineId: string): Promise<Decimal> {
