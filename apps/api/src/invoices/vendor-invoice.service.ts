@@ -159,7 +159,10 @@ export class VendorInvoiceService {
     if (!own) throw new NotFoundException('Invoice not found');
     await this.assertUploadedKey(tenantId, input.s3Key);
     await this.assertRefNotUsed(vendorId, input.vendorInvoiceRef, invoiceId);
-    await this.invoices.attachTaxInvoice(invoiceId, input, { id: userId, type: 'VENDOR' });
+    await this.invoices.attachTaxInvoice(invoiceId, input, {
+      id: userId,
+      type: 'VENDOR',
+    });
   }
 
   /**
@@ -188,10 +191,27 @@ export class VendorInvoiceService {
 
     const po = await this.prisma.client.purchaseOrder.findFirst({
       where: { id: poId, vendorId },
-      select: { number: true },
+      select: { number: true, status: true },
     });
+    if (po?.status === 'CANCELLED') {
+      throw new BadRequestException(
+        `${po.number} has been cancelled and can no longer be invoiced.`,
+      );
+    }
+    // Only an order that reached invoicing can be "already invoiced". Anything
+    // not yet issued (or on hold) gets the generic message — it must not even
+    // confirm to the vendor that an unissued order exists.
+    const exhausted = [
+      'PARTIALLY_INVOICED',
+      'INVOICED',
+      'CLOSED',
+      'RECEIVED',
+      'PARTIALLY_RECEIVED',
+      'ACKNOWLEDGED',
+      'ISSUED',
+    ];
     throw new BadRequestException(
-      po
+      po && exhausted.includes(po.status)
         ? `Everything on ${po.number} has already been invoiced. Ask your buyer ` +
             'to amend the purchase order if more needs to be billed against it.'
         : 'That purchase order is not open for invoicing.',

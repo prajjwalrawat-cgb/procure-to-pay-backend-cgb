@@ -20,7 +20,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PoTermsService } from './po-terms.service';
 import { defaultPlantQuery } from '../common/plants/default-plant';
 
-/** Statuses a vendor is allowed to see (issued and beyond). */
+/**
+ * Statuses a vendor is allowed to see (issued and beyond). Status alone is not
+ * enough: CANCELLED is reachable from DRAFT / AWAITING_APPROVAL too, so every
+ * vendor read also requires `issuedAt` — a PO the vendor was never sent stays
+ * invisible to them, even after cancellation.
+ */
 const VENDOR_VISIBLE: PoStatus[] = [
   'ISSUED',
   'ACKNOWLEDGED',
@@ -64,7 +69,7 @@ export class VendorPoService {
   async list(userId: string): Promise<VendorPoListResponse> {
     const vendorId = await this.resolveVendorId(userId);
     const rows = await this.prisma.client.purchaseOrder.findMany({
-      where: { vendorId, status: { in: VENDOR_VISIBLE } },
+      where: { vendorId, status: { in: VENDOR_VISIBLE }, issuedAt: { not: null } },
       orderBy: { issuedAt: 'desc' },
       include: { lines: true },
       take: 100,
@@ -148,6 +153,18 @@ export class VendorPoService {
   async acknowledge(userId: string, poId: string): Promise<{ acknowledgedAt: string }> {
     const vendorId = await this.resolveVendorId(userId);
     const po = await this.requireVendorPo(poId, vendorId);
+    // Acknowledging moves ISSUED → ACKNOWLEDGED and nothing else. Without this
+    // a cancelled (or received, closed…) order was overwritten to ACKNOWLEDGED,
+    // which reopened it for invoicing.
+    if (po.status !== 'ISSUED' && !po.acknowledgedAt) {
+      throw new ConflictException({
+        message:
+          po.status === 'CANCELLED'
+            ? 'This purchase order has been cancelled and can no longer be acknowledged.'
+            : 'This purchase order can no longer be acknowledged.',
+        status: po.status,
+      });
+    }
     if (po.acknowledgedAt) {
       // Idempotent-style: report the existing timestamp with a 409.
       throw new ConflictException({
@@ -225,7 +242,12 @@ export class VendorPoService {
       },
     });
     // Return 404 (not 403) for another vendor's PO — no existence disclosure.
-    if (!po || po.vendorId !== vendorId || !VENDOR_VISIBLE.includes(po.status)) {
+    if (
+      !po ||
+      po.vendorId !== vendorId ||
+      !po.issuedAt ||
+      !VENDOR_VISIBLE.includes(po.status)
+    ) {
       throw new NotFoundException('Purchase order not found');
     }
     return po;

@@ -32,6 +32,7 @@ function build(
   objectExists = true,
   openPoIds: string[] = ['po_1'],
   existing: ExistingInvoice[] = [],
+  poStatus = 'INVOICED',
 ) {
   const findMany = vi.fn(
     async (args: { where: { status?: { not: string }; id?: { not: string } } }) =>
@@ -49,7 +50,7 @@ function build(
       user: { findUnique: vi.fn().mockResolvedValue({ email: 'ap@vendor.test' }) },
       vendorContact: { findFirst: vi.fn().mockResolvedValue({ vendorId: 'ven_1' }) },
       purchaseOrder: {
-        findFirst: vi.fn().mockResolvedValue({ number: 'PO-0498' }),
+        findFirst: vi.fn().mockResolvedValue({ number: 'PO-0498', status: poStatus }),
       },
       invoice: {
         findMany,
@@ -139,6 +140,27 @@ describe('VendorInvoiceService.submit — exhausted purchase order', () => {
     );
   });
 
+  // A cancelled order is not "already invoiced" — telling the vendor to ask
+  // for an amendment would send them chasing the wrong fix.
+  it('says a cancelled order is cancelled', async () => {
+    const { service, createFromVendorPortal } = build(true, [], [], 'CANCELLED');
+    await expect(service.submit(TENANT, 'usr_1', payload(UPLOADED))).rejects.toThrow(
+      /PO-0498 has been cancelled/,
+    );
+    expect(createFromVendorPortal).not.toHaveBeenCalled();
+  });
+
+  it.each(['DRAFT', 'AWAITING_APPROVAL', 'APPROVED', 'ON_HOLD'])(
+    'refuses a %s order as not open for invoicing',
+    async (status) => {
+      const { service, createFromVendorPortal } = build(true, [], [], status);
+      await expect(service.submit(TENANT, 'usr_1', payload(UPLOADED))).rejects.toThrow(
+        /not open for invoicing/,
+      );
+      expect(createFromVendorPortal).not.toHaveBeenCalled();
+    },
+  );
+
   it('still accepts an order that has quantity remaining', async () => {
     const { service, createFromVendorPortal } = build(true, ['po_1']);
     await service.submit(TENANT, 'usr_1', payload(UPLOADED));
@@ -183,9 +205,11 @@ describe('VendorInvoiceService — duplicate invoice number', () => {
   });
 
   it('catches the number OCR read off an earlier document', async () => {
-    const { service } = build(true, ['po_1'], [
-      live('Invoice attached', { ocrVendorInvoiceRef: 'INV/1' }),
-    ]);
+    const { service } = build(
+      true,
+      ['po_1'],
+      [live('Invoice attached', { ocrVendorInvoiceRef: 'INV/1' })],
+    );
     await expect(
       service.submit(TENANT, 'usr_1', payload(UPLOADED)),
     ).rejects.toBeInstanceOf(ConflictException);
@@ -194,9 +218,11 @@ describe('VendorInvoiceService — duplicate invoice number', () => {
   // Rejection is how a bad invoice is sent back; the corrected one may reuse
   // its number.
   it('allows resubmitting the number of a rejected invoice', async () => {
-    const { service, createFromVendorPortal } = build(true, ['po_1'], [
-      live('INV/1', { status: 'REJECTED' }),
-    ]);
+    const { service, createFromVendorPortal } = build(
+      true,
+      ['po_1'],
+      [live('INV/1', { status: 'REJECTED' })],
+    );
     await service.submit(TENANT, 'usr_1', payload(UPLOADED));
     expect(createFromVendorPortal).toHaveBeenCalled();
   });
@@ -208,17 +234,21 @@ describe('VendorInvoiceService — duplicate invoice number', () => {
   });
 
   it("lets a tax invoice keep its own proforma's number", async () => {
-    const { service, attachTaxInvoice } = build(true, ['po_1'], [
-      live('INV/1', { id: 'inv_pi', status: 'APPROVED' }),
-    ]);
+    const { service, attachTaxInvoice } = build(
+      true,
+      ['po_1'],
+      [live('INV/1', { id: 'inv_pi', status: 'APPROVED' })],
+    );
     await service.attachTaxInvoice(TENANT, 'usr_1', 'inv_pi', payload(UPLOADED));
     expect(attachTaxInvoice).toHaveBeenCalled();
   });
 
   it("refuses a tax invoice reusing another invoice's number", async () => {
-    const { service, attachTaxInvoice } = build(true, ['po_1'], [
-      live('INV/1', { id: 'inv_other', status: 'PAID' }),
-    ]);
+    const { service, attachTaxInvoice } = build(
+      true,
+      ['po_1'],
+      [live('INV/1', { id: 'inv_other', status: 'PAID' })],
+    );
     await expect(
       service.attachTaxInvoice(TENANT, 'usr_1', 'inv_pi', payload(UPLOADED)),
     ).rejects.toBeInstanceOf(ConflictException);
