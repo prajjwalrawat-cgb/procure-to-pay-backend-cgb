@@ -212,7 +212,10 @@ export class RequisitionQueryService {
     });
 
     const chain = await this.routing.getLiveChain('REQUISITION', id);
-    const myStep = chain.find((s) => s.approverId === userId && s.decision === 'PENDING');
+    // A draft's chain is a preview (approvalId null) — not a decision to make.
+    const myStep = chain.find(
+      (s) => s.approvalId && s.approverId === userId && s.decision === 'PENDING',
+    );
     const activity = await this.activity(id);
     const commentAuthors = await this.userNames(pr.comments.map((c) => c.authorId));
     const attachments = await this.attachments.list(id);

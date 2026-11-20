@@ -142,7 +142,15 @@ export class PurchaseOrderQueryService {
       where: { poId: id, sourceType: { in: ['PO', 'SPOT_BUY'] }, status: 'COMMITTED' },
     });
     const chain = await this.routing.getLiveChain('PURCHASE_ORDER', id);
-    const myStep = chain.find((s) => s.approverId === userId && s.decision === 'PENDING');
+    // Before submission the chain is only a preview built from the matrix: its
+    // steps read PENDING but have no approval row (approvalId null), so they
+    // must not count as a decision waiting on this user.
+    const myStep =
+      po.status === 'AWAITING_APPROVAL'
+        ? chain.find(
+            (s) => s.approvalId && s.approverId === userId && s.decision === 'PENDING',
+          )
+        : undefined;
     const authors = await this.userNames(po.comments.map((c) => c.authorId));
     const activity = await this.activity(id);
     const amendments = await this.amendments(id, userId);
@@ -263,7 +271,9 @@ export class PurchaseOrderQueryService {
     return Promise.all(
       rows.map(async (r): Promise<PoAmendmentView> => {
         const chain = await this.routing.getLiveChain('PO_AMENDMENT', r.id);
-        const mine = chain.find((s) => s.approverId === userId && s.decision === 'PENDING');
+        const mine = chain.find(
+          (s) => s.approvalId && s.approverId === userId && s.decision === 'PENDING',
+        );
         return {
           id: r.id,
           amendmentNo: r.amendmentNo,
