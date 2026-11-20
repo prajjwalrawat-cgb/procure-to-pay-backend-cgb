@@ -568,6 +568,61 @@ export class InvoiceService {
     return { ok: true };
   }
 
+  /**
+   * AP confirms a low-confidence (or failed) read as-is and sends the invoice
+   * on to the 3-way match.
+   *
+   * Low confidence is about the reading, not the lines: a portal invoice
+   * arrives with the vendor's lines already linked to the PO, and OCR scoring
+   * the PDF below the floor does not make those wrong. Re-typing them through
+   * `completeManualEntry` would throw the PO-line links away. Here a person
+   * vouches for the figures on screen against the PDF; the matcher still
+   * checks them against the PO and raises whatever it finds.
+   *
+   * An invoice with no lines has nothing to vouch for — that is what manual
+   * entry is for.
+   */
+  async confirmOcr(invoiceId: string, actorId: string): Promise<{ ok: true }> {
+    const inv = await this.prisma.client.invoice.findUnique({
+      where: { id: invoiceId },
+      select: {
+        id: true,
+        poId: true,
+        status: true,
+        ocrConfidence: true,
+        _count: { select: { lines: true } },
+      },
+    });
+    if (!inv) throw new NotFoundException('Invoice not found');
+    if (inv.status !== 'OCR_LOW_CONFIDENCE' && inv.status !== 'OCR_FAILED') {
+      throw new ForbiddenException('Invoice is not awaiting OCR review.');
+    }
+    if (inv._count.lines === 0) {
+      throw new ForbiddenException(
+        'This invoice has no lines to confirm. Enter the lines by hand from the invoice intake queue.',
+      );
+    }
+    await this.prisma.client.invoice.update({
+      where: { id: invoiceId },
+      // A person has now vouched for the header too; OCR must not overwrite it.
+      data: { status: 'OCR_DONE', headerAwaitingOcr: false },
+    });
+    await this.audit.record({
+      action: 'invoice.ocr_confirmed',
+      entityType: 'Invoice',
+      entityId: invoiceId,
+      actorId,
+      before: {
+        status: inv.status,
+        ocrConfidence: inv.ocrConfidence?.toString() ?? null,
+      },
+      after: { status: 'OCR_DONE', lines: inv._count.lines },
+    });
+    await this.poStatus.recompute(inv.poId, actorId);
+    await this.match.runFor(invoiceId, actorId);
+    return { ok: true };
+  }
+
   async assign(invoiceId: string, assigneeId: string, actorId: string): Promise<void> {
     await this.transition(
       invoiceId,

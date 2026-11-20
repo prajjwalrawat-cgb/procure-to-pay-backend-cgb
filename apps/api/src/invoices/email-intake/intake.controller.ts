@@ -81,6 +81,16 @@ export class IntakeController {
     return this.intake.resolveVendorMatch(id, dto.vendorId, user.userId);
   }
 
+  /** Accept a low-confidence / failed read as-is and run the 3-way match. */
+  @Post('invoices/:id/confirm-ocr')
+  @RequirePermission(PERMISSIONS.INVOICE_INTAKE_MANAGE)
+  async confirmOcr(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+  ): Promise<{ ok: true }> {
+    return this.invoices.confirmOcr(id, user.userId);
+  }
+
   @Post('invoices/:id/complete-manual-entry')
   @RequirePermission(PERMISSIONS.INVOICE_INTAKE_MANAGE)
   async completeManualEntry(
