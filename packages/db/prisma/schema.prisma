@@ -2384,6 +2384,7 @@ enum VendorLifecycleStatus {
   SUSPENDED
   BLACKLISTED
   ARCHIVED
+  REJECTED
 }
 
 enum LegalEntityType {

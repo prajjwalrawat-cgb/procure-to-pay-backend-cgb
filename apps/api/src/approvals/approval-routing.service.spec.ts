@@ -10,7 +10,7 @@ import type { NotificationService } from './notification.service';
 
 interface FakeApproval {
   id: string;
-  documentType: 'INVOICE';
+  documentType: 'INVOICE' | 'VENDOR_ONBOARDING';
   documentId: string;
   stepNo: number;
   decision: string;
@@ -56,6 +56,7 @@ function makeRouting(opts: {
   snapshot?: { matrixId: string; steps: unknown[] };
 }) {
   const invoiceUpdate = vi.fn().mockResolvedValue({});
+  const onboardingUpdate = vi.fn().mockResolvedValue({});
   const approvalCreate = vi.fn().mockResolvedValue(approval({ id: 'apr_new' }));
   const deleteMany = vi.fn().mockResolvedValue({ count: 0 });
 
@@ -70,6 +71,12 @@ function makeRouting(opts: {
       },
       invoice: {
         update: invoiceUpdate,
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({ approvalMatrixSnapshot: opts.snapshot ?? null }),
+      },
+      vendorOnboarding: {
+        update: onboardingUpdate,
         findUnique: vi
           .fn()
           .mockResolvedValue({ approvalMatrixSnapshot: opts.snapshot ?? null }),
@@ -104,7 +111,15 @@ function makeRouting(opts: {
     notifications,
     { recompute: vi.fn() } as never, // poStatus
   );
-  return { service, invoiceUpdate, approvalCreate, deleteMany, audit, events };
+  return {
+    service,
+    invoiceUpdate,
+    onboardingUpdate,
+    approvalCreate,
+    deleteMany,
+    audit,
+    events,
+  };
 }
 
 describe('ApprovalRoutingService.advance', () => {
@@ -186,5 +201,36 @@ describe('ApprovalRoutingService.advance', () => {
     expect(invoiceUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ data: { status: 'APPROVED' } }),
     );
+  });
+});
+
+describe('ApprovalRoutingService — vendor onboarding outcomes', () => {
+  const onb = (decision: string): FakeApproval =>
+    approval({ documentType: 'VENDOR_ONBOARDING', documentId: 'onb_1', decision });
+
+  it('moves the vendor to REJECTED when the onboarding is rejected', async () => {
+    // Left alone the vendor stayed UNDER_REVIEW, and the dossier header read
+    // "Under review" beside a "Rejected" decision.
+    const { service, onboardingUpdate } = makeRouting({ approvals: [onb('REJECTED')] });
+    await service.advance('VENDOR_ONBOARDING', 'onb_1', 'usr_a');
+    expect(onboardingUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          reviewDecision: 'REJECTED',
+          vendor: { update: { lifecycleStatus: 'REJECTED' } },
+        }),
+      }),
+    );
+  });
+
+  it('leaves the vendor status alone on a return for info', async () => {
+    // returnForInfo sets IN_ONBOARDING itself; the engine must not fight it.
+    const { service, onboardingUpdate } = makeRouting({
+      approvals: [onb('CHANGES_REQUESTED')],
+    });
+    await service.advance('VENDOR_ONBOARDING', 'onb_1', 'usr_a');
+    const data = onboardingUpdate.mock.calls[0]?.[0]?.data as Record<string, unknown>;
+    expect(data.reviewDecision).toBe('RETURNED_FOR_INFO');
+    expect(data).not.toHaveProperty('vendor');
   });
 });

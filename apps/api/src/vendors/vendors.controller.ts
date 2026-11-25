@@ -9,6 +9,7 @@ import {
   OnboardingListQuerySchema,
   PERMISSIONS,
   RenameVendorInputSchema,
+  ReopenOnboardingInputSchema,
   ReturnForInfoInputSchema,
   ReviewScreeningInputSchema,
   ScorecardQuerySchema,
@@ -27,6 +28,7 @@ import {
   type OnboardingListQuery,
   type OnboardingListResponse,
   type RenameVendorInput,
+  type ReopenOnboardingInput,
   type ReturnForInfoInput,
   type ReviewScreeningInput,
   type ScorecardQuery,
@@ -173,6 +175,22 @@ export class VendorsController {
     @Body(new ZodValidationPipe(ReturnForInfoInputSchema)) dto: ReturnForInfoInput,
   ): Promise<{ ok: true }> {
     return this.onboarding.returnForInfo(id, dto, user.userId);
+  }
+
+  /**
+   * Undo a rejection and hand the application back to the vendor. Admin-only
+   * (VENDOR_ONBOARDING_CANCEL, the same authority as withdrawing an invite):
+   * it overturns a reviewer's final decision, so the reviewer who rejected
+   * cannot simply reverse their own call without an admin.
+   */
+  @Post('onboarding/:id/reopen')
+  @RequirePermission(PERMISSIONS.VENDOR_ONBOARDING_CANCEL)
+  async reopenOnboarding(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(ReopenOnboardingInputSchema)) dto: ReopenOnboardingInput,
+  ): Promise<{ ok: true }> {
+    return this.onboarding.reopenRejected(id, dto, user.userId);
   }
 
   // ── Document + screening review ────────────────────────────────────────────

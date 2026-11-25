@@ -31,6 +31,7 @@ import {
   type OnboardingStep2,
   type OnboardingStep3,
   type RenameVendorInput,
+  type ReopenOnboardingInput,
   type ReturnForInfoInput,
   type SaveStepInput,
   type SelfRegistrationInput,
@@ -989,6 +990,89 @@ export class VendorOnboardingService implements OnModuleInit {
   }
 
   /**
+   * Undo a rejection — the way out of a mistaken Reject, or of a vendor who
+   * should have been returned for info (a wrong cheque, an unreadable scan).
+   *
+   * The application lands exactly where returnForInfo would have put it, so the
+   * vendor portal, the queue and re-submission need no new state. The rejected
+   * approval rows are deleted: REJECTED is meant to be terminal, so terminate()
+   * keeps them, and submit()'s idempotency guard would otherwise see them and
+   * silently skip routing the re-submission. Who rejected it, when and why is
+   * already in the audit log (APPROVAL_DECIDED / DOCUMENT_REJECTED) and is
+   * copied into this entry's `before` as well.
+   */
+  async reopenRejected(
+    onboardingId: string,
+    input: ReopenOnboardingInput,
+    actorId: string,
+  ): Promise<{ ok: true }> {
+    const onboarding = await this.prisma.client.vendorOnboarding.findUnique({
+      where: { id: onboardingId },
+      include: { vendor: { select: { id: true, name: true, lifecycleStatus: true } } },
+    });
+    if (!onboarding) throw new NotFoundException('Onboarding not found');
+    if (onboarding.reviewDecision !== 'REJECTED') {
+      throw new VendorStateError('Only a rejected onboarding can be reopened.', {
+        onboardingId,
+        reviewDecision: onboarding.reviewDecision,
+      });
+    }
+    // A blacklist is its own, deliberate decision; reopening the application
+    // must not become a back door around it.
+    if (onboarding.vendor.lifecycleStatus === 'BLACKLISTED') {
+      throw new VendorStateError(
+        `${onboarding.vendor.name} is blacklisted — lift that first if this vendor should be reconsidered.`,
+        { vendorId: onboarding.vendorId },
+      );
+    }
+
+    const rejectedSteps = await this.prisma.client.approval.findMany({
+      where: { documentType: 'VENDOR_ONBOARDING', documentId: onboardingId },
+      select: { approverId: true, decision: true, decidedAt: true, comment: true },
+    });
+    await this.prisma.client.approval.deleteMany({
+      where: { documentType: 'VENDOR_ONBOARDING', documentId: onboardingId },
+    });
+    await this.prisma.client.vendorOnboarding.update({
+      where: { id: onboardingId },
+      data: {
+        reviewDecision: 'RETURNED_FOR_INFO',
+        decisionAt: new Date(),
+        reviewNotes: input.reason,
+        returnForInfoItems: [input.reason] as unknown as Prisma.InputJsonValue,
+        submittedAt: null,
+        slaBreachAt: null,
+        vendor: { update: { lifecycleStatus: 'IN_ONBOARDING' } },
+      },
+    });
+    await this.audit.record({
+      action: 'ONBOARDING_REOPENED',
+      entityType: 'Vendor',
+      entityId: onboarding.vendorId,
+      actorId,
+      before: {
+        onboardingId,
+        reviewDecision: 'REJECTED',
+        decisionAt: onboarding.decisionAt?.toISOString() ?? null,
+        lifecycleStatus: onboarding.vendor.lifecycleStatus,
+        approvals: rejectedSteps.map((a) => ({
+          approverId: a.approverId,
+          decision: a.decision,
+          decidedAt: a.decidedAt?.toISOString() ?? null,
+          comment: a.comment,
+        })),
+      },
+      after: {
+        onboardingId,
+        reviewDecision: 'RETURNED_FOR_INFO',
+        lifecycleStatus: 'IN_ONBOARDING',
+        reason: input.reason,
+      },
+    });
+    return { ok: true };
+  }
+
+  /**
    * Withdraw an invitation the vendor has not submitted yet — the way out of a
    * mistaken or duplicate invite. The vendor record is archived, never deleted
    * (§3 rule #10), and the magic link is burned: an accepted-but-duplicate
@@ -1548,7 +1632,10 @@ export class VendorOnboardingService implements OnModuleInit {
       throw new DuplicateVendorError(
         byEmail.lifecycleStatus === 'BLACKLISTED'
           ? `${byEmail.name} (${byEmail.code}) is blacklisted — this contact cannot be invited.`
-          : `${input.email} is already the contact for ${byEmail.name} (${byEmail.code}). ` +
+          : byEmail.lifecycleStatus === 'REJECTED'
+            ? `${byEmail.name} (${byEmail.code}) was rejected at onboarding. An admin can ` +
+              'reopen that application from the Onboarding queue and send it back to the vendor.'
+            : `${input.email} is already the contact for ${byEmail.name} (${byEmail.code}). ` +
               'Use "Resend invite" in the Onboarding queue, or add the category to the existing vendor — a second ' +
               'record would share the same vendor login.',
         await this.duplicateContext(byEmail, 'EMAIL', false),

@@ -322,6 +322,20 @@ export const ReturnForInfoInputSchema = z.object({
 });
 export type ReturnForInfoInput = z.infer<typeof ReturnForInfoInputSchema>;
 
+/**
+ * Undo a rejection by handing the application back to the vendor, as though it
+ * had been returned for info. The reason is shown to the vendor as what to fix
+ * and is kept in the audit log next to the rejection it reverses.
+ */
+export const ReopenOnboardingInputSchema = z.object({
+  reason: z
+    .string()
+    .trim()
+    .min(10, 'Say what the vendor needs to fix (at least 10 characters) — they will see it')
+    .max(500, 'Reason cannot exceed 500 characters'),
+});
+export type ReopenOnboardingInput = z.infer<typeof ReopenOnboardingInputSchema>;
+
 export const OnboardingDecisionInputSchema = z.object({
   approvalId: z.string().min(1),
   decision: z.enum(['APPROVE', 'REJECT', 'CHANGES']),

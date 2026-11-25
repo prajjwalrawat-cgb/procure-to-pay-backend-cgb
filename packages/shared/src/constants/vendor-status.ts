@@ -13,6 +13,8 @@ export const VENDOR_LIFECYCLE_STATUS = [
   'SUSPENDED',
   'BLACKLISTED',
   'ARCHIVED',
+  // The onboarding was turned down. Terminal unless an admin reopens it.
+  'REJECTED',
 ] as const;
 export type VendorLifecycleStatus = (typeof VENDOR_LIFECYCLE_STATUS)[number];
 

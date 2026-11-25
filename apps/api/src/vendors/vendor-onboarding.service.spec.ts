@@ -56,6 +56,13 @@ interface Fixture {
   } | null;
   /** The reviewer's own pending approval on this onboarding, if they hold one. */
   myPendingApproval?: { id: string } | null;
+  /** Every approval row on the onboarding (the decided chain). */
+  chain?: {
+    approverId: string;
+    decision: string;
+    decidedAt: Date | null;
+    comment: string | null;
+  }[];
   /** Other contacts sharing the cancelled vendor's email, on live vendors. */
   sharedContactCount?: number;
   userRoles?: string[];
@@ -112,6 +119,7 @@ function makeService(fixture: Fixture = {}): {
       },
       approval: {
         findFirst: vi.fn().mockResolvedValue(fixture.myPendingApproval ?? null),
+        findMany: vi.fn().mockResolvedValue(fixture.chain ?? []),
         deleteMany: approvalDeleteMany,
       },
       user: {
@@ -567,6 +575,107 @@ describe('VendorOnboardingService.returnForInfo', () => {
         }),
       }),
     );
+  });
+});
+
+describe('VendorOnboardingService.reopenRejected', () => {
+  const REJECTED: OnboardingRow = {
+    id: 'onb_1',
+    vendorId: 'ven_1',
+    submittedAt: new Date('2026-11-20T00:00:00Z'),
+    reviewDecision: 'REJECTED',
+    emailVerifiedAt: new Date('2026-11-01T00:00:00Z'),
+    vendor: { id: 'ven_1', name: 'Maxobull', lifecycleStatus: 'REJECTED' },
+  };
+  const REASON = 'Re-upload the cancelled cheque for the correct account';
+
+  it('hands a rejected application back to the vendor as returned for info', async () => {
+    const { svc, onboardingUpdate } = makeService({ onboarding: REJECTED });
+    await expect(
+      svc.reopenRejected('onb_1', { reason: REASON }, 'usr_admin'),
+    ).resolves.toEqual({ ok: true });
+    expect(onboardingUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          reviewDecision: 'RETURNED_FOR_INFO',
+          reviewNotes: REASON,
+          returnForInfoItems: [REASON],
+          submittedAt: null,
+          slaBreachAt: null,
+          vendor: { update: { lifecycleStatus: 'IN_ONBOARDING' } },
+        }),
+      }),
+    );
+    // The result must be something the vendor can actually edit.
+    expect(
+      isOnboardingEditable('IN_ONBOARDING', {
+        submittedAt: null,
+        reviewDecision: 'RETURNED_FOR_INFO',
+      }),
+    ).toBe(true);
+  });
+
+  it('clears the rejected chain so the re-submission is routed again', async () => {
+    const { svc, approvalDeleteMany } = makeService({ onboarding: REJECTED });
+    await svc.reopenRejected('onb_1', { reason: REASON }, 'usr_admin');
+    expect(approvalDeleteMany).toHaveBeenCalledWith({
+      where: { documentType: 'VENDOR_ONBOARDING', documentId: 'onb_1' },
+    });
+  });
+
+  it('keeps the overturned rejection in the audit entry', async () => {
+    const decidedAt = new Date('2026-11-25T10:00:00Z');
+    const { svc, audit } = makeService({
+      onboarding: REJECTED,
+      chain: [
+        { approverId: 'usr_pratibha', decision: 'REJECTED', decidedAt, comment: null },
+      ],
+    });
+    await svc.reopenRejected('onb_1', { reason: REASON }, 'usr_admin');
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'ONBOARDING_REOPENED',
+        actorId: 'usr_admin',
+        before: expect.objectContaining({
+          reviewDecision: 'REJECTED',
+          approvals: [
+            expect.objectContaining({
+              approverId: 'usr_pratibha',
+              decision: 'REJECTED',
+              decidedAt: decidedAt.toISOString(),
+            }),
+          ],
+        }),
+        after: expect.objectContaining({ reason: REASON }),
+      }),
+    );
+  });
+
+  it.each([null, 'APPROVED', 'RETURNED_FOR_INFO', 'CANCELLED'])(
+    'refuses an onboarding whose decision is %s',
+    async (reviewDecision) => {
+      const { svc, onboardingUpdate, approvalDeleteMany } = makeService({
+        onboarding: { ...REJECTED, reviewDecision },
+      });
+      await expect(
+        svc.reopenRejected('onb_1', { reason: REASON }, 'usr_admin'),
+      ).rejects.toBeInstanceOf(VendorStateError);
+      expect(onboardingUpdate).not.toHaveBeenCalled();
+      expect(approvalDeleteMany).not.toHaveBeenCalled();
+    },
+  );
+
+  it('refuses a blacklisted vendor', async () => {
+    const { svc, onboardingUpdate } = makeService({
+      onboarding: {
+        ...REJECTED,
+        vendor: { ...REJECTED.vendor, lifecycleStatus: 'BLACKLISTED' },
+      },
+    });
+    await expect(
+      svc.reopenRejected('onb_1', { reason: REASON }, 'usr_admin'),
+    ).rejects.toBeInstanceOf(VendorStateError);
+    expect(onboardingUpdate).not.toHaveBeenCalled();
   });
 });
 

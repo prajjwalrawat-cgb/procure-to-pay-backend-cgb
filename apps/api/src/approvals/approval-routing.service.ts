@@ -705,6 +705,14 @@ export class ApprovalRoutingService {
             reviewDecision:
               status as Prisma.VendorOnboardingUpdateInput['reviewDecision'],
             decisionAt: new Date(),
+            // A rejection is the end of the road for the vendor record too.
+            // Left alone it stayed UNDER_REVIEW, and the dossier read "Under
+            // review" beside a "Rejected" decision. (APPROVED moves the vendor
+            // to ACTIVE in the onApproved hook; REVERTED is handled by
+            // returnForInfo, which sets IN_ONBOARDING itself.)
+            ...(status === 'REJECTED'
+              ? { vendor: { update: { lifecycleStatus: 'REJECTED' as const } } }
+              : {}),
           },
         });
       }
