@@ -32,6 +32,7 @@ import { CurrentUser, RequireAudience, RequirePermission } from '../auth/decorat
 import { ZodValidationError } from '../common/errors/domain-error';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { StorageService } from '../common/storage/storage.service';
+import { TransactionTimeout } from '../tenant/transaction-timeout.decorator';
 import {
   DOCUMENT_UPLOAD_OPTIONS,
   assertUploadSize,
@@ -110,6 +111,12 @@ export class VendorOnboardingController {
    */
   @Post('documents/upload')
   @RequirePermission(PERMISSIONS.VENDOR_ONBOARDING_MANAGE)
+  // The S3 upload and the OCR call (KYC_REQUEST_TIMEOUT_MS, 60s by default) both
+  // run inside the request transaction. At Prisma's 5s default, any cheque or
+  // certificate that took longer to read closed the transaction under the
+  // handler: the file landed in S3, the document row then failed with
+  // "Transaction already closed", and the vendor got a 500.
+  @TransactionTimeout(120_000)
   @UseInterceptors(FileInterceptor('file', DOCUMENT_UPLOAD_OPTIONS))
   async uploadDocumentFile(
     @CurrentUser() user: AuthUser,
